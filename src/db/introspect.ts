@@ -16,6 +16,7 @@
 
 import { BaseclfError } from '../utils/errors.js';
 import type { D1Executor } from './dialect.js';
+import { assertExecutable } from './guards.js';
 
 /** Tables starting with `_` are ours and are never reachable through the API. */
 export const SYSTEM_TABLE_PREFIX = '_';
@@ -90,6 +91,12 @@ interface PragmaForeignKeyListRow {
 }
 
 async function pragma<R>(executor: D1Executor, statement: string): Promise<R[]> {
+  // These statements are built from PRAGMA output, never from a request, so
+  // the guard passes trivially. It runs anyway: "every path to D1 is guarded"
+  // is a stronger invariant than "every path except this one", and the day
+  // someone adds a parameter here it will already be checked.
+  assertExecutable({ sql: statement, parameters: [] });
+
   const result = await executor.prepare(statement).all<R>();
   return result.results ?? [];
 }
