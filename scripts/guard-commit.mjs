@@ -13,7 +13,7 @@
  */
 
 import { execSync } from 'node:child_process';
-import { readFileSync, existsSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 
 const ALL = process.argv.includes('--all');
 
@@ -42,13 +42,13 @@ const PRIVATE_PATHS = [
 
 /* ------------------------------------------------------------- secrets --- */
 const SECRET_PATTERNS = [
-  { name: 'Cloudflare API token',   re: /\bcf(k|ut|at)_[A-Za-z0-9_-]{20,}/ },
-  { name: 'GitHub token',           re: /\b(ghp|gho|ghs|ghu)_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{20,}/ },
-  { name: 'OpenAI/Anthropic key',   re: /\bsk-[A-Za-z0-9-]{20,}/ },
-  { name: 'AWS access key',         re: /\bAKIA[0-9A-Z]{16}\b/ },
-  { name: 'Private key block',      re: /-----BEGIN (RSA |EC |OPENSSH |PGP )?PRIVATE KEY-----/ },
-  { name: 'Google OAuth secret',    re: /\bGOCSPX-[A-Za-z0-9_-]{20,}/ },
-  { name: 'JWT with payload',       re: /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\./ },
+  { name: 'Cloudflare API token', re: /\bcf(k|ut|at)_[A-Za-z0-9_-]{20,}/ },
+  { name: 'GitHub token', re: /\b(ghp|gho|ghs|ghu)_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{20,}/ },
+  { name: 'OpenAI/Anthropic key', re: /\bsk-[A-Za-z0-9-]{20,}/ },
+  { name: 'AWS access key', re: /\bAKIA[0-9A-Z]{16}\b/ },
+  { name: 'Private key block', re: /-----BEGIN (RSA |EC |OPENSSH |PGP )?PRIVATE KEY-----/ },
+  { name: 'Google OAuth secret', re: /\bGOCSPX-[A-Za-z0-9_-]{20,}/ },
+  { name: 'JWT with payload', re: /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\./ },
   {
     name: 'Real resource id assigned to a binding',
     // Fires only when a UUID or 32-hex is assigned to one of these keys, so
@@ -66,11 +66,12 @@ const TEXT_EXT = /\.(ts|tsx|js|jsx|mjs|cjs|json|jsonc|md|css|html|yml|yaml|toml|
 
 /* ---------------------------------------------------------------- run --- */
 function stagedFiles() {
-  const cmd = ALL
-    ? 'git ls-files'
-    : 'git diff --cached --name-only --diff-filter=ACMR';
+  const cmd = ALL ? 'git ls-files' : 'git diff --cached --name-only --diff-filter=ACMR';
   try {
-    return execSync(cmd, { encoding: 'utf8' }).split('\n').map(s => s.trim()).filter(Boolean);
+    return execSync(cmd, { encoding: 'utf8' })
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean);
   } catch {
     return [];
   }
@@ -85,7 +86,7 @@ if (files.length === 0) {
 const failures = [];
 
 for (const file of files) {
-  const blocked = PRIVATE_PATHS.find(re => re.test(file));
+  const blocked = PRIVATE_PATHS.find((re) => re.test(file));
   if (blocked) {
     failures.push({
       file,
@@ -99,11 +100,15 @@ for (const file of files) {
   if (statSync(file).size > 2_000_000) continue;
 
   let body;
-  try { body = readFileSync(file, 'utf8'); } catch { continue; }
+  try {
+    body = readFileSync(file, 'utf8');
+  } catch {
+    continue;
+  }
   const lines = body.split('\n');
 
   for (const { name, re } of SECRET_PATTERNS) {
-    const idx = lines.findIndex(l => re.test(l));
+    const idx = lines.findIndex((l) => re.test(l));
     if (idx !== -1) {
       failures.push({
         file,
@@ -114,7 +119,7 @@ for (const file of files) {
   }
 
   if (ENGLISH_ONLY.test(file)) {
-    const idx = lines.findIndex(l => VIETNAMESE.test(l));
+    const idx = lines.findIndex((l) => VIETNAMESE.test(l));
     if (idx !== -1) {
       failures.push({
         file,
@@ -136,6 +141,8 @@ for (const f of failures) {
   console.error(`    ${f.file}`);
   console.error(`    ${f.detail}\n`);
 }
-console.error('  Do NOT bypass with --no-verify. A guard failure means something is genuinely wrong.');
+console.error(
+  '  Do NOT bypass with --no-verify. A guard failure means something is genuinely wrong.',
+);
 console.error('  Rules: .claude/rules/05-open-source-boundary.md\n');
 process.exit(1);

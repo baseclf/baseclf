@@ -1,0 +1,25 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "baseclf",
+  "main": "src/index.ts",
+
+  // Never omit this. Without it the API defaults to 2021-11-02, not today.
+  "compatibility_date": "2026-07-28",
+
+  // Required for node:crypto, which Better Auth needs for scrypt.
+  "compatibility_flags": ["nodejs_compat"],
+
+  "observability": {
+    "logs": { "enabled": true }
+  },
+
+  // Placeholder ids. `npx create-baseclf` provisions the real resources into
+  // the user's own Cloudflare account and rewrites these. Never commit real ids.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "baseclf",
+      "database_id": "00000000-0000-0000-0000-000000000000"
+    }
+  ]
+}

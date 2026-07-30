@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # The boundary between what ships publicly and what does not.
+      # Runs first: a leaked secret is worse than a failing test.
+      - name: Guard
+        run: node scripts/guard-commit.mjs --all
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      # Runs in workerd with a real D1 binding, not a Node emulation.
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build

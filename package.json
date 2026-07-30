@@ -1,0 +1,35 @@
+{
+  "name": "baseclf",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Auto-REST and real row-level security for Cloudflare D1",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "build": "wrangler deploy --dry-run --outdir=dist",
+    "cf-typegen": "wrangler types",
+    "guard": "node scripts/guard-commit.mjs --all",
+    "check": "npm run typecheck && npm run lint && npm run test",
+    "measure:bundle": "node scripts/measure-bundle.mjs"
+  },
+  "dependencies": {
+    "kysely": "0.29.4"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.6",
+    "@cloudflare/vitest-pool-workers": "0.19.0",
+    "@types/node": "^26.1.2",
+    "esbuild": "^0.28.1",
+    "typescript": "5.9.3",
+    "vitest": "4.1.10",
+    "wrangler": "4.115.0"
+  }
+}
