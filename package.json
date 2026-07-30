@@ -18,7 +18,8 @@
     "cf-typegen": "wrangler types",
     "guard": "node scripts/guard-commit.mjs --all",
     "check": "npm run typecheck && npm run lint && npm run test",
-    "measure:bundle": "node scripts/measure-bundle.mjs"
+    "measure:bundle": "node scripts/measure-bundle.mjs",
+    "demo:v1": "node scripts/demo-v1.mjs"
   },
   "dependencies": {
     "kysely": "0.29.4"

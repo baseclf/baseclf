@@ -15,6 +15,22 @@
  * The executor being an interface is the important part. Per request we open a
  * session from the incoming bookmark and build the query builder on top of it,
  * so every read in that request is sequentially consistent with its own writes.
+ *
+ * ---
+ *
+ * What this file is NOT: it is not the policy layer, and nothing here consults
+ * one. `createDb`, `execute` and `batch` will run whatever they are given.
+ *
+ * That is deliberate. Migrations, introspection and the registry's own reads
+ * have to reach D1 without a policy, because a policy is a thing they are used
+ * to build. But it means these exports are a way to query the database with no
+ * policy attached, and using one of them on a path that serves a client request
+ * would be a hole with no error attached to it.
+ *
+ * The rule, and it is not enforced by anything but review: a request-scoped
+ * read goes through `rest/execute.ts`, which is reached through
+ * `rest/router.ts`, which applies `policy/plugin.ts` first. Nothing else does.
+ * `codegraph impact applyPolicy` is the check.
  */
 
 import {

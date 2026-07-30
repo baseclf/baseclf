@@ -39,6 +39,14 @@
   },
   "overrides": [
     {
+      "includes": ["src/utils/log.ts"],
+      "linter": {
+        "rules": {
+          "suspicious": { "noConsole": "off" }
+        }
+      }
+    },
+    {
       "includes": ["src/**/*.test.ts", "scripts/**/*.mjs"],
       "linter": {
         "rules": {

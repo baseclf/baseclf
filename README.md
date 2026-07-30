@@ -3,9 +3,10 @@
 **Real row-level security for Cloudflare D1.**
 `supabase-js` works unchanged. Runs in your own Cloudflare account.
 
-> **Status: pre-alpha.** The database layer exists and is tested. The policy
-> engine, the REST layer and auth do not exist yet. Nothing here is usable in
-> production. See the roadmap below.
+> **Status: pre-alpha.** The read path works: policies compile into queries and
+> `GET /rest/v1/:table` serves them. Writes and authentication do not exist yet,
+> so every request currently runs as the anonymous role. Nothing here is usable
+> in production. See the roadmap below.
 
 ---
 
@@ -74,6 +75,23 @@ advertises its strengths is not one you should trust.
 BaseCLF enforces policy at the query layer. It cannot enforce anything about a
 connection it is not part of. Scope your API tokens accordingly.
 
+## Where BaseCLF differs from PostgREST
+
+Same query grammar, different database underneath. These are the places that
+matters, and none of them is a bug we plan to fix.
+
+| Behaviour | On PostgREST | Here |
+|---|---|---|
+| `like` | Case sensitive | **Case insensitive for ASCII**, because that is what SQLite's `LIKE` does. `like` and `ilike` are the same operator here. |
+| `ilike` outside ASCII | Folds case | **Does not.** `'A' LIKE 'a'` is true; the same comparison on any accented, Greek or Cyrillic letter is false. Measured, not assumed. |
+| `match`, `imatch` | Regular expressions | **Refused.** SQLite has no `REGEXP`. |
+| `cs`, `cd`, `ov`, `sl`, `sr`, `nxr`, `nxl`, `adj` | Arrays and ranges | **Refused.** SQLite has neither type. |
+| `fts` and friends | Full text search | **Refused for now.** Needs an FTS5 table, which V1 does not expose. |
+| `select=*` | Every column the table has | **Every column your policies grant**, resolved when the request is built. A migration cannot widen an existing response. |
+| Relationship embeds | Supported | **Not yet.** They arrive when they can be given a policy each rather than an approximation of one. |
+| A column you may not read | Distinguishable from one that does not exist | **Both are 404 with the same message.** The difference would be a way to map the schema. |
+| Value types | Inferred by Postgres | Bound as text and left to SQLite's column affinity, except bare `true` and `false`, which bind 1 and 0. Quote a value to keep it text. |
+
 ## Constraints worth knowing before you commit
 
 These were measured against a real D1 database, not read from documentation.
@@ -93,8 +111,8 @@ These were measured against a real D1 database, not read from documentation.
 
 | | |
 |---|---|
-| **V0** | Skeleton, D1 dialect, schema catalogue ← **you are here** |
-| V1 | Policy engine, read path |
+| **V0** | Skeleton, D1 dialect, schema catalogue |
+| **V1** | Policy engine, read path ← **you are here** |
 | V2 | Policy engine, write path with `WITH CHECK` |
 | V3 | Auth: Google, GitHub, JWT |
 | V4 | Storage on R2 |
@@ -111,6 +129,7 @@ npm run check           # typecheck, lint and test
 npm test                # vitest, inside workerd with a real D1 binding
 npm run build           # wrangler dry run
 npm run measure:bundle  # bundle cost against the Workers script limit
+npm run demo:v1         # same request, two identities, two different queries
 ```
 
 Tests run in workerd, not a Node emulation. The behaviours this design depends
