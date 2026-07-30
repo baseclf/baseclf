@@ -1,0 +1,4 @@
+#!/bin/sh
+# BaseCLF pre-commit guard. Enable once with:
+#   git config core.hooksPath .githooks
+exec node scripts/guard-commit.mjs

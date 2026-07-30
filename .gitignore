@@ -1,0 +1,63 @@
+# =============================================================================
+# BaseCLF .gitignore
+# Rules: .claude/rules/05-open-source-boundary.md
+# WARNING: .gitignore does not stop `git add -f`. The real guard is
+#          .githooks/pre-commit -> scripts/guard-commit.mjs
+# =============================================================================
+
+# --- Secrets. Never, under any circumstance. -------------------------------
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+.env
+.env.*
+!.env.example
+*.local
+secrets.json
+*.pem
+*.p12
+*.key
+id_ed25519*
+id_rsa*
+
+# --- Internal strategy docs. Private by decision, see rule 05 section D. ---
+FOUNDATION.md
+BUILD-PROGRESS.md
+HANDOFF-STATUS.md
+Baas With CLF.md
+baas-cloudflare-mvp-plan.md
+AGENTS.md
+
+# --- Agent config. Vietnamese, and rule 04 A bans that from public surfaces.
+.claude/
+
+# --- Probe results. Private until launch, then published as a written piece.
+probe/
+
+# --- Design reasoning stays private for now; see rule 05 section D.
+#     tokens.json and theme.css ARE public: Studio imports them, and they are
+#     self-documenting. A public design page gets written at V8 with the docs site.
+#     README.md is excluded too because it is a table of contents for the files above.
+_design_system/*.md
+
+# --- Local tooling ---------------------------------------------------------
+.codegraph/
+codegraph.json
+node_modules/
+dist/
+build/
+.wrangler/
+*.tgz
+mcpv2/
+
+# --- Editor and OS ---------------------------------------------------------
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# --- Test and coverage -----------------------------------------------------
+coverage/
+*.log
+.vitest/

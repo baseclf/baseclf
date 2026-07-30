@@ -1,0 +1,399 @@
+/* ============================================================================
+   BaseCLF, theme.css   (v0.2.0)
+   Generated from tokens.json. Do not edit by hand; edit tokens and regenerate.
+
+   Usage:
+     <html data-theme="light|dark" data-density="compact|comfortable">
+   Omit data-theme to follow the OS. Studio sets data-density="compact".
+
+   COLOUR RULE: there is no brand accent. The only saturated colours in the
+   product are the three signals, allow, deny, attention. The focus ring uses
+   attention, because focus means "look here".
+   ========================================================================= */
+
+/* Self-host in production. CDN shown for reference only.
+   @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap'); */
+
+:root {
+  /* -------------------------------------------------------------- scale -- */
+  --font-sans: 'IBM Plex Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', 'Cascadia Code', Menlo, monospace;
+
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+
+  --text-micro: 0.6875rem;   --leading-micro: 1rem;
+  --text-xs: 0.75rem;        --leading-xs: 1.125rem;
+  --text-sm: 0.8125rem;      --leading-sm: 1.25rem;
+  --text-base: 0.875rem;     --leading-base: 1.375rem;
+  --text-md: 1rem;           --leading-md: 1.625rem;
+  --text-lg: 1.125rem;       --leading-lg: 1.75rem;
+  --text-h3: 1.375rem;       --leading-h3: 1.875rem;      --tracking-h3: -0.011em;
+  --text-h2: 1.75rem;        --leading-h2: 2.25rem;       --tracking-h2: -0.014em;
+  --text-h1: 2.25rem;        --leading-h1: 2.75rem;       --tracking-h1: -0.018em;
+  --text-display: 3rem;      --leading-display: 3.375rem; --tracking-display: -0.022em;
+
+  --measure-prose: 34rem;
+
+  --space-0: 0;
+  --space-1: 0.25rem;  --space-2: 0.5rem;   --space-3: 0.75rem;
+  --space-4: 1rem;     --space-5: 1.25rem;  --space-6: 1.5rem;
+  --space-8: 2rem;     --space-10: 2.5rem;  --space-12: 3rem;
+  --space-16: 4rem;    --space-24: 6rem;
+
+  --radius-none: 0;
+  --radius-xs: 2px;
+  --radius-sm: 3px;
+  --radius-md: 5px;
+  --radius-full: 999px;
+
+  --border-hairline: 1px;
+  --border-emphasis: 2px;
+
+  --icon-stroke: 1.5;
+  --icon-sm: 14px; --icon-md: 16px; --icon-lg: 20px;
+
+  --duration-instant: 80ms;
+  --duration-fast: 140ms;
+  --duration-moderate: 200ms;
+  --duration-slow: 320ms;
+  --duration-reveal: 600ms;                 /* LANDING ONLY */
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
+  --ease-reveal: cubic-bezier(0.16, 1, 0.3, 1);   /* LANDING ONLY */
+
+  --bp-sm: 640px; --bp-md: 768px; --bp-lg: 1024px; --bp-xl: 1280px; --bp-2xl: 1536px;
+
+  --z-base: 0;     --z-sticky: 10;  --z-dropdown: 20;
+  --z-popover: 30; --z-dialog: 40;  --z-toast: 50;
+
+  /* ------------------------------------- raw: neutral (cool, technical) -- */
+  --neutral-0: #FFFFFF;   --neutral-25: #FBFBFC;  --neutral-50: #F5F5F7;
+  --neutral-100: #EAEAEE; --neutral-200: #DADAE1; --neutral-300: #BCBCC6;
+  --neutral-400: #9797A3; --neutral-500: #75757F; --neutral-600: #52525B;
+  --neutral-700: #3B3B43; --neutral-800: #27272C; --neutral-900: #16161A;
+  --neutral-950: #0B0B0D;
+
+  /* ------------------------------ raw: the three signals. Nothing else. -- */
+  --allow-50: #E9F6EE;  --allow-100: #CDEBD9; --allow-300: #6FBF8E;
+  --allow-400: #3F9E66; --allow-500: #157F4C; --allow-600: #0F6640;
+  --allow-900: #0B241A;
+
+  --deny-50: #FCECEB;   --deny-100: #F8D5D2;  --deny-300: #E89B95;
+  --deny-400: #D9635C;  --deny-500: #C0362C;  --deny-600: #9E2820;
+  --deny-900: #2C1412;
+
+  --attention-50: #FCF3D9;  --attention-100: #F7E4AE; --attention-300: #E5BE4E;
+  --attention-400: #D19E00; --attention-500: #9A6F00; --attention-600: #7D5A00;
+  --attention-900: #2A2005;
+}
+
+/* ============================================================ light mode == */
+:root,
+:root[data-theme='light'] {
+  color-scheme: light;
+
+  --canvas: var(--neutral-25);
+  --surface: var(--neutral-0);
+  --surface-raised: var(--neutral-0);
+  --surface-sunken: var(--neutral-50);
+  --surface-hover: var(--neutral-50);
+  --surface-active: var(--neutral-100);
+
+  --border-subtle: var(--neutral-100);
+  --border-default: var(--neutral-200);
+  --border-strong: var(--neutral-300);
+
+  --text-primary: var(--neutral-900);
+  --text-secondary: var(--neutral-600);
+  --text-tertiary: var(--neutral-500);
+  --text-disabled: var(--neutral-400);
+  --text-inverse: var(--neutral-25);
+
+  --focus-ring: var(--attention-500);       /* 4.7:1 on white */
+
+  --allow-text: var(--allow-500);
+  --allow-tint: var(--allow-50);
+  --allow-border: var(--allow-300);
+  --deny-text: var(--deny-500);
+  --deny-tint: var(--deny-50);
+  --deny-border: var(--deny-300);
+  --attention-text: var(--attention-500);
+  --attention-tint: var(--attention-50);
+  --attention-border: var(--attention-300);
+
+  --shadow-popover: 0 2px 8px -2px rgb(22 22 26 / 0.10), 0 4px 16px -4px rgb(22 22 26 / 0.08);
+  --shadow-dialog:  0 8px 24px -6px rgb(22 22 26 / 0.14), 0 16px 48px -12px rgb(22 22 26 / 0.10);
+  --scrim: rgb(22 22 26 / 0.32);
+}
+
+/* ============================================================= dark mode == */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+
+    --canvas: var(--neutral-950);
+    --surface: #141417;
+    --surface-raised: #1A1A1F;
+    --surface-sunken: #08080A;
+    --surface-hover: #1D1D22;
+    --surface-active: #24242A;
+
+    --border-subtle: #232329;
+    --border-default: #2E2E36;
+    --border-strong: #43434E;
+
+    --text-primary: #F0F0F3;
+    --text-secondary: #A0A0AC;
+    --text-tertiary: #74747F;
+    --text-disabled: var(--neutral-600);
+    --text-inverse: var(--neutral-900);
+
+    --focus-ring: var(--attention-300);
+
+    --allow-text: var(--allow-400);
+    --allow-tint: var(--allow-900);
+    --allow-border: var(--allow-600);
+    --deny-text: var(--deny-400);
+    --deny-tint: var(--deny-900);
+    --deny-border: var(--deny-600);
+    --attention-text: var(--attention-300);
+    --attention-tint: var(--attention-900);
+    --attention-border: var(--attention-600);
+
+    --shadow-popover: 0 2px 8px -2px rgb(0 0 0 / 0.50), 0 4px 16px -4px rgb(0 0 0 / 0.40),
+                      inset 0 1px 0 0 rgb(255 255 255 / 0.04);
+    --shadow-dialog:  0 8px 24px -6px rgb(0 0 0 / 0.60), 0 16px 48px -12px rgb(0 0 0 / 0.50),
+                      inset 0 1px 0 0 rgb(255 255 255 / 0.05);
+    --scrim: rgb(0 0 0 / 0.56);
+  }
+}
+
+/* Explicit toggle must beat the media query in both directions. */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --canvas: var(--neutral-950);
+  --surface: #141417;
+  --surface-raised: #1A1A1F;
+  --surface-sunken: #08080A;
+  --surface-hover: #1D1D22;
+  --surface-active: #24242A;
+
+  --border-subtle: #232329;
+  --border-default: #2E2E36;
+  --border-strong: #43434E;
+
+  --text-primary: #F0F0F3;
+  --text-secondary: #A0A0AC;
+  --text-tertiary: #74747F;
+  --text-disabled: var(--neutral-600);
+  --text-inverse: var(--neutral-900);
+
+  --focus-ring: var(--attention-300);
+
+  --allow-text: var(--allow-400);
+  --allow-tint: var(--allow-900);
+  --allow-border: var(--allow-600);
+  --deny-text: var(--deny-400);
+  --deny-tint: var(--deny-900);
+  --deny-border: var(--deny-600);
+  --attention-text: var(--attention-300);
+  --attention-tint: var(--attention-900);
+  --attention-border: var(--attention-600);
+
+  --shadow-popover: 0 2px 8px -2px rgb(0 0 0 / 0.50), 0 4px 16px -4px rgb(0 0 0 / 0.40),
+                    inset 0 1px 0 0 rgb(255 255 255 / 0.04);
+  --shadow-dialog:  0 8px 24px -6px rgb(0 0 0 / 0.60), 0 16px 48px -12px rgb(0 0 0 / 0.50),
+                    inset 0 1px 0 0 rgb(255 255 255 / 0.05);
+  --scrim: rgb(0 0 0 / 0.56);
+}
+
+/* ================================================================ density = */
+:root,
+:root[data-density='comfortable'] {
+  --body-size: var(--text-md);
+  --body-leading: var(--leading-md);
+  --row-height: 40px;
+  --control-height: 36px;
+  --section-gap: var(--space-8);
+  --field-gap: var(--space-4);
+}
+
+:root[data-density='compact'] {
+  --body-size: var(--text-sm);
+  --body-leading: var(--leading-sm);
+  --row-height: 28px;
+  --control-height: 28px;
+  --section-gap: var(--space-4);
+  --field-gap: var(--space-3);
+}
+
+/* ==================================================================== base = */
+*, *::before, *::after { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--canvas);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--body-size);
+  line-height: var(--body-leading);
+  font-weight: var(--weight-regular);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-variant-numeric: tabular-nums;
+}
+
+h1, h2, h3, h4 {
+  margin: 0;
+  font-weight: var(--weight-semibold);
+  color: var(--text-primary);
+  text-wrap: balance;
+}
+h1 { font-size: var(--text-h1); line-height: var(--leading-h1); letter-spacing: var(--tracking-h1); }
+h2 { font-size: var(--text-h2); line-height: var(--leading-h2); letter-spacing: var(--tracking-h2); }
+h3 { font-size: var(--text-h3); line-height: var(--leading-h3); letter-spacing: var(--tracking-h3); }
+
+p { margin: 0; text-wrap: pretty; }
+
+code, kbd, samp, pre {
+  font-family: var(--font-mono);
+  font-size: 0.9375em;                  /* Plex Mono runs large, step it down */
+  font-variant-ligatures: none;
+}
+
+/* Links are ink + underline. No coloured links: colour is reserved for signals. */
+a {
+  color: inherit;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+  text-decoration-color: var(--border-strong);
+}
+a:hover { text-decoration-color: currentColor; }
+
+hr {
+  border: 0;
+  border-top: var(--border-hairline) solid var(--border-subtle);
+  margin: var(--space-6) 0;
+}
+
+/* Focus ring uses the attention signal. Focus means "look here". Never remove. */
+:focus-visible {
+  outline: var(--border-emphasis) solid var(--focus-ring);
+  outline-offset: 2px;
+  border-radius: inherit;
+}
+:focus:not(:focus-visible) { outline: none; }
+
+::selection { background: var(--surface-active); color: var(--text-primary); }
+
+/* =============================================================== patterns = */
+
+/* Panel, the whole recipe. Border, not shadow. */
+.panel {
+  background: var(--surface);
+  border: var(--border-hairline) solid var(--border-default);
+  border-radius: var(--radius-sm);
+}
+
+/* Verdict badges. Colour is NEVER the only signal, always a word or icon too. */
+.verdict {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0 var(--space-2);
+  height: 18px;
+  font-size: var(--text-micro);
+  line-height: 1;
+  font-weight: var(--weight-medium);
+  border-radius: var(--radius-xs);
+  border: var(--border-hairline) solid transparent;
+}
+.verdict--allow     { color: var(--allow-text);     background: var(--allow-tint);     border-color: var(--allow-border); }
+.verdict--deny      { color: var(--deny-text);      background: var(--deny-tint);      border-color: var(--deny-border); }
+.verdict--attention { color: var(--attention-text); background: var(--attention-tint); border-color: var(--attention-border); }
+
+/* Data table. No zebra. Subtle row rules. Sticky header. */
+.table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.table th {
+  position: sticky; top: 0; z-index: var(--z-sticky);
+  background: var(--surface);
+  text-align: left;
+  font-size: var(--text-micro);
+  font-weight: var(--weight-medium);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-tertiary);
+  height: var(--row-height);
+  padding: 0 var(--space-3);
+  border-bottom: var(--border-hairline) solid var(--border-default);
+}
+.table td {
+  height: var(--row-height);
+  padding: 0 var(--space-3);
+  border-bottom: var(--border-hairline) solid var(--border-subtle);
+  border-radius: var(--radius-none);
+}
+.table tbody tr:hover { background: var(--surface-hover); }   /* no transform, no shadow */
+.table tbody tr[aria-selected='true'] {
+  background: var(--surface-active);
+  box-shadow: inset 2px 0 0 0 var(--text-primary);
+}
+.table .cell--id,
+.table .cell--num { font-family: var(--font-mono); }
+.table .cell--num { text-align: right; }
+.table .cell--null { color: var(--text-tertiary); font-style: italic; }
+
+/* Generated SQL, the product's signature surface.
+   Placeholders carry the attention colour; bound values sit in a separate list. */
+.sql {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  line-height: 1.375rem;
+  color: var(--text-primary);
+  background: var(--surface-sunken);
+  border: var(--border-hairline) solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  overflow-x: auto;
+  white-space: pre;
+}
+.sql .kw    { color: var(--text-secondary); font-weight: var(--weight-medium); }
+.sql .param { color: var(--attention-text); font-weight: var(--weight-medium); }
+
+.prose { max-width: var(--measure-prose); }
+.prose > * + * { margin-top: var(--space-4); }
+
+/* =============================================== landing-only: scroll reveal =
+   Allowed on the landing page. BANNED in Studio and in docs body content.
+   Drive .is-visible with IntersectionObserver, never a scroll listener.
+   For a stagger, set --reveal-index inline: style="--reveal-index: 2".
+   Cap the stagger at 6 items. A longer cascade is a tell. */
+[data-surface='landing'] .reveal {
+  --reveal-index: 0;
+  opacity: 0;
+  transform: translateY(12px);
+  transition: opacity var(--duration-reveal) var(--ease-reveal),
+              transform var(--duration-reveal) var(--ease-reveal);
+  transition-delay: calc(var(--reveal-index) * 80ms);
+}
+[data-surface='landing'] .reveal.is-visible { opacity: 1; transform: none; }
+
+/* Tactile press, landing only. Studio buttons do not move. */
+[data-surface='landing'] .btn:active { transform: scale(0.98); }
+
+/* ========================================================= reduced motion = */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  [data-surface='landing'] .reveal { opacity: 1; transform: none; }
+  [data-surface='landing'] .btn:active { transform: none; }
+}
