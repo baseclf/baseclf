@@ -35,6 +35,7 @@ export const POLICY_SCHEMA: readonly string[] = Object.freeze([
      using_expr TEXT NOT NULL,
      check_expr TEXT,
      columns    TEXT NOT NULL,
+     set_expr   TEXT,
      PRIMARY KEY (table_name, name)
    ) STRICT`,
 ]);

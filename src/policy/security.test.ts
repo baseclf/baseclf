@@ -435,12 +435,13 @@ describe('7. the engine tables are not reachable', () => {
   });
 });
 
-describe('writes, which V1 does not serve', () => {
-  it('are refused rather than passed through unpoliced', async () => {
-    // The post-image rewrite that makes WITH CHECK work lands in V2. Until it
-    // does, a write must not reach the database at all: an update with a policy
-    // on the read side only would let a caller move a row out of their own
-    // reach and keep it.
+describe('the read chokepoint does not serve writes', () => {
+  it('refuses a write node rather than passing it through unpoliced', async () => {
+    // Writes have their own builder, in policy/write.ts, because a write needs
+    // a post-image check rather than a where clause. What must never happen is a
+    // write slipping through the read path, which would attach a USING
+    // predicate and no CHECK, and so would let a caller move a row out of their
+    // own reach and keep it there.
     const [catalogue, registry] = await Promise.all([getCatalogue(env.DB), getRegistry(env.DB)]);
     const plugin = createPolicyPlugin({ registry, catalogue, auth: ANON });
 
@@ -455,12 +456,12 @@ describe('writes, which V1 does not serve', () => {
     }
   });
 
-  it('are answered with 405 by the HTTP surface', async () => {
+  it('answers a method it does not implement with 405', async () => {
     const response = await worker.fetch(
-      new Request('https://baseclf.test/rest/v1/posts', { method: 'POST' }),
+      new Request('https://baseclf.test/rest/v1/posts', { method: 'PUT' }),
       env,
     );
     expect(response.status).toBe(405);
-    expect(response.headers.get('allow')).toBe('GET, HEAD');
+    expect(response.headers.get('allow')).toBe('GET, HEAD, POST, PATCH, DELETE');
   });
 });

@@ -62,9 +62,35 @@ const COMPARISON_SQL: Readonly<Record<CompareOperator, '=' | '!=' | '>' | '>=' |
     _lte: '<=',
   });
 
+/**
+ * What a column of the row being written will hold once the write lands.
+ *
+ * SQLite has no WITH CHECK, and D1 has no interactive transaction, so there is
+ * no read-modify-write available to compare against. The only way to enforce a
+ * post-condition atomically is to state it as part of the same statement, which
+ * means rewriting every column reference in the check into the value that
+ * column will have afterwards. See check-rewrite.ts.
+ *
+ * `requireAll` separates the two write shapes. For an update, a column that is
+ * not being written keeps its current value, so the reference stays a
+ * reference. For an insert there is no current value to fall back on: the row
+ * does not exist yet, and a column absent from the insert would take a default
+ * this engine has no way to know. That case is refused rather than guessed.
+ */
+export interface PostImage {
+  readonly values: ReadonlyMap<string, OperationNode>;
+  readonly requireAll: boolean;
+}
+
 export interface CompileContext {
   readonly catalogue: Catalogue;
   readonly auth: AuthCtx;
+  /**
+   * Set only while compiling a check. Applies to the outermost scope frame,
+   * which is the row being written, and to nothing else: a bare column inside
+   * an `_exists` belongs to that subquery's table and keeps its own meaning.
+   */
+  readonly postImage?: PostImage | undefined;
 }
 
 /** The chain of tables in scope; the last is the one bare columns belong to. */
@@ -134,8 +160,48 @@ function reference(catalogue: Catalogue, table: string, column: string): Operati
   return ReferenceNode.create(ColumnNode.create(column), TableNode.create(table));
 }
 
-function currentTable(scope: Scope): string {
-  return scope[scope.length - 1] as string;
+/**
+ * A column, resolved against a numbered frame of the scope.
+ *
+ * The frame index is what decides whether the post-image substitution applies.
+ * Frame zero is the row being written; every other frame belongs to a subquery
+ * and means what it says. Getting this wrong in the permissive direction would
+ * compare a check against the wrong row, so it is expressed as an index rather
+ * than as "is this the table we started with", which stops being true the
+ * moment a policy traverses back to the same table.
+ */
+function referenceAt(
+  context: CompileContext,
+  scope: Scope,
+  frameIndex: number,
+  column: string,
+  where: string,
+): OperationNode {
+  const table = scope[frameIndex];
+  if (table === undefined) {
+    throw invalid(`${where} refers to a table that is not in scope.`);
+  }
+
+  if (frameIndex === 0 && context.postImage !== undefined) {
+    const written = context.postImage.values.get(column);
+    if (written !== undefined) return written;
+
+    if (context.postImage.requireAll) {
+      // An insert. The column is not in the statement, so afterwards it holds
+      // whatever the schema defaults to, which this engine does not read and
+      // will not assume.
+      throw invalid(
+        `${where} checks column "${column}", which this insert does not set. ` +
+          'The row does not exist yet, so there is no value to compare against and the ' +
+          'column default is not something the engine reads. Add the column to the ' +
+          'policy grant or to its server-set values.',
+      );
+    }
+    // An update that leaves this column alone: afterwards it still holds what
+    // it holds now, which is exactly the column reference.
+  }
+
+  return reference(context.catalogue, table, column);
 }
 
 function compileValue(
@@ -152,11 +218,14 @@ function compileValue(
       return ValueNode.create(resolveScalarClaim(context.auth, value.ref, where));
 
     case 'outerColumn': {
-      const outer = scope[scope.length - 2];
-      if (outer === undefined) {
+      // One frame out. When that frame is frame zero, the post-image applies
+      // just as it does to a bare column there: a check that reaches back to
+      // the row being written is still talking about the row being written.
+      const outerIndex = scope.length - 2;
+      if (outerIndex < 0) {
         throw invalid(`${where} uses $row outside of an _exists.`);
       }
-      return reference(context.catalogue, outer, value.column);
+      return referenceAt(context, scope, outerIndex, value.column, where);
     }
   }
 }
@@ -230,7 +299,7 @@ function compileLike(
   }
 
   return BinaryOperationNode.create(
-    reference(context.catalogue, currentTable(scope), predicate.column),
+    referenceAt(context, scope, scope.length - 1, predicate.column, where),
     OperatorNode.create('like'),
     pattern,
   );
@@ -290,8 +359,6 @@ export function compilePredicate(
   scope: Scope,
   where: string,
 ): OperationNode {
-  const table = currentTable(scope);
-
   switch (predicate.kind) {
     case 'all':
       // Immediate values, so this costs no parameter budget.
@@ -303,21 +370,21 @@ export function compilePredicate(
 
     case 'compare':
       return BinaryOperationNode.create(
-        reference(context.catalogue, table, predicate.column),
+        referenceAt(context, scope, scope.length - 1, predicate.column, where),
         OperatorNode.create(COMPARISON_SQL[predicate.operator]),
         compileValue(predicate.value, context, scope, where),
       );
 
     case 'in':
       return BinaryOperationNode.create(
-        reference(context.catalogue, table, predicate.column),
+        referenceAt(context, scope, scope.length - 1, predicate.column, where),
         OperatorNode.create('in'),
         compileList(predicate, context, where),
       );
 
     case 'isNull':
       return BinaryOperationNode.create(
-        reference(context.catalogue, table, predicate.column),
+        referenceAt(context, scope, scope.length - 1, predicate.column, where),
         OperatorNode.create(predicate.expected ? 'is' : 'is not'),
         ValueNode.createImmediate(null),
       );

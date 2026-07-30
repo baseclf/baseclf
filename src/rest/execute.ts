@@ -20,7 +20,7 @@
  * is.
  */
 
-import type { OperationNode, SelectQueryNode } from 'kysely';
+import type { OperationNode, RootOperationNode } from 'kysely';
 import { type CompiledQuery, SqliteQueryCompiler } from 'kysely';
 
 import type { D1Executor } from '../db/dialect.js';
@@ -153,7 +153,8 @@ export function assertIdentifiersAreReal(
 
 export interface ExecuteOptions {
   readonly executor: D1Executor;
-  readonly node: SelectQueryNode;
+  /** A select or a write. Both arrive here already carrying their policy. */
+  readonly node: RootOperationNode;
   readonly catalogue: Catalogue;
   readonly scope: IdentifierScope;
 }
@@ -171,8 +172,13 @@ export interface ExecuteResult<R> {
  * Compilation and execution are separate steps because everything above
  * depends on being able to look at the finished statement before it runs.
  * A driver that compiles and sends in one call leaves nowhere to stand.
+ *
+ * Writes come through here too. `.all()` is used rather than `.run()` because
+ * every write this engine builds carries RETURNING, and the rows it hands back
+ * are how the caller finds out whether anything happened. Zero rows is a 404,
+ * for a row that was not there and for a row the policy withheld alike.
  */
-export async function executeSelect<R>(options: ExecuteOptions): Promise<ExecuteResult<R>> {
+export async function executeStatement<R>(options: ExecuteOptions): Promise<ExecuteResult<R>> {
   const compiled: CompiledQuery = new SqliteQueryCompiler().compileQuery(
     options.node,
     // The compiler only uses the id for logging hooks we do not install.

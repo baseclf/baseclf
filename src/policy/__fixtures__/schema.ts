@@ -72,6 +72,7 @@ export interface SeedPolicy {
   readonly using: unknown;
   readonly check?: unknown;
   readonly columns: readonly string[];
+  readonly set?: Readonly<Record<string, unknown>>;
 }
 
 export const POST_POLICIES: readonly SeedPolicy[] = Object.freeze([
@@ -95,6 +96,56 @@ export const POST_POLICIES: readonly SeedPolicy[] = Object.freeze([
     roles: ['authenticated'],
     using: { $bind: 'isOrgAdmin' },
     columns: [...READABLE_COLUMNS, 'org_id'],
+  },
+
+  // Writes. Note what is missing from each column list, because that is where
+  // the enforcement lives: author_id appears in neither, so a caller cannot
+  // write it at all, and the engine fills it in from the token instead.
+  {
+    name: 'insert_own',
+    operation: 'insert',
+    roles: ['authenticated'],
+    // An insert has no existing row, so this must be true and the condition
+    // lives in `check`, which is about the row being created.
+    using: true,
+    check: { $bind: 'isAuthor' },
+    columns: ['id', 'title', 'body', 'status', 'org_id', 'created_at'],
+    set: { author_id: '$auth.uid' },
+  },
+  {
+    name: 'update_own',
+    operation: 'update',
+    roles: ['authenticated'],
+    using: { $bind: 'isAuthor' },
+    check: { $bind: 'isAuthor' },
+    columns: ['title', 'body', 'status'],
+  },
+  {
+    name: 'delete_own',
+    operation: 'delete',
+    roles: ['authenticated'],
+    using: { $bind: 'isAuthor' },
+    columns: ['id'],
+  },
+]);
+
+/**
+ * The same table, but with author_id in the update grant.
+ *
+ * This is the arrangement the post-image rewrite exists for. The caller may
+ * write author_id, so the check compiles to a comparison between the new owner
+ * and the caller rather than between the stored owner and the caller, and
+ * handing the row to somebody else stops being possible for a structural
+ * reason rather than because a column list happened to leave it out.
+ */
+export const OWNER_WRITABLE_POLICIES: readonly SeedPolicy[] = Object.freeze([
+  {
+    name: 'update_own_including_owner',
+    operation: 'update',
+    roles: ['authenticated'],
+    using: { $bind: 'isAuthor' },
+    check: { $bind: 'isAuthor' },
+    columns: ['title', 'status', 'author_id'],
   },
 ]);
 
@@ -187,8 +238,9 @@ export async function registerPolicies(
   for (const policy of policies) {
     await executor
       .prepare(
-        'INSERT INTO _policies (table_name, name, operation, roles, using_expr, check_expr, columns)' +
-          ' VALUES (?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO _policies' +
+          ' (table_name, name, operation, roles, using_expr, check_expr, columns, set_expr)' +
+          ' VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
       )
       .bind(
         table,
@@ -198,6 +250,7 @@ export async function registerPolicies(
         JSON.stringify(policy.using),
         policy.check === undefined ? null : JSON.stringify(policy.check),
         JSON.stringify(policy.columns),
+        policy.set === undefined ? null : JSON.stringify(policy.set),
       )
       .run();
   }

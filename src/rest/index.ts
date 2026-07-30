@@ -13,14 +13,14 @@ export {
   toLikePattern,
 } from './allowlist.js';
 
-export { type BuildInput, buildSelect } from './build.js';
+export { type BuildInput, buildClientFilter, buildSelect } from './build.js';
 
 export {
   assertIdentifiersAreReal,
   collectTableNames,
   type ExecuteOptions,
   type ExecuteResult,
-  executeSelect,
+  executeStatement,
   extractQuotedIdentifiers,
   type IdentifierScope,
 } from './execute.js';
@@ -42,4 +42,12 @@ export {
   type SelectItem,
 } from './parse-query.js';
 
-export { REST_PREFIX, type ReadRequest, readTable, tableFromPath } from './router.js';
+export {
+  operationForMethod,
+  REST_PREFIX,
+  type ReadRequest,
+  readTable,
+  tableFromPath,
+  type WriteRequestInput,
+  writeTable,
+} from './router.js';

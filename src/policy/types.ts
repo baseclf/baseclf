@@ -93,6 +93,20 @@ export type Predicate =
       readonly where: Predicate;
     };
 
+/**
+ * A column the server fills in, and what it fills it with.
+ *
+ * This is how `author_id` gets to be the caller's own id without the caller
+ * being able to say so. The value comes from a verified claim or from a
+ * constant in the policy, and the request body has no way to reach it: a column
+ * named here is refused if it also appears in `columns`, so there is never a
+ * question of which of the two won.
+ */
+export interface ServerSet {
+  readonly column: string;
+  readonly value: ValueExpr;
+}
+
 export interface PolicyDef {
   readonly name: string;
   readonly operation: Operation;
@@ -100,10 +114,19 @@ export interface PolicyDef {
   readonly roles: readonly string[];
   /** Which existing rows the policy is about. Required: an absent one would be "all rows". */
   readonly using: Predicate;
-  /** What a row is allowed to look like afterwards. Write paths only; V2. */
+  /** What the row is allowed to look like afterwards. Write paths only. */
   readonly check: Predicate | null;
-  /** Columns this policy grants. A request may only read columns a policy grants. */
+  /**
+   * Columns this policy grants.
+   *
+   * On a read, the columns a request may ask for. On a write, the columns a
+   * request body may set. A column absent from here cannot be written, which is
+   * the whole mechanism behind refusing to let a caller move a row out of their
+   * own reach by rewriting its owner.
+   */
   readonly columns: readonly string[];
+  /** Columns written by the server rather than by the caller. */
+  readonly set: readonly ServerSet[];
 }
 
 export interface TableDefinition {

@@ -12,21 +12,34 @@
 
 import { env } from 'cloudflare:workers';
 import { SqliteQueryCompiler } from 'kysely';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { getCatalogue, resetCatalogue } from '../db/introspect.js';
-import { buildSelect } from '../rest/build.js';
+import { buildClientFilter, buildSelect } from '../rest/build.js';
 import { parseQueryString } from '../rest/parse-query.js';
-import { GOLDEN_CASES } from './__fixtures__/golden.js';
-import { seedDatabase, seedStandardPolicies } from './__fixtures__/schema.js';
+import { GOLDEN_CASES, GOLDEN_WRITE_CASES, type GoldenWriteCase } from './__fixtures__/golden.js';
+import {
+  OWNER_WRITABLE_POLICIES,
+  POST_BINDS,
+  POST_POLICIES,
+  registerPolicies,
+  seedDatabase,
+  seedStandardPolicies,
+} from './__fixtures__/schema.js';
 import { applyPolicy } from './plugin.js';
 import { getRegistry, resetRegistry } from './registry.js';
 import type { AuthCtx } from './types.js';
+import { buildWrite } from './write.js';
 
 beforeAll(async () => {
   await seedDatabase(env.DB);
-  await seedStandardPolicies(env.DB);
   resetCatalogue();
+});
+
+// The write cases install their own policies, so every test starts from the
+// standard set rather than from whatever the one before it left behind.
+beforeEach(async () => {
+  await seedStandardPolicies(env.DB);
   resetRegistry();
 });
 
@@ -107,5 +120,70 @@ describe('what every compiled statement holds true', () => {
     );
 
     expect(withFilter.sql).toMatch(/where \([^)]*\) and \(/);
+  });
+});
+
+describe('golden files, write path', () => {
+  async function compileWrite(testCase: GoldenWriteCase) {
+    await registerPolicies(env.DB, {
+      table: 'posts',
+      binds: POST_BINDS,
+      policies: testCase.ownerWritable ? OWNER_WRITABLE_POLICIES : POST_POLICIES,
+    });
+    resetRegistry();
+
+    const [catalogue, registry] = await Promise.all([getCatalogue(env.DB), getRegistry(env.DB)]);
+    const parsed = parseQueryString(new URLSearchParams(testCase.query));
+    const filter =
+      testCase.operation === 'insert' ? null : buildClientFilter(catalogue, 'posts', parsed);
+
+    const built = buildWrite({
+      registry,
+      catalogue,
+      auth: { role: testCase.role, uid: testCase.uid, email: null, app: {} },
+      table: 'posts',
+      operation: testCase.operation,
+      body: new Map(Object.entries(testCase.body ?? {})),
+      filter,
+    });
+
+    return new SqliteQueryCompiler().compileQuery(built.node, { queryId: 'golden' });
+  }
+
+  for (const testCase of GOLDEN_WRITE_CASES) {
+    it(testCase.name, async () => {
+      const compiled = await compileWrite(testCase);
+
+      expect(compiled.sql).toBe(testCase.sql);
+      expect(compiled.parameters).toEqual(testCase.parameters);
+    });
+  }
+
+  it('never writes a value into the statement', async () => {
+    for (const testCase of GOLDEN_WRITE_CASES) {
+      const compiled = await compileWrite(testCase);
+
+      expect(compiled.sql).not.toContain("'");
+      if (testCase.uid !== null) expect(compiled.sql).not.toContain(testCase.uid);
+      for (const value of Object.values(testCase.body ?? {})) {
+        if (typeof value === 'string' && value.length > 2) {
+          expect(compiled.sql).not.toContain(value);
+        }
+      }
+    }
+  });
+
+  it('always carries RETURNING, which is how zero rows becomes a 404', async () => {
+    for (const testCase of GOLDEN_WRITE_CASES) {
+      const compiled = await compileWrite(testCase);
+      expect(compiled.sql).toContain('returning');
+    }
+  });
+
+  it('stays inside D1 hundred parameter ceiling', async () => {
+    for (const testCase of GOLDEN_WRITE_CASES) {
+      const compiled = await compileWrite(testCase);
+      expect(compiled.parameters.length).toBeLessThanOrEqual(100);
+    }
   });
 });

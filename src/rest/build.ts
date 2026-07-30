@@ -226,6 +226,27 @@ function orderByFor(
   return OrderByNode.create(items);
 }
 
+/**
+ * Everything the client asked to filter on, AND'd together.
+ *
+ * Shared by reads and writes so that `?id=eq.p1` means the same thing whichever
+ * verb carries it, and so there is one place where a client filter becomes a
+ * node rather than two that have to agree.
+ */
+export function buildClientFilter(
+  catalogue: Catalogue,
+  table: string,
+  parsed: ParsedQuery,
+): OperationNode | null {
+  const filters = parsed.filters.map((filter) => compileFilter(catalogue, table, filter));
+  if (filters.length === 0) return null;
+
+  const [first, ...rest] = filters as [OperationNode, ...OperationNode[]];
+  if (rest.length === 0) return first;
+
+  return ParensNode.create(rest.reduce((left, right) => AndNode.create(left, right), first));
+}
+
 export interface BuildInput {
   readonly catalogue: Catalogue;
   readonly table: string;
@@ -247,7 +268,7 @@ export function buildSelect(input: BuildInput): SelectQueryNode {
   const selections = selectionsFor(catalogue, table, columns);
   if (selections.length === 0) bad('A request must read at least one column.');
 
-  const filters = parsed.filters.map((filter) => compileFilter(catalogue, table, filter));
+  const clientFilter = buildClientFilter(catalogue, table, parsed);
 
   const base: SelectQueryNode = {
     ...SelectQueryNode.createFrom([TableNode.create(table)]),
@@ -258,19 +279,7 @@ export function buildSelect(input: BuildInput): SelectQueryNode {
 
   const orderBy = orderByFor(catalogue, table, parsed);
 
-  const where =
-    filters.length === 0
-      ? undefined
-      : WhereNode.create(
-          filters.length === 1
-            ? (filters[0] as OperationNode)
-            : ParensNode.create(
-                (filters.slice(1) as OperationNode[]).reduce(
-                  (left, right) => AndNode.create(left, right),
-                  filters[0] as OperationNode,
-                ),
-              ),
-        );
+  const where = clientFilter === null ? undefined : WhereNode.create(clientFilter);
 
   return {
     ...base,

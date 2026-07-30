@@ -112,3 +112,108 @@ export const GOLDEN_CASES: readonly GoldenCase[] = Object.freeze([
     parameters: ['published', 100, 5],
   },
 ]);
+
+export interface GoldenWriteCase {
+  readonly name: string;
+  readonly operation: 'insert' | 'update' | 'delete';
+  readonly role: string;
+  readonly uid: string | null;
+  /** Query string carrying the client filter. Empty for an insert. */
+  readonly query: string;
+  readonly body: Readonly<Record<string, unknown>> | null;
+  /** True when the fixture's owner-writable policy set is in force. */
+  readonly ownerWritable: boolean;
+  readonly sql: string;
+  readonly parameters: readonly (string | number | null)[];
+}
+
+/**
+ * The write path, frozen.
+ *
+ * Read the first and last entries together, because the difference between them
+ * is the whole of V2.
+ *
+ * In both, USING appears as `"posts"."author_id" = ?`: is this row yours right
+ * now. In the first, CHECK appears identically, because the update does not
+ * touch author_id and a column that is not written has itself as its post-image.
+ * In the last, author_id is something the caller may write, and CHECK has become
+ * `? = ?`: the value being written, against the caller. Which is to say the
+ * check stopped being about the stored row and started being about the row that
+ * would exist afterwards, without anything else in the statement changing.
+ *
+ * That is what makes handing a row to somebody else impossible rather than
+ * merely unimplemented, and it is why the parameters of the last case read
+ * u_ann, u_bob, u_ann: yours now, theirs after, and you.
+ */
+export const GOLDEN_WRITE_CASES: readonly GoldenWriteCase[] = Object.freeze([
+  {
+    name: 'an update that does not touch the owner checks the column against itself',
+    operation: 'update',
+    role: 'authenticated',
+    uid: 'u_ann',
+    query: 'id=eq.p2',
+    body: { title: 'renamed' },
+    ownerWritable: false,
+    sql:
+      'update "posts" set "title" = ? ' +
+      'where (("posts"."author_id" = ?) and ("posts"."author_id" = ?)) ' +
+      'and ("posts"."id" = ?) returning "id", "title"',
+    parameters: ['renamed', 'u_ann', 'u_ann', 'p2'],
+  },
+  {
+    name: 'a delete carries the using clause and nothing else',
+    operation: 'delete',
+    role: 'authenticated',
+    uid: 'u_ann',
+    query: 'id=eq.p2',
+    body: null,
+    ownerWritable: false,
+    // No check: there is no row afterwards for one to be about.
+    sql: 'delete from "posts" where ("posts"."author_id" = ?) and ("posts"."id" = ?) returning "id"',
+    parameters: ['u_ann', 'p2'],
+  },
+  {
+    name: 'an insert is guarded, and the owner comes from the token',
+    operation: 'insert',
+    role: 'authenticated',
+    uid: 'u_ann',
+    query: '',
+    // No author_id here. The policy sets it, and a body that carried one would
+    // have been ignored rather than used.
+    body: {
+      id: 'p_new',
+      title: 'Mine',
+      body: null,
+      status: 'draft',
+      org_id: 'org_1',
+      created_at: '2026-07-31',
+    },
+    ownerWritable: false,
+    // The select has no FROM, so it yields one row or none, and the insert
+    // happens entirely or not at all. There is no moment in which the row exists
+    // and is then reconsidered, which is the only shape available on a database
+    // with no interactive transaction.
+    sql:
+      'insert into "posts" ("id", "title", "body", "status", "org_id", "created_at", "author_id") ' +
+      'select ?, ?, ?, ?, ?, ?, ? where ? = ? ' +
+      'returning "id", "title", "body", "status", "author_id", "org_id", "created_at"',
+    parameters: ['p_new', 'Mine', null, 'draft', 'org_1', '2026-07-31', 'u_ann', 'u_ann', 'u_ann'],
+  },
+  {
+    name: 'an update that may touch the owner checks the new value instead',
+    operation: 'update',
+    role: 'authenticated',
+    uid: 'u_ann',
+    query: 'id=eq.p2',
+    body: { title: 'renamed', author_id: 'u_bob' },
+    ownerWritable: true,
+    sql:
+      'update "posts" set "title" = ?, "author_id" = ? ' +
+      'where (("posts"."author_id" = ?) and (? = ?)) ' +
+      'and ("posts"."id" = ?) returning "id", "title", "author_id"',
+    // renamed, the new owner, the caller, the new owner again, the caller
+    // again, the id. The fourth and fifth are the check, and they do not match,
+    // so RETURNING is empty and the request is a 404.
+    parameters: ['renamed', 'u_bob', 'u_ann', 'u_bob', 'u_ann', 'p2'],
+  },
+]);

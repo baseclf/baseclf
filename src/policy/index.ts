@@ -1,4 +1,10 @@
 export {
+  type Assignment,
+  compileCheck,
+  type ResolvedWrite,
+  resolveWrite,
+} from './check-rewrite.js';
+export {
   type Bindable,
   type CompileContext,
   combinePermissive,
@@ -40,3 +46,10 @@ export {
 } from './types.js';
 
 export { validateTableDefinition } from './validate.js';
+
+export {
+  type BuiltWrite,
+  buildWrite,
+  type WriteOperation,
+  type WriteRequest,
+} from './write.js';

@@ -230,6 +230,34 @@ function validatePolicy(catalogue: Catalogue, table: string, policy: PolicyDef):
     assertColumn(catalogue, table, column, `${where} column list`);
   }
 
+  for (const entry of policy.set) {
+    assertColumn(catalogue, table, entry.column, `${where} set`);
+  }
+
+  // An insert policy without a check writes whatever it is given, subject only
+  // to the column grant. That is a coherent thing to want, but it is not
+  // something to arrive at by leaving a key out, so it has to be written as an
+  // explicit `"check": true`.
+  // An insert has no existing row, so there is nothing for `using` to be about.
+  // The write path ignores it, and something that is ignored must not be allowed
+  // to look meaningful: a policy author who wrote a restrictive `using` here
+  // would reasonably believe it applied.
+  if (policy.operation === 'insert' && policy.using.kind !== 'all') {
+    throw invalid(
+      `${where} is an insert policy with a condition in "using". An insert has no existing row ` +
+        'for that to describe, so it would be ignored. Write "using": true and put the ' +
+        'condition in "check", which is about the row being created.',
+    );
+  }
+
+  if (policy.operation === 'insert' && policy.check === null) {
+    throw invalid(
+      `${where} is an insert policy with no "check". The row does not exist yet, so "using" ` +
+        'says nothing about it. State the condition the new row must meet, or write ' +
+        '"check": true to accept any row the column grant allows.',
+    );
+  }
+
   walk(catalogue, policy.using, [table], `${where} using`, 0);
   if (policy.check !== null) {
     walk(catalogue, policy.check, [table], `${where} check`, 0);

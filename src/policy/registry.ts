@@ -55,6 +55,17 @@ export interface Registry {
     requested: readonly string[] | null,
   ): PolicyMatch;
 
+  /**
+   * Every policy for this role and operation, with no column filtering.
+   *
+   * Fail-closed exactly as `resolve` is: no definition, disabled, or nothing
+   * matching the pair still throws. What it does not do is decide eligibility
+   * by column, because a write has to know which columns the server sets before
+   * it can know which columns the caller is asking to write. `resolve` cannot
+   * answer that without being told the answer first.
+   */
+  candidates(table: string, operation: Operation, role: string): readonly PolicyDef[];
+
   /** For diagnostics and the Studio. Never used to decide access. */
   readonly definitions: ReadonlyMap<string, TableDefinition>;
 }
@@ -77,6 +88,7 @@ interface PolicyRow {
   using_expr: string;
   check_expr: string | null;
   columns: string;
+  set_expr: string | null;
 }
 
 interface BindRow {
@@ -130,7 +142,8 @@ export async function loadRegistry(executor: D1Executor): Promise<Registry> {
     query<BindRow>(executor, 'SELECT table_name, name, expression FROM _policy_binds'),
     query<PolicyRow>(
       executor,
-      'SELECT table_name, name, operation, roles, using_expr, check_expr, columns FROM _policies',
+      'SELECT table_name, name, operation, roles, using_expr, check_expr, columns, set_expr' +
+        ' FROM _policies',
     ),
   ]);
 
@@ -152,6 +165,7 @@ export async function loadRegistry(executor: D1Executor): Promise<Registry> {
       using: parseJson(row.using_expr, `${where} using`),
       ...(row.check_expr === null ? {} : { check: parseJson(row.check_expr, `${where} check`) }),
       columns: parseJson(row.columns, `${where} columns`),
+      ...(row.set_expr === null ? {} : { set: parseJson(row.set_expr, `${where} set`) }),
     });
     policiesByTable.set(row.table_name, bucket);
   }
@@ -207,6 +221,32 @@ function buildRegistry(
 ): Registry {
   return {
     definitions,
+
+    candidates(table, operation, role): readonly PolicyDef[] {
+      // Same refusals as resolve, in the same order. Written out rather than
+      // shared through a helper that returns "no policies" as a value, because
+      // a helper like that is one careless caller away from being fail-open.
+      if (table.startsWith(SYSTEM_TABLE_PREFIX) || catalogue.tables.get(table)?.isSystem === true) {
+        throw notFound(`Table "${table}" belongs to the engine and is never exposed.`);
+      }
+
+      const definition = definitions.get(table);
+      if (definition === undefined) {
+        throw notFound(`Table "${table}" has no policy document.`);
+      }
+      if (!definition.enabled) {
+        throw notFound(`Table "${table}" is registered but not enabled.`);
+      }
+
+      const matching = definition.policies.filter(
+        (policy) => policy.operation === operation && policy.roles.includes(role),
+      );
+      if (matching.length === 0) {
+        throw noPolicy(`No policy on "${table}" covers (${role}, ${operation}).`);
+      }
+
+      return matching;
+    },
 
     resolve(table, operation, role, requested): PolicyMatch {
       // Invariant I8 again, on the lookup rather than the load. Checked by name

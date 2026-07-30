@@ -25,7 +25,7 @@ import type { BaseclfError } from '../utils/errors.js';
 import {
   assertIdentifiersAreReal,
   collectTableNames,
-  executeSelect,
+  executeStatement,
   extractQuotedIdentifiers,
 } from './execute.js';
 
@@ -169,7 +169,7 @@ describe('assertIdentifiersAreReal', () => {
 describe('executeSelect', () => {
   it('runs a checked statement and reports what it scanned', async () => {
     const node = selectOf('posts', ['id']);
-    const result = await executeSelect<{ id: string }>({
+    const result = await executeStatement<{ id: string }>({
       executor: env.DB,
       node,
       catalogue,
@@ -186,7 +186,7 @@ describe('executeSelect', () => {
     const node = selectOf('posts', ['titel']);
 
     await expect(
-      executeSelect({ executor: env.DB, node, catalogue, scope: { aliases: new Set() } }),
+      executeStatement({ executor: env.DB, node, catalogue, scope: { aliases: new Set() } }),
     ).rejects.toThrow();
   });
 });

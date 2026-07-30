@@ -30,6 +30,7 @@ import {
   type Operation,
   type PolicyDef,
   type Predicate,
+  type ServerSet,
   type TableDefinition,
   type ValueExpr,
 } from './types.js';
@@ -346,6 +347,34 @@ function parseOperation(raw: unknown): Operation {
   return raw as Operation;
 }
 
+/**
+ * `"set": { "author_id": "$auth.uid" }`.
+ *
+ * Values are claims or constants. `$row` is refused: there is no enclosing row
+ * to be relative to, and a server-set value that depended on the row being
+ * written would be circular.
+ */
+function parseServerSet(raw: unknown, policyName: string): readonly ServerSet[] {
+  if (raw === undefined) return Object.freeze([]);
+  if (!isPlainObject(raw)) {
+    throw invalid(`Policy "${policyName}" has a "set" that is not an object.`);
+  }
+
+  const entries: ServerSet[] = [];
+  for (const [column, value] of Object.entries(raw)) {
+    if (!IDENTIFIER_PATTERN.test(column)) {
+      throw invalid(`Policy "${policyName}" sets "${column}", which is not a column name.`);
+    }
+    const parsed = parseValue(value, `Policy "${policyName}" set "${column}"`);
+    if (parsed.kind === 'outerColumn') {
+      throw invalid(`Policy "${policyName}" cannot use $row in "set".`);
+    }
+    entries.push(Object.freeze({ column, value: parsed }));
+  }
+
+  return Object.freeze(entries);
+}
+
 function parsePolicy(raw: unknown, context: ParseContext): PolicyDef {
   if (!isPlainObject(raw)) throw invalid('Each policy must be an object.');
 
@@ -372,8 +401,25 @@ function parsePolicy(raw: unknown, context: ParseContext): PolicyDef {
 
   const using = parsePredicate(raw['using'], context);
   const check = Object.hasOwn(raw, 'check') ? parsePredicate(raw['check'], context) : null;
+  const set = parseServerSet(raw['set'], name);
 
-  return Object.freeze({ name, operation, roles, using, check, columns });
+  // A column cannot be both something the caller writes and something the
+  // server writes. Whichever the engine picked, the other reading would be a
+  // reasonable thing for a policy author to have believed.
+  for (const entry of set) {
+    if (columns.includes(entry.column)) {
+      throw invalid(
+        `Policy "${name}" lists "${entry.column}" in both "columns" and "set". ` +
+          'A column is written by the caller or by the server, not by whichever runs first.',
+      );
+    }
+  }
+
+  if (set.length > 0 && (operation === 'select' || operation === 'delete')) {
+    throw invalid(`Policy "${name}" has a "set", which a ${operation} policy cannot use.`);
+  }
+
+  return Object.freeze({ name, operation, roles, using, check, columns, set });
 }
 
 /**

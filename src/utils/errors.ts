@@ -19,6 +19,8 @@ export type ErrorCode =
   | 'MALFORMED_SQL'
   | 'UNSUPPORTED_OPERATOR'
   | 'UNSUPPORTED_QUERY'
+  // the only code a 404 ever shows a client, whatever it was internally
+  | 'NOT_FOUND'
   // platform
   | 'D1_NO_INTERACTIVE_TRANSACTION'
   | 'D1_QUERY_FAILED'
@@ -50,11 +52,23 @@ export class BaseclfError extends Error {
   }
 
   /**
-   * The only shape that may be sent to a client. `detail` is omitted on
-   * purpose: it exists for logs, not for responses.
+   * The only shape that may be sent to a client.
+   *
+   * `detail` is omitted on purpose: it exists for logs, not for responses.
+   *
+   * Every 404 reports the same code, whatever it was internally. Rule 00
+   * invariant I5 is about a client being unable to tell "that is not there"
+   * from "that is not yours", and a distinct code defeats that just as surely
+   * as a distinct status would. TABLE_NOT_EXPOSED, NO_POLICY and
+   * UNKNOWN_IDENTIFIER are all real distinctions and all of them belong in the
+   * log, where the person who deployed this can see them and the person probing
+   * it cannot.
+   *
+   * Collapsing by status rather than by listing the codes is deliberate: a 404
+   * added later is covered without anyone having to remember this rule.
    */
   toResponseBody(): { error: string; code: ErrorCode } {
-    return { error: this.message, code: this.code };
+    return { error: this.message, code: this.status === 404 ? 'NOT_FOUND' : this.code };
   }
 }
 
