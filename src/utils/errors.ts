@@ -19,6 +19,11 @@ export type ErrorCode =
   | 'MALFORMED_SQL'
   | 'UNSUPPORTED_OPERATOR'
   | 'UNSUPPORTED_QUERY'
+  // identity
+  // Deliberately distinct from the 404 family. A 401 says "these credentials
+  // were not accepted", which the caller needs in order to refresh or sign in
+  // again, and which reveals nothing about whether any particular row exists.
+  | 'UNAUTHENTICATED'
   // the only code a 404 ever shows a client, whatever it was internally
   | 'NOT_FOUND'
   // platform

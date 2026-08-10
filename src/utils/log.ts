@@ -38,7 +38,20 @@ export interface ErrorEvent {
   readonly detail: string;
 }
 
-export type LogEvent = QueryEvent | PolicyRefusalEvent | ErrorEvent;
+/**
+ * Something happened on the identity path.
+ *
+ * `reason` is a closed set of literals rather than a string, so this event
+ * cannot become somewhere a token, a claim or a key ends up. That is the same
+ * argument as the rest of this file, applied to the one area where a careless
+ * log line does the most damage.
+ */
+export interface AuthEvent {
+  readonly event: 'jwks_refresh';
+  readonly reason: 'no_matching_key';
+}
+
+export type LogEvent = QueryEvent | PolicyRefusalEvent | ErrorEvent | AuthEvent;
 
 export function logEvent(event: LogEvent): void {
   console.log(JSON.stringify(event));
