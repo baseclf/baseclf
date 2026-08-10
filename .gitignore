@@ -14,6 +14,10 @@
 !.env.example
 *.local
 secrets.json
+
+# Wrangler config carrying real resource ids. The committed wrangler.jsonc keeps
+# placeholders; a real deployment gets its own file and passes --config.
+wrangler.local.*
 *.pem
 *.p12
 *.key

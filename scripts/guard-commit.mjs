@@ -22,6 +22,9 @@ const ALL = process.argv.includes('--all');
 const PRIVATE_PATHS = [
   /^\.dev\.vars(?!\.example)/,
   /^\.env(?!\.example)/,
+  // Wrangler config holding real resource ids. The committed wrangler.jsonc
+  // keeps placeholders; a real deployment gets its own file and --config.
+  /^wrangler\.local\./,
   /(^|\/)secrets\.json$/,
   /\.(pem|p12|key)$/,
   /(^|\/)id_(ed25519|rsa)/,
