@@ -24,6 +24,9 @@ import type { AuthCtx } from './policy/index.js';
 import { getRegistry } from './policy/index.js';
 import type { WriteOperation } from './policy/write.js';
 import { operationForMethod, readTable, tableFromPath, writeTable } from './rest/index.js';
+import type { StorageOperation } from './storage/policy.js';
+import { getStorageRegistry } from './storage/registry.js';
+import { deleteObject, downloadObject, uploadObject } from './storage/router.js';
 import { BaseclfError } from './utils/errors.js';
 import { logError } from './utils/log.js';
 import {
@@ -36,6 +39,7 @@ import {
 
 export interface Env extends AuthEnv {
   readonly DB: D1Database;
+  readonly BUCKET: R2Bucket;
 }
 
 /**
@@ -89,7 +93,16 @@ const ALLOWED_REQUEST_HEADERS = 'authorization, content-type, prefer, x-d1-bookm
  */
 const EXPOSED_RESPONSE_HEADERS = 'x-d1-bookmark, x-baseclf-rows-read, retry-after';
 
-const ALLOWED_METHODS = 'GET, HEAD, POST, PATCH, DELETE, OPTIONS';
+/**
+ * What a browser may ask for.
+ *
+ * PUT is here for the storage path, and its absence was a real bug for exactly as
+ * long as that path existed without it: a browser preflighting an upload would be
+ * refused, and the console message says nothing about a method. This list and the
+ * router have to agree, and nothing checks that they do, which is why the
+ * diagnostic reports it.
+ */
+const ALLOWED_METHODS = 'GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS';
 
 /**
  * The header constants above as a list, for the diagnostic to report.
@@ -189,6 +202,59 @@ function withCors(response: Response, origin: string | null): Response {
     statusText: response.statusText,
     headers,
   });
+}
+
+/**
+ * Where objects live.
+ *
+ * Exactly two segments after the prefix, a bucket and a file name, and the shape
+ * is the enforcement rather than a check that follows it. A file name cannot
+ * contain a separator because a third segment does not parse, so a caller has no
+ * way to express a path at all and `src/storage/policy.ts` never has to defend
+ * against one. Anything else here is not a storage request.
+ */
+const STORAGE_PREFIX = '/storage/v1/';
+
+interface StorageTarget {
+  readonly bucket: string;
+  readonly fileName: string;
+}
+
+/**
+ * The bucket and file a path names, or null if it names neither.
+ *
+ * Decoded once, and after the segment count is taken. The order is a preference
+ * rather than the defence, and saying so matters because the obvious claim about
+ * it is wrong: decoding first would be safe too, since `%2F` would become a third
+ * segment and a third segment does not route. What actually refuses a name with a
+ * separator in it is the policy layer, whose character set has no slash in it.
+ * Two independent layers, and this is the cheaper one.
+ */
+function storageTargetFromPath(pathname: string): StorageTarget | null {
+  if (!pathname.startsWith(STORAGE_PREFIX)) return null;
+
+  const segments = pathname.slice(STORAGE_PREFIX.length).split('/');
+  if (segments.length !== 2) return null;
+
+  const [bucket, fileName] = segments;
+  if (bucket === undefined || fileName === undefined) return null;
+  if (bucket.length === 0 || fileName.length === 0) return null;
+
+  try {
+    return { bucket: decodeURIComponent(bucket), fileName: decodeURIComponent(fileName) };
+  } catch {
+    // A malformed escape is not a name. Refused here rather than passed on as the
+    // raw text, which would be a second spelling for the same object.
+    return null;
+  }
+}
+
+/** Which storage operation an HTTP method asks for, or null. */
+function storageOperationForMethod(method: string): StorageOperation | null {
+  if (method === 'PUT' || method === 'POST') return 'upload';
+  if (method === 'GET' || method === 'HEAD') return 'download';
+  if (method === 'DELETE') return 'delete';
+  return null;
 }
 
 /** Where the diagnostic lives. Checked before the identity provider sees a path. */
@@ -433,6 +499,56 @@ async function handleRead(request: Request, env: Env, table: string): Promise<Re
 }
 
 /**
+ * Objects in and out.
+ *
+ * The identity comes from the same `identify` every data path uses, so there is
+ * still no second way to obtain an `AuthCtx` inside `fetch`. Nothing here decides
+ * access: `src/storage/router.ts` and `src/storage/policy.ts` do, and this
+ * function's whole job is to find out who is asking and which handler to call.
+ *
+ * ⚠️ Not rate limited, and that is a gap rather than a decision. The auth path has
+ * a limiter because a password is worth guessing at; an upload is not guessable,
+ * but it does cost R2 writes and it is reachable by anyone with a session. Adding
+ * a second limiter call site means choosing numbers, and the ones already in this
+ * file are acknowledged guesses. Left out on purpose rather than guessed at twice.
+ */
+async function handleStorage(request: Request, env: Env, target: StorageTarget): Promise<Response> {
+  const operation = storageOperationForMethod(request.method);
+  if (operation === null) {
+    return Response.json(
+      { error: 'Method not allowed.', code: 'UNSUPPORTED_QUERY' },
+      { status: 405, headers: { allow: 'GET, HEAD, PUT, POST, DELETE' } },
+    );
+  }
+
+  const [auth, registry] = await Promise.all([identify(request, env), getStorageRegistry(env.DB)]);
+
+  const context = {
+    bucket: env.BUCKET,
+    buckets: registry.buckets,
+    auth,
+    bucketName: target.bucket,
+    fileName: target.fileName,
+  };
+
+  if (operation === 'download') {
+    return await downloadObject(context);
+  }
+
+  if (operation === 'delete') {
+    await deleteObject(context);
+    return new Response(null, { status: 204 });
+  }
+
+  const stored = await uploadObject(context, request);
+
+  // 201 with the key, because a caller that did not choose the key needs to be
+  // told it. The key is built from their own verified claim, so it is not a
+  // disclosure: it is the only way they can address what they just uploaded.
+  return Response.json({ key: stored.key, etag: stored.etag }, { status: 201 });
+}
+
+/**
  * Whether the caller wants the rows back.
  *
  * PostgREST spells this `Prefer: return=representation`, and its default is
@@ -543,6 +659,11 @@ async function respond(request: Request, env: Env): Promise<Response> {
       if (limited !== null) return limited;
 
       return await getAuth(env).handler(request);
+    }
+
+    const object = storageTargetFromPath(url.pathname);
+    if (object !== null) {
+      return await handleStorage(request, env, object);
     }
 
     const table = tableFromPath(url.pathname);

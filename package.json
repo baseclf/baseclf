@@ -25,7 +25,8 @@
     "mutate:diagnose-cors": "node scripts/mutate-diagnose-cors.mjs",
     "mutate:storage-policy": "node scripts/mutate-storage-policy.mjs",
     "mutate:storage-router": "node scripts/mutate-storage-router.mjs",
-    "mutate": "npm run mutate:jwks-brake && npm run mutate:diagnose-cors && npm run mutate:storage-policy && npm run mutate:storage-router",
+    "mutate:storage-wiring": "node scripts/mutate-storage-wiring.mjs",
+    "mutate": "npm run mutate:jwks-brake && npm run mutate:diagnose-cors && npm run mutate:storage-policy && npm run mutate:storage-router && npm run mutate:storage-wiring",
     "demo:v1": "node scripts/demo-v1.mjs",
     "demo:v2": "node scripts/demo-v2.mjs"
   },
