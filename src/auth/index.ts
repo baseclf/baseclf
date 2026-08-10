@@ -188,6 +188,24 @@ function authOptions(env: AuthEnv, settings: AuthSettings) {
  * this because the CLI runs in Node and cannot reach a D1 binding, but the
  * programmatic API runs wherever it is called, including here.
  */
+/**
+ * The statements the migration would run, without running them.
+ *
+ * `runAuthMigrations` needs a D1 binding, and a binding only exists inside a
+ * Worker, so it cannot reach the database of a deployment being provisioned
+ * from the outside. This is the other half of that problem: emit the SQL here,
+ * apply it with whatever does have reach.
+ *
+ * Derived from the same options as the instance, for the same reason as above.
+ * A hand-written options object omits the jwks table the jwt plugin owns, and
+ * the first symptom is the JWKS endpoint answering 500, which then makes every
+ * token unverifiable while everything else looks healthy.
+ */
+export async function compileAuthMigrations(env: AuthEnv): Promise<string> {
+  const migrations = await getMigrations(authOptions(env, authSettings(env)));
+  return migrations.compileMigrations();
+}
+
 export async function runAuthMigrations(env: AuthEnv): Promise<readonly string[]> {
   const migrations = await getMigrations(authOptions(env, authSettings(env)));
   const created = migrations.toBeCreated.map((entry) => entry.table);
