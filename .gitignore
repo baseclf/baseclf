@@ -65,3 +65,7 @@ Thumbs.db
 coverage/
 *.log
 .vitest/
+
+# Scratch report from scripts/mutate-jwks-brake.mjs. The script deletes it, but an
+# interrupted run leaves it behind and it is nobody's business but that run's.
+.mutation.json

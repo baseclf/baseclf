@@ -51,7 +51,26 @@ export interface AuthEvent {
   readonly reason: 'no_matching_key';
 }
 
-export type LogEvent = QueryEvent | PolicyRefusalEvent | ErrorEvent | AuthEvent;
+/**
+ * A refresh that was asked for and refused.
+ *
+ * A separate event rather than another `reason` on the one above, because those
+ * two are opposites: one records an outbound fetch happening, the other records
+ * one being prevented. Counting them under a single name would make the only
+ * signal that says whether this Worker is calling itself in a loop ambiguous at
+ * exactly the moment somebody needs to read it.
+ */
+export interface AuthRefreshDeclinedEvent {
+  readonly event: 'jwks_refresh_declined';
+  readonly reason: 'cooldown';
+}
+
+export type LogEvent =
+  | QueryEvent
+  | PolicyRefusalEvent
+  | ErrorEvent
+  | AuthEvent
+  | AuthRefreshDeclinedEvent;
 
 export function logEvent(event: LogEvent): void {
   console.log(JSON.stringify(event));

@@ -605,3 +605,150 @@ describe('when the issuer rotates its signing key', () => {
     expect(refused.detail).not.toContain('after refreshing');
   });
 });
+
+/**
+ * The brake on the retry, tested by trying to abuse it.
+ *
+ * The section above proves the retry heals a rotation. This one proves it cannot
+ * be used as a lever. `kid` is a header field, the attacker writes the token, and
+ * this deployment's JWKS URL points back at this same Worker, so an unthrottled
+ * retry is one outbound request per inbound one against a subrequest budget of
+ * 50. No data leaks either way, which is what makes it easy to leave in: the
+ * symptom is a bill and an outage, not a breach.
+ */
+describe('when tokens carry key ids nobody published', () => {
+  let restoreFetch = (): void => {};
+
+  beforeAll(() => {
+    // The same delegating interceptor as the rotation section. Repeated rather
+    // than shared because the two sections are about different things and a
+    // helper spanning both would make each one harder to read on its own.
+    const outer = globalThis.fetch;
+    const delegate = outer.bind(globalThis);
+
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+
+      const served = servedKeySets.get(url);
+      if (served === undefined) return delegate(input, init);
+
+      timesFetched.set(url, (timesFetched.get(url) ?? 0) + 1);
+      return new Response(JSON.stringify(served), {
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as typeof fetch;
+
+    restoreFetch = () => {
+      globalThis.fetch = outer;
+    };
+  });
+
+  afterAll(() => {
+    restoreFetch();
+  });
+
+  /** A token signed by a key the issuer never published, with a `kid` of its own. */
+  async function impostorToken(config: VerifierConfig, kid: string): Promise<string> {
+    return tokenFrom(await rotationKey(kid), config, 'u_impostor');
+  }
+
+  it('reloads the key set once for the whole run, not once per token', async () => {
+    const config = scenario('braked-sequential');
+    const issuerKey = await rotationKey('key-2026-07');
+
+    nowServes(config, issuerKey);
+    await verifyToken(await tokenFrom(issuerKey, config, 'u_before'), config);
+    expect(fetchesOf(config)).toBe(1);
+
+    for (let n = 0; n < 5; n += 1) {
+      await expectUnauthenticated(
+        verifyToken(await impostorToken(config, `nobody-published-${n}`), config),
+      );
+    }
+
+    // Two: the warm-up, plus the one reload the first impostor is allowed to
+    // trigger. Without the brake this reads six, and every extra one is this
+    // Worker fetching its own JWKS endpoint because somebody sent a string.
+    expect(fetchesOf(config)).toBe(2);
+  });
+
+  it('refuses the braked ones identically to the client and distinctly in the log', async () => {
+    const config = scenario('braked-reason');
+    const issuerKey = await rotationKey('key-2026-07');
+
+    nowServes(config, issuerKey);
+    await verifyToken(await tokenFrom(issuerKey, config, 'u_before'), config);
+
+    const paid = await expectUnauthenticated(
+      verifyToken(await impostorToken(config, 'unknown-a'), config),
+    );
+    const braked = await expectUnauthenticated(
+      verifyToken(await impostorToken(config, 'unknown-b'), config),
+    );
+
+    // The first one paid for a reload and says so; the second was stopped before
+    // it could. Both are 401 with the same code and the same client-visible
+    // message, invariant I5, so the response bodies have to be identical. The
+    // difference lives only in `detail`, which never reaches a client, and
+    // checking it is what makes this test able to tell the brake apart from no
+    // brake at all.
+    expect(paid.detail).toContain('after refreshing the key set');
+    expect(braked.detail).toContain('too recently');
+    expect(braked.detail).not.toContain('after refreshing');
+    expect(braked.toResponseBody()).toEqual(paid.toResponseBody());
+  });
+
+  it('reloads once for a burst that arrives all at once', async () => {
+    const config = scenario('braked-concurrent');
+    const issuerKey = await rotationKey('key-2026-07');
+
+    nowServes(config, issuerKey);
+    await verifyToken(await tokenFrom(issuerKey, config, 'u_before'), config);
+    expect(fetchesOf(config)).toBe(1);
+
+    const tokens = await Promise.all(
+      [0, 1, 2, 3, 4].map((n) => impostorToken(config, `concurrent-${n}`)),
+    );
+    const outcomes = await Promise.allSettled(tokens.map((token) => verifyToken(token, config)));
+
+    for (const outcome of outcomes) {
+      expect(outcome.status).toBe('rejected');
+      const error = (outcome as PromiseRejectedResult).reason;
+      expect(error).toBeInstanceOf(BaseclfError);
+      expect((error as BaseclfError).status).toBe(401);
+    }
+
+    // Arriving one after another is the easy case, because by the second token
+    // the marker is already written. This is the case that says whether the
+    // marker is written before the fetch or after it: written afterwards, every
+    // request in the burst looks at an empty cache at the same moment and they
+    // all go out together.
+    expect(fetchesOf(config)).toBe(2);
+  });
+
+  it('brakes one issuer without braking a rotation at another', async () => {
+    const flooded = scenario('braked-isolation-flooded');
+    const rotating = scenario('braked-isolation-rotating');
+
+    const floodedKey = await rotationKey('key-2026-07');
+    nowServes(flooded, floodedKey);
+    await verifyToken(await tokenFrom(floodedKey, flooded, 'u_before'), flooded);
+    await expectUnauthenticated(verifyToken(await impostorToken(flooded, 'unknown'), flooded));
+    expect(fetchesOf(flooded)).toBe(2);
+
+    // A second deployment, rotating honestly, at the same moment the first is
+    // being flooded. A brake kept in one shared place instead of one per URL
+    // would spend this deployment's allowance on somebody else's attacker, and
+    // the symptom would be every request 401ing on the day a key rotates.
+    const retired = await rotationKey('key-2026-07');
+    const current = await rotationKey('key-2026-08');
+
+    nowServes(rotating, retired);
+    await verifyToken(await tokenFrom(retired, rotating, 'u_before'), rotating);
+    nowServes(rotating, current);
+
+    const claims = await verifyToken(await tokenFrom(current, rotating, 'u_after'), rotating);
+    expect(claims.sub).toBe('u_after');
+    expect(fetchesOf(rotating)).toBe(2);
+  });
+});

@@ -25,6 +25,14 @@
  * against a cached key set. `jose` reports that as ERR_JWKS_NO_MATCHING_KEY,
  * which is the signal to drop the cache once and try again.
  *
+ * That retry is rate limited, and the reason is not politeness. A token names
+ * its own `kid`, the attacker writes the token, and this deployment's JWKS URL
+ * points back at this same Worker. So an unthrottled retry turns a stream of
+ * junk tokens into a stream of the Worker calling itself, one outbound request
+ * per inbound one, against a subrequest budget of 50 and a bill that grows with
+ * it. Nothing leaks, which is why this is a brake rather than a lock: the retry
+ * still happens, just not once per forged token.
+ *
  * Rule 00 invariant I9: nothing here logs a token, a claim value, or a key.
  */
 
@@ -46,6 +54,23 @@ export const ACCEPTED_ALGORITHM = 'ES256';
  * not actually wait for this, because a miss triggers an immediate refresh.
  */
 export const JWKS_CACHE_SECONDS = 300;
+
+/**
+ * How long after one refresh the next one is refused.
+ *
+ * This bounds the amplification described at the top of the file: a flood of
+ * tokens carrying unknown key ids costs at most one outbound request per window
+ * per colo, instead of one per token.
+ *
+ * What it costs is narrower than it first looks. A rotation still heals on the
+ * very first token signed with the new key, because that token's refresh is the
+ * one the window opens with. The wait only applies when a refresh has already
+ * happened and did not help, which means either the token is forged or the
+ * issuer had not finished publishing the new key yet. Thirty seconds is chosen
+ * against the second case: long enough to be a real brake, short enough that a
+ * rotation caught mid-publication resolves itself without anybody looking.
+ */
+export const JWKS_REFRESH_COOLDOWN_SECONDS = 30;
 
 /** Tokens more than this far in the future are rejected outright. */
 const CLOCK_TOLERANCE_SECONDS = 5;
@@ -96,6 +121,125 @@ function unauthorized(detail: string, cause?: unknown): BaseclfError {
 /** The cache key. A URL, because the Cache API is keyed by request. */
 function cacheKeyFor(jwksUrl: string): Request {
   return new Request(jwksUrl, { method: 'GET' });
+}
+
+/**
+ * Where the cooldown marker lives.
+ *
+ * A namespace of its own rather than a derived key in the one above. Deriving a
+ * key would mean inventing a URL that is not the JWKS URL, and any scheme for
+ * that (a query string, an extra path segment) is a scheme some real issuer's
+ * URL could collide with. Two namespaces holding the same key cannot collide at
+ * all, and there is nothing to reason about.
+ */
+const REFRESH_COOLDOWN_CACHE = 'baseclf:jwks-refresh-cooldown';
+
+/**
+ * Take the right to refresh, or find that it was just taken.
+ *
+ * Returns true at most once per window per colo. The marker is written *before*
+ * the caller goes on to fetch rather than after it, so that the window a burst
+ * could fit through is one cache write wide instead of one whole round trip to
+ * the issuer.
+ *
+ * That ordering is a design choice held to by reading, not by a test. The case it
+ * protects is a burst spread across isolates, and a single-isolate test cannot
+ * produce one: locally the in-flight map below already collapses the burst before
+ * the ordering matters. Do not read the tests as evidence for this line.
+ *
+ * The marker is written even though the caller's fetch may then fail, and that is
+ * deliberate. An issuer that is timing out or answering 500 is the last thing
+ * that should be retried once per inbound request.
+ *
+ * Keyed per JWKS URL, so a flood against one deployment cannot brake a genuine
+ * rotation at another.
+ */
+async function claimRefresh(jwksUrl: string): Promise<boolean> {
+  const cache = await caches.open(REFRESH_COOLDOWN_CACHE);
+  const key = cacheKeyFor(jwksUrl);
+
+  if (await cache.match(key)) return false;
+
+  await cache.put(
+    key,
+    // The cache-control header is what makes this a cooldown at all: the window
+    // is the entry's own freshness lifetime. Omit it and `put` stores nothing,
+    // silently, so the brake would never engage while every test that only
+    // checks the happy path kept passing. Measured in workerd, rules/02 §F.
+    new Response('1', {
+      headers: { 'cache-control': `max-age=${JWKS_REFRESH_COOLDOWN_SECONDS}` },
+    }),
+  );
+
+  return true;
+}
+
+/**
+ * Reloads in flight in this isolate, keyed by JWKS URL.
+ *
+ * A second brake, because the first one does not cover a burst. `claimRefresh`
+ * has to read the cache before it can write to it, and both are awaits, so five
+ * requests arriving in the same tick all read an empty cache before any of them
+ * has written anything. Measured: five forged tokens sent together produced five
+ * refreshes with the marker alone.
+ *
+ * The two are not redundant, they cover different axes. The marker bounds
+ * refreshes *over time* and across isolates in a colo; this bounds them *at one
+ * moment* inside one isolate. Removing this one entirely is caught by the
+ * concurrent test below.
+ *
+ * They do overlap, though, and the overlap was measured rather than guessed:
+ * once anything at all staggers the requests in a burst, the marker alone holds
+ * the count down, and the tests cannot then tell this brake apart from a subtly
+ * weakened version of it. See the known survivor recorded in
+ * `scripts/mutate-jwks-brake.mjs`.
+ *
+ * Module scope is the right lifetime here, unlike the rate limiter, which was
+ * deliberately kept out of it (`src/utils/ratelimit.ts`). That one counts, and a
+ * per-isolate counter silently multiplies the limit by the number of isolates.
+ * This one collapses duplicate work rather than counting it: being per-isolate
+ * makes it weaker, never wrong.
+ */
+const refreshesInFlight = new Map<string, Promise<JSONWebKeySet | null>>();
+
+/**
+ * Reload the key set, or refuse to.
+ *
+ * Null means a brake stopped it, which the caller must treat as a refusal rather
+ * than as an absence of information. Never returns a stale set dressed up as a
+ * fresh one.
+ */
+function refreshKeySet(jwksUrl: string): Promise<JSONWebKeySet | null> {
+  const joined = refreshesInFlight.get(jwksUrl);
+  if (joined !== undefined) return joined;
+
+  const started = (async () => {
+    try {
+      if (!(await claimRefresh(jwksUrl))) return null;
+
+      // Logged here rather than at the call site so that one line means one
+      // outbound request. Logged at the call site, everyone who joined an
+      // in-flight refresh would log one too, and the only signal that says
+      // whether this Worker is fetching itself in a loop would overcount.
+      logEvent({ event: 'jwks_refresh', reason: 'no_matching_key' });
+      return await loadJwks(jwksUrl, true);
+    } finally {
+      refreshesInFlight.delete(jwksUrl);
+    }
+  })();
+
+  // Registered with no await between the lookup above and this line, so no other
+  // caller can observe the map in between. That is why this function is not
+  // `async`: an await opened here would be a gap for a burst to fit through.
+  //
+  // Held to deliberately rather than because a test enforces it. Opening that gap
+  // was tried as a mutation and the suite stayed green, because the cooldown
+  // marker catches the same burst on its own. So this is the cheaper of two
+  // brakes doing a job the other would also do, kept because it costs a Map and
+  // one comparison, not because it is load-bearing on its own.
+  refreshesInFlight.set(jwksUrl, started);
+
+  return started;
 }
 
 async function fetchJwks(jwksUrl: string): Promise<JSONWebKeySet> {
@@ -203,8 +347,18 @@ export async function verifyToken(token: string, config: VerifierConfig): Promis
       throw unauthorized(`Token rejected: ${code ?? 'signature or claim check failed'}.`, error);
     }
 
-    logEvent({ event: 'jwks_refresh', reason: 'no_matching_key' });
-    jwks = await loadJwks(config.jwksUrl, true);
+    // Fail-closed: a brake that declines to refresh answers 401. It never waves a
+    // token through on the grounds that it could not check the token properly.
+    const refreshed = await refreshKeySet(config.jwksUrl);
+    if (refreshed === null) {
+      logEvent({ event: 'jwks_refresh_declined', reason: 'cooldown' });
+      throw unauthorized(
+        'Token rejected: no matching key, and the key set was refreshed too recently to refresh it again.',
+        error,
+      );
+    }
+
+    jwks = refreshed;
 
     try {
       return await verifyAgainst(token, jwks, config);
