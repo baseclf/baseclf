@@ -44,6 +44,39 @@ import {
   type ProviderStatus,
 } from './providers.js';
 
+/**
+ * What the CORS layer decided about this very request, handed in rather than
+ * worked out again here.
+ *
+ * This endpoint used to form its own opinion about whether the caller's origin
+ * was allowed, by comparing it against the configured list as raw strings. The
+ * request path normalises both sides through `URL.origin`. So the two disagreed,
+ * and a configured value written with a trailing slash was allowed by CORS while
+ * being reported here as missing from the list. A diagnostic that is wrong about
+ * the one thing it exists to diagnose is worse than no diagnostic, because it
+ * sends somebody to change a setting that was already correct.
+ *
+ * The fix is structural rather than a matching rule copied more carefully: there
+ * is one implementation of the decision, in `src/index.ts`, and this reports what
+ * it returned. A second implementation would drift again, and the one that drifts
+ * is the one nobody is testing.
+ */
+export interface CorsFacts {
+  /**
+   * The origin the CORS layer would echo back to this caller, or null.
+   *
+   * Null covers three different situations that the caller does not need told
+   * apart: no Origin header, an Origin that is not a URL, and an Origin that is
+   * not on the list.
+   */
+  readonly allowedOriginForCaller: string | null;
+  /** `Access-Control-Allow-Headers`, split. A browser rejects anything absent. */
+  readonly allowedRequestHeaders: readonly string[];
+  /** `Access-Control-Expose-Headers`, split. Anything absent is invisible to JS. */
+  readonly exposedResponseHeaders: readonly string[];
+  readonly preflightMaxAgeSeconds: number;
+}
+
 export interface DiagnoseInput {
   /** `request.url`. Only its origin is ever used or reported. */
   readonly requestUrl: string;
@@ -56,6 +89,7 @@ export interface DiagnoseInput {
   readonly providers: readonly ProviderStatus[];
   /** Whether `BETTER_AUTH_SECRET` is set. Never anything about its value. */
   readonly secretConfigured: boolean;
+  readonly cors: CorsFacts;
 }
 
 export interface ProviderReport {
@@ -64,6 +98,23 @@ export interface ProviderReport {
   readonly missing: readonly string[];
   /** Paste this into the provider's console, exactly as it appears. */
   readonly redirect_uri: string;
+}
+
+/**
+ * What CORS would do, in the response body, so it can be read rather than
+ * deduced from a browser console.
+ *
+ * Reported even when nothing is wrong. A refused preflight surfaces to the
+ * developer as an opaque console message with no server-side trace, so the useful
+ * thing is not a warning after the fact but the list itself: somebody sending a
+ * custom header sees immediately that it is not on it.
+ */
+export interface CorsReport {
+  /** The origin this caller would be granted, or null for none. */
+  readonly allowed_origin_for_caller: string | null;
+  readonly allowed_request_headers: readonly string[];
+  readonly exposed_response_headers: readonly string[];
+  readonly preflight_max_age_seconds: number;
 }
 
 export interface DiagnoseReport {
@@ -84,6 +135,7 @@ export interface DiagnoseReport {
   readonly base_url_actual: string;
   readonly base_url_matches: boolean;
   readonly trusted_origins: readonly string[];
+  readonly cors: CorsReport;
   readonly providers: { readonly [K in ProviderId]?: ProviderReport };
   /** Each one names what to do about it. */
   readonly warnings: readonly string[];
@@ -281,6 +333,7 @@ function checkTrustedOrigins(
   trustedOrigins: readonly string[],
   requestOrigin: string | null,
   servingOrigin: string | null,
+  cors: CorsFacts,
   warnings: string[],
 ): void {
   if (trustedOrigins.length === 0) {
@@ -293,13 +346,69 @@ function checkTrustedOrigins(
 
   const caller = requestOrigin === null ? null : originOf(requestOrigin);
   if (caller === null || caller === servingOrigin) return;
-  if (trustedOrigins.includes(caller)) return;
+
+  // The decision the request path made, not a comparison repeated here. See the
+  // note on `CorsFacts`: repeating it is what made this endpoint disagree with
+  // the layer it was reporting on.
+  if (cors.allowedOriginForCaller !== null) return;
 
   warnings.push(
-    `This request came from ${caller}, which is not listed in BETTER_AUTH_TRUSTED_ORIGINS. ` +
+    `This request came from ${caller}, which is not allowed by BETTER_AUTH_TRUSTED_ORIGINS. ` +
       'Calls to the auth endpoints from that origin fail the CORS preflight. Add it to ' +
       'BETTER_AUTH_TRUSTED_ORIGINS and redeploy.',
   );
+}
+
+/**
+ * Warn about entries in the allowlist that can never match anything.
+ *
+ * The request path compares origins, so an entry that is not a URL, or one
+ * carrying a path, matches nothing at all. Nothing anywhere says so: the operator
+ * listed their frontend, the list is not empty, and every call from it still
+ * fails a preflight. That is the quietest possible way to be wrong, and it is
+ * separate from the caller check above because it is worth saying even when the
+ * caller happens to be someone else.
+ *
+ * A trailing slash is deliberately not warned about. `URL.origin` drops it on
+ * both sides, so it matches, and warning about a value that works would send
+ * somebody to fix the wrong thing.
+ */
+function checkTrustedOriginsAreOrigins(
+  trustedOrigins: readonly string[],
+  warnings: string[],
+): void {
+  const unusable = trustedOrigins.filter((entry) => {
+    const asOrigin = originOf(entry);
+    if (asOrigin === null) return true;
+    return entry.trim().replace(/\/+$/, '') !== asOrigin;
+  });
+
+  if (unusable.length === 0) return;
+
+  warnings.push(
+    `BETTER_AUTH_TRUSTED_ORIGINS lists ${list(unusable)}, which ${
+      unusable.length === 1 ? 'is not an origin' : 'are not origins'
+    } and so ${unusable.length === 1 ? 'matches' : 'match'} nothing. An entry has to be ` +
+      'exactly a scheme and a host, for example https://app.example.com, with no path and ' +
+      'no trailing segments. Calls from it fail the CORS preflight with nothing logged here.',
+  );
+}
+
+/**
+ * Report what CORS would do for this caller.
+ *
+ * No warning of its own. The caller check above already covers a refused origin,
+ * and a second sentence about the same fact reads as two problems. What this adds
+ * is the header lists, because a header missing from them fails a preflight in the
+ * browser and leaves no trace on the server at all.
+ */
+function corsReport(cors: CorsFacts): CorsReport {
+  return Object.freeze({
+    allowed_origin_for_caller: cors.allowedOriginForCaller,
+    allowed_request_headers: cors.allowedRequestHeaders,
+    exposed_response_headers: cors.exposedResponseHeaders,
+    preflight_max_age_seconds: cors.preflightMaxAgeSeconds,
+  });
 }
 
 /**
@@ -320,7 +429,8 @@ export function diagnose(input: DiagnoseInput): DiagnoseReport {
   checkBaseUrlIsBareOrigin(input.baseUrlConfig, warnings);
   checkBaseUrlScheme(input.baseUrlConfig, warnings);
   checkProviders(input.providers, warnings);
-  checkTrustedOrigins(input.trustedOrigins, input.requestOrigin, actual, warnings);
+  checkTrustedOrigins(input.trustedOrigins, input.requestOrigin, actual, input.cors, warnings);
+  checkTrustedOriginsAreOrigins(input.trustedOrigins, warnings);
 
   const providers: { -readonly [K in ProviderId]?: ProviderReport } = {};
   for (const status of input.providers) {
@@ -339,6 +449,7 @@ export function diagnose(input: DiagnoseInput): DiagnoseReport {
     base_url_actual: actual ?? '',
     base_url_matches: matches,
     trusted_origins: input.trustedOrigins,
+    cors: corsReport(input.cors),
     providers: Object.freeze(providers),
     warnings: Object.freeze(warnings),
   });

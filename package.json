@@ -21,6 +21,9 @@
     "check:design": "node scripts/check-design-tokens.mjs",
     "check": "npm run typecheck && npm run lint && npm run test && npm run check:design",
     "measure:bundle": "node scripts/measure-bundle.mjs",
+    "mutate:jwks-brake": "node scripts/mutate-jwks-brake.mjs",
+    "mutate:diagnose-cors": "node scripts/mutate-diagnose-cors.mjs",
+    "mutate": "npm run mutate:jwks-brake && npm run mutate:diagnose-cors",
     "demo:v1": "node scripts/demo-v1.mjs",
     "demo:v2": "node scripts/demo-v2.mjs"
   },

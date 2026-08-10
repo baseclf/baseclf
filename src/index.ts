@@ -92,6 +92,18 @@ const EXPOSED_RESPONSE_HEADERS = 'x-d1-bookmark, x-baseclf-rows-read, retry-afte
 const ALLOWED_METHODS = 'GET, HEAD, POST, PATCH, DELETE, OPTIONS';
 
 /**
+ * The header constants above as a list, for the diagnostic to report.
+ *
+ * They are declared as the header strings they become, because that is what goes
+ * on the wire and a list joined at the last moment invites a mismatch between
+ * what is sent and what is described. Splitting for the report keeps one source
+ * and lets `_diagnose` print something a reader can scan.
+ */
+function splitHeaderList(value: string): readonly string[] {
+  return value.split(',').map((entry) => entry.trim());
+}
+
+/**
  * How long a browser may reuse a preflight result.
  *
  * Ten minutes rather than the hours browsers permit. Removing an origin from
@@ -317,6 +329,15 @@ function describeDeployment(request: Request, env: Env): Response {
       trustedOrigins: config.trustedOrigins,
       providers: providerStatuses(env, config.baseURL),
       secretConfigured: config.secretConfigured,
+      cors: {
+        // Decided by the very function `fetch` uses, on this very request, rather
+        // than described to the diagnostic in words. Anything else is a second
+        // implementation of an allowlist, and the copy is the one that drifts.
+        allowedOriginForCaller: allowedOrigin(request, config.trustedOrigins),
+        allowedRequestHeaders: splitHeaderList(ALLOWED_REQUEST_HEADERS),
+        exposedResponseHeaders: splitHeaderList(EXPOSED_RESPONSE_HEADERS),
+        preflightMaxAgeSeconds: PREFLIGHT_MAX_AGE_SECONDS,
+      },
     }),
   );
 }

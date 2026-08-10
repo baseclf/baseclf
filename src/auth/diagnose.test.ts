@@ -12,7 +12,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { type DiagnoseInput, type DiagnoseReport, diagnose } from './diagnose.js';
+import { type CorsFacts, type DiagnoseInput, type DiagnoseReport, diagnose } from './diagnose.js';
 import { type ProviderEnv, providerStatuses } from './providers.js';
 
 const CONFIGURED_URL = 'https://baseclf-abc123.example.workers.dev';
@@ -29,6 +29,21 @@ const CREDENTIALS: ProviderEnv = {
   GITHUB_CLIENT_SECRET: `github-secret-${CANARY}`,
 };
 
+/**
+ * What the CORS layer would have decided, as this pure function receives it.
+ *
+ * Handed in rather than worked out, which is the point of `CorsFacts`: the only
+ * implementation of the decision lives in `src/index.ts`. That the two agree is
+ * not something this file can prove, so it is proved where both are real, in
+ * `src/cors.test.ts`.
+ */
+const NO_ORIGIN_ALLOWED: CorsFacts = {
+  allowedOriginForCaller: null,
+  allowedRequestHeaders: ['authorization', 'content-type'],
+  exposedResponseHeaders: ['x-d1-bookmark'],
+  preflightMaxAgeSeconds: 600,
+};
+
 function report(overrides: Partial<DiagnoseInput> = {}): DiagnoseReport {
   const baseUrlConfig = overrides.baseUrlConfig ?? CONFIGURED_URL;
 
@@ -38,6 +53,7 @@ function report(overrides: Partial<DiagnoseInput> = {}): DiagnoseReport {
     trustedOrigins: ['https://app.example.com'],
     providers: providerStatuses(CREDENTIALS, baseUrlConfig),
     secretConfigured: true,
+    cors: NO_ORIGIN_ALLOWED,
     ...overrides,
     baseUrlConfig,
   });
@@ -217,6 +233,7 @@ describe('the redirect URI an operator has to paste', () => {
         CONFIGURED_URL,
       ),
       secretConfigured: true,
+      cors: NO_ORIGIN_ALLOWED,
     });
 
     expect(result.providers.google?.redirect_uri).toBe(
@@ -278,9 +295,39 @@ describe('cross-origin callers', () => {
     expect(warning).toContain('BETTER_AUTH_TRUSTED_ORIGINS');
   });
 
-  it('are left alone when they are on the list', () => {
-    const result = report({ requestOrigin: 'https://app.example.com' });
+  it('are left alone when the CORS layer allowed them', () => {
+    // The allowed origin is stated rather than inferred from `trustedOrigins`,
+    // and that is the contract now: this function reports the decision the
+    // request path made instead of forming its own. Inferring it here is exactly
+    // the duplication that made the two disagree over a trailing slash.
+    const result = report({
+      requestOrigin: 'https://app.example.com',
+      cors: { ...NO_ORIGIN_ALLOWED, allowedOriginForCaller: 'https://app.example.com' },
+    });
+
     expect(result.warnings).toEqual([]);
+    expect(result.cors.allowed_origin_for_caller).toBe('https://app.example.com');
+  });
+
+  it('are warned about when the list holds them in a form that matches nothing', () => {
+    // A path, not an origin. `URL.origin` on the request path reduces the caller
+    // to a scheme and a host, so this entry can never equal one. The operator
+    // listed their frontend, the list is not empty, and every call from it still
+    // fails a preflight with nothing said anywhere.
+    const result = report({ trustedOrigins: ['https://app.example.com/callback'] });
+
+    const warning = result.warnings.find((entry) => entry.includes('matches nothing'));
+    expect(warning).toBeDefined();
+    expect(warning).toContain('https://app.example.com/callback');
+  });
+
+  it('says nothing about a trailing slash, because a trailing slash works', () => {
+    // The opposite failure, and the one worth guarding: warning about a value
+    // that is fine sends somebody to change a setting that was already correct.
+    // `URL.origin` drops the slash on both sides, so this entry does match.
+    const result = report({ trustedOrigins: ['https://app.example.com/'] });
+
+    expect(result.warnings.filter((entry) => entry.includes('matches nothing'))).toEqual([]);
   });
 
   it('are left alone when the caller is the deployment itself', () => {

@@ -215,3 +215,110 @@ describe('the preflight and the rate limiter', () => {
     expect(real.status).not.toBe(429);
   });
 });
+
+/**
+ * The diagnostic and the layer it reports on, checked against each other.
+ *
+ * `_diagnose` exists so that a CORS problem is something an operator reads
+ * instead of deduces from a browser console. That only holds while it agrees with
+ * the code doing the work, and it did not: it used to compare the caller's origin
+ * against the configured list as raw strings, while the request path normalises
+ * both sides through `URL.origin`. A value written with a trailing slash was
+ * therefore allowed by CORS and reported here as missing from the list.
+ *
+ * These tests are the reason the duplication is gone. Both sides are real in this
+ * file, so agreement can be asserted rather than argued.
+ */
+describe('what _diagnose says about CORS, against what CORS does', () => {
+  async function diagnoseBody(origin: string | null, on: Env = configured) {
+    const response = await call('/api/auth/_diagnose', { origin }, on);
+    return (await response.json()) as {
+      readonly cors: {
+        readonly allowed_origin_for_caller: string | null;
+        readonly allowed_request_headers: readonly string[];
+        readonly exposed_response_headers: readonly string[];
+        readonly preflight_max_age_seconds: number;
+      };
+      readonly warnings: readonly string[];
+    };
+  }
+
+  it('reports the same allowed origin the request path returns', async () => {
+    const real = await call('/rest/v1/posts', { origin: TRUSTED });
+    const reported = await diagnoseBody(TRUSTED);
+
+    expect(reported.cors.allowed_origin_for_caller).toBe(
+      real.headers.get('access-control-allow-origin'),
+    );
+  });
+
+  it('reports the same refusal the request path returns', async () => {
+    const real = await call('/rest/v1/posts', { origin: UNTRUSTED });
+    const reported = await diagnoseBody(UNTRUSTED);
+
+    expect(real.headers.get('access-control-allow-origin')).toBeNull();
+    expect(reported.cors.allowed_origin_for_caller).toBeNull();
+  });
+
+  it('agrees with CORS about a configured origin written with a trailing slash', async () => {
+    // The disagreement that motivated all of this. The request path matches this
+    // entry, so the diagnostic has to say so too. Reporting it as unlisted sends
+    // somebody to correct a setting that was already working, which is worse than
+    // saying nothing at all.
+    const withSlash = envWith(`${TRUSTED}/`);
+
+    const real = await call('/rest/v1/posts', { origin: TRUSTED }, withSlash);
+    const reported = await diagnoseBody(TRUSTED, withSlash);
+
+    expect(real.headers.get('access-control-allow-origin')).toBe(TRUSTED);
+    expect(reported.cors.allowed_origin_for_caller).toBe(TRUSTED);
+    expect(reported.warnings.filter((entry) => entry.includes(TRUSTED))).toEqual([]);
+  });
+
+  it('reports the header lists the preflight actually sends', async () => {
+    // The half that is reporting rather than warning, and the reason it is worth
+    // having: a header missing from this list fails a preflight in the browser
+    // and leaves nothing at all on the server. Reading the list is the only way
+    // to find out, so the list has to be the real one.
+    const flight = await preflight('/rest/v1/posts', TRUSTED);
+    const reported = await diagnoseBody(TRUSTED);
+
+    const sent = (flight.headers.get('access-control-allow-headers') ?? '')
+      .split(',')
+      .map((entry) => entry.trim());
+    const exposed = (flight.headers.get('access-control-expose-headers') ?? '')
+      .split(',')
+      .map((entry) => entry.trim());
+
+    expect(reported.cors.allowed_request_headers).toEqual(sent);
+    expect(reported.cors.exposed_response_headers).toEqual(exposed);
+    expect(reported.cors.preflight_max_age_seconds).toBe(
+      Number(flight.headers.get('access-control-max-age')),
+    );
+  });
+
+  it('still says nothing that could disclose a credential', async () => {
+    // The invariant the whole endpoint is built around, re-checked because this
+    // change added fields to a public body.
+    //
+    // Checked by canary rather than by keyword. The first attempt at this test
+    // searched for the word "secret" and failed on `secret_configured`, which is
+    // a field name reporting a boolean. Field names are supposed to be in here;
+    // values are not, and only a marker that cannot occur by coincidence tells
+    // the two apart.
+    const canary = 'canary-9f1c74-must-not-be-reported';
+    const withCredentials: Env = {
+      ...configured,
+      GOOGLE_CLIENT_ID: `google-id-${canary}`,
+      GOOGLE_CLIENT_SECRET: `google-secret-${canary}`,
+      BETTER_AUTH_SECRET: `auth-secret-${canary}`,
+    };
+
+    const serialised = JSON.stringify(await diagnoseBody(UNTRUSTED, withCredentials));
+
+    expect(serialised).not.toContain(canary);
+    // And the report is not empty of meaning, so the assertion above is not
+    // passing because nothing was reported at all.
+    expect(serialised).toContain('allowed_request_headers');
+  });
+});
