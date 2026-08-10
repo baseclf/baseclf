@@ -55,6 +55,7 @@
   --space-16: 4rem;
   --space-24: 6rem;
 
+  --radius: 3px;   /* the base. radius-sm equals it. */
   --radius-none: 0;
   --radius-xs: 2px;
   --radius-sm: 3px;

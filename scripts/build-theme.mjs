@@ -96,6 +96,7 @@ function emitScale() {
     out.push(`  --space-${k}: ${v};`);
   }
   out.push('');
+  out.push(`  --radius: ${t.radius.$base};   /* the base. radius-sm equals it. */`);
   for (const [k, v] of Object.entries(t.radius)) {
     if (isMeta(k)) continue;
     out.push(`  --radius-${k}: ${v};`);
