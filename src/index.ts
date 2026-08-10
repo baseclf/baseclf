@@ -38,6 +38,147 @@ export interface Env extends AuthEnv {
   readonly DB: D1Database;
 }
 
+/**
+ * Cross-origin access, which the whole design depends on and which nothing
+ * grants by default.
+ *
+ * Sessions travel as bearer tokens rather than cookies, because a cookie from
+ * another origin is a third-party cookie and Safari already blocks those. That
+ * decision moves the problem to CORS, and CORS refuses everything unless the
+ * server says otherwise. Without what follows, a frontend on any other origin
+ * cannot reach this deployment at all, which was measured against a real
+ * deployment rather than reasoned about.
+ *
+ * Five decisions, each of them load-bearing:
+ *
+ * 1. NEVER `*`. The allowed origin is echoed back only when it appears in
+ *    BETTER_AUTH_TRUSTED_ORIGINS. A wildcard would make that setting
+ *    decorative, and this API answers with rows belonging to whoever holds the
+ *    token.
+ *
+ * 2. `Vary: Origin` on everything, including refusals. A cache that keys on the
+ *    URL alone will hand one origin's response to another, and at that point
+ *    the allowlist has decided nothing. It goes on responses without an allowed
+ *    origin too, because those are exactly the ones that must not be reused.
+ *
+ * 3. Every response carries the headers, errors included. A 401 or a 429
+ *    without them reaches the browser as a CORS failure, so the developer sees
+ *    an opaque console message instead of the status that would have told them
+ *    what to fix.
+ *
+ * 4. No `Access-Control-Allow-Credentials`. Cookies are not the transport here,
+ *    and enabling it would invite the browser to send the ambient credentials
+ *    this design deliberately avoids.
+ *
+ * 5. Preflight is answered before the rate limiter rather than after. A
+ *    preflight carries no credentials, reads no body and touches no database,
+ *    so there is nothing in it to guess at, and it is not a way around the
+ *    limiter because the real request still has to follow. Against that, a 429
+ *    on a preflight surfaces to the caller as an unexplained CORS error rather
+ *    than as rate limiting, which is the worst of both.
+ */
+
+/** What a browser may send. Anything absent here fails its preflight. */
+const ALLOWED_REQUEST_HEADERS = 'authorization, content-type, prefer, x-d1-bookmark';
+
+/**
+ * What a browser may read back.
+ *
+ * Without this the bookmark is invisible to a cross-origin client, and read
+ * after write stops working for exactly the callers that need it most.
+ */
+const EXPOSED_RESPONSE_HEADERS = 'x-d1-bookmark, x-baseclf-rows-read, retry-after';
+
+const ALLOWED_METHODS = 'GET, HEAD, POST, PATCH, DELETE, OPTIONS';
+
+/**
+ * How long a browser may reuse a preflight result.
+ *
+ * Ten minutes rather than the hours browsers permit. Removing an origin from
+ * the allowlist should stop working promptly, and the round trip this saves is
+ * one per origin per ten minutes.
+ */
+const PREFLIGHT_MAX_AGE_SECONDS = 600;
+
+/** An origin, or null for anything that is not one. */
+function normalizeOrigin(value: string): string | null {
+  try {
+    const { origin } = new URL(value.trim());
+    // A non-http scheme parses and yields the string "null". Not an origin.
+    return origin === 'null' ? null : origin;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The origin this response may be read by, or null.
+ *
+ * Both sides go through `URL.origin`, so a configured value written with a
+ * trailing slash or a different host case still matches, and one that is not a
+ * URL matches nothing. Comparing raw strings would turn a typo into a silent
+ * outage for the frontend, which is a failure mode nobody debugs quickly.
+ */
+function allowedOrigin(request: Request, trusted: readonly string[]): string | null {
+  const sent = request.headers.get('origin');
+  if (sent === null) return null;
+
+  const origin = normalizeOrigin(sent);
+  if (origin === null) return null;
+
+  return trusted.some((entry) => normalizeOrigin(entry) === origin) ? origin : null;
+}
+
+function corsHeaders(origin: string | null): Record<string, string> {
+  // Decision 2. Present whether or not the origin was allowed.
+  const vary = { vary: 'Origin' };
+  if (origin === null) return vary;
+
+  return {
+    ...vary,
+    'access-control-allow-origin': origin,
+    'access-control-expose-headers': EXPOSED_RESPONSE_HEADERS,
+  };
+}
+
+/**
+ * Answer a preflight.
+ *
+ * A refused preflight still answers 204. The browser decides by the absence of
+ * the allow header, not by the status, and returning 403 would replace a clear
+ * console message with a misleading one while telling an attacker which origins
+ * are on the list.
+ */
+function preflightResponse(origin: string | null): Response {
+  return new Response(null, {
+    status: 204,
+    headers: {
+      ...corsHeaders(origin),
+      ...(origin === null
+        ? {}
+        : {
+            'access-control-allow-methods': ALLOWED_METHODS,
+            'access-control-allow-headers': ALLOWED_REQUEST_HEADERS,
+            'access-control-max-age': String(PREFLIGHT_MAX_AGE_SECONDS),
+          }),
+    },
+  });
+}
+
+/** Decision 3: the headers go on whatever came back, success or failure. */
+function withCors(response: Response, origin: string | null): Response {
+  const headers = new Headers(response.headers);
+  for (const [name, value] of Object.entries(corsHeaders(origin))) {
+    headers.set(name, value);
+  }
+
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
 /** Where the diagnostic lives. Checked before the identity provider sees a path. */
 const DIAGNOSE_PATH = '/api/auth/_diagnose';
 
@@ -339,75 +480,101 @@ async function handleWrite(
   return Response.json(result.rows, { status: operation === 'insert' ? 201 : 200, headers });
 }
 
-export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
-    const url = new URL(request.url);
+/**
+ * Everything the worker does, minus the cross-origin wrapper.
+ *
+ * Separated from `fetch` so that one place decides what a browser may read,
+ * and it sees every response including the ones thrown from deep inside. A
+ * refusal without CORS headers is a refusal the caller cannot read the reason
+ * for.
+ */
+async function respond(request: Request, env: Env): Promise<Response> {
+  const url = new URL(request.url);
 
-    try {
-      if (url.pathname === '/health') {
-        return Response.json({ status: 'ok', version: '0.0.0' });
-      }
-
-      if (url.pathname === '/_schema') {
-        return await describeSchema(env);
-      }
-
-      // The identity provider owns this prefix. It is checked before the table
-      // router rather than after, so a table can never shadow it, and it never
-      // reaches `tableFromPath` in the first place.
-      if (isAuthPath(url.pathname)) {
-        // Before the handler, and before anything that reads configuration.
-        // This path answers for a deployment too broken to answer anywhere
-        // else, which is the only time anybody looks at it.
-        if (url.pathname === DIAGNOSE_PATH) {
-          return describeDeployment(request, env);
-        }
-
-        // Better Auth ships a limiter of its own and it is not the one to
-        // rely on here: measured in workerd on 2026-08-11, it defaults to
-        // disabled because it keys off NODE_ENV, which Workers does not set,
-        // and its storage is a module-scope Map, so switching it on gives a
-        // limit multiplied by however many isolates a caller reached. This
-        // one counts in D1, which every isolate shares. See the auth skill,
-        // trap 5.
-        const limited = await enforceRateLimit(request, env, url.pathname);
-        if (limited !== null) return limited;
-
-        return await getAuth(env).handler(request);
-      }
-
-      const table = tableFromPath(url.pathname);
-      if (table !== null) {
-        if (request.method === 'GET' || request.method === 'HEAD') {
-          return await handleRead(request, env, table);
-        }
-
-        const operation = operationForMethod(request.method);
-        if (operation === null) {
-          return Response.json(
-            { error: 'Method not allowed.', code: 'UNSUPPORTED_QUERY' },
-            { status: 405, headers: { allow: 'GET, HEAD, POST, PATCH, DELETE' } },
-          );
-        }
-        return await handleWrite(request, env, table, operation);
-      }
-
-      return Response.json({ error: 'Not found.', code: 'NOT_FOUND' }, { status: 404 });
-    } catch (error) {
-      if (error instanceof BaseclfError) {
-        // The detail goes to the log, never to the response. It is where the
-        // useful diagnosis lives, and also where the table names live.
-        logError({ event: 'error', code: error.code, detail: error.detail ?? error.message });
-        return Response.json(error.toResponseBody(), { status: error.status });
-      }
-
-      logError({
-        event: 'error',
-        code: 'INTERNAL',
-        detail: error instanceof Error ? (error.stack ?? error.message) : String(error),
-      });
-      return Response.json({ error: 'Internal error.', code: 'INTERNAL' }, { status: 500 });
+  try {
+    if (url.pathname === '/health') {
+      return Response.json({ status: 'ok', version: '0.0.0' });
     }
+
+    if (url.pathname === '/_schema') {
+      return await describeSchema(env);
+    }
+
+    // The identity provider owns this prefix. It is checked before the table
+    // router rather than after, so a table can never shadow it, and it never
+    // reaches `tableFromPath` in the first place.
+    if (isAuthPath(url.pathname)) {
+      // Before the handler, and before anything that reads configuration.
+      // This path answers for a deployment too broken to answer anywhere
+      // else, which is the only time anybody looks at it.
+      if (url.pathname === DIAGNOSE_PATH) {
+        return describeDeployment(request, env);
+      }
+
+      // Better Auth ships a limiter of its own and it is not the one to
+      // rely on here: measured in workerd on 2026-08-11, it defaults to
+      // disabled because it keys off NODE_ENV, which Workers does not set,
+      // and its storage is a module-scope Map, so switching it on gives a
+      // limit multiplied by however many isolates a caller reached. This
+      // one counts in D1, which every isolate shares. See the auth skill,
+      // trap 5.
+      const limited = await enforceRateLimit(request, env, url.pathname);
+      if (limited !== null) return limited;
+
+      return await getAuth(env).handler(request);
+    }
+
+    const table = tableFromPath(url.pathname);
+    if (table !== null) {
+      if (request.method === 'GET' || request.method === 'HEAD') {
+        return await handleRead(request, env, table);
+      }
+
+      const operation = operationForMethod(request.method);
+      if (operation === null) {
+        return Response.json(
+          { error: 'Method not allowed.', code: 'UNSUPPORTED_QUERY' },
+          { status: 405, headers: { allow: 'GET, HEAD, POST, PATCH, DELETE' } },
+        );
+      }
+      return await handleWrite(request, env, table, operation);
+    }
+
+    return Response.json({ error: 'Not found.', code: 'NOT_FOUND' }, { status: 404 });
+  } catch (error) {
+    if (error instanceof BaseclfError) {
+      // The detail goes to the log, never to the response. It is where the
+      // useful diagnosis lives, and also where the table names live.
+      logError({ event: 'error', code: error.code, detail: error.detail ?? error.message });
+      return Response.json(error.toResponseBody(), { status: error.status });
+    }
+
+    logError({
+      event: 'error',
+      code: 'INTERNAL',
+      detail: error instanceof Error ? (error.stack ?? error.message) : String(error),
+    });
+    return Response.json({ error: 'Internal error.', code: 'INTERNAL' }, { status: 500 });
+  }
+}
+
+export default {
+  /**
+   * The cross-origin decision, then everything else.
+   *
+   * Reading the allowlist through `authConfig` rather than `authSettings` is
+   * deliberate: the latter refuses a deployment with no secret, and a browser
+   * asking whether it may talk to a broken deployment deserves an answer about
+   * CORS rather than a 500 it cannot read.
+   */
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const origin = allowedOrigin(request, authConfig(env).trustedOrigins);
+
+    // Before the router, before the limiter, before anything that touches the
+    // database. See decision 5 above.
+    if (request.method === 'OPTIONS') return preflightResponse(origin);
+
+    return withCors(await respond(request, env), origin);
   },
 
   /**
