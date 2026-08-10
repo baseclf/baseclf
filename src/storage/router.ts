@@ -38,9 +38,11 @@
  * upload needs no cleanup.
  */
 
+import type { D1Executor } from '../db/dialect.js';
 import type { AuthCtx } from '../policy/types.js';
 import { BaseclfError, PolicyError } from '../utils/errors.js';
 import { logEvent } from '../utils/log.js';
+import { forgetObject, recordObject } from './objects.js';
 import {
   assertUploadAllowed,
   authorizeStorage,
@@ -63,6 +65,15 @@ export interface StorageContext {
   readonly bucket: R2Bucket;
   readonly buckets: ReadonlyMap<string, StorageBucketDefinition>;
   readonly auth: AuthCtx;
+  /**
+   * Where the D1 record of the object goes.
+   *
+   * Optional, and only because half the tests here exercise the R2 side with a
+   * fake bucket and have nothing to say about the record. In the worker it is
+   * always present. A missing executor means the record is skipped, never that the
+   * object is skipped, so it cannot become a way to write bytes with no trace.
+   */
+  readonly db?: D1Executor;
   /** The logical bucket from the path, not the R2 binding. */
   readonly bucketName: string;
   readonly fileName: string;
@@ -213,6 +224,20 @@ export async function uploadObject(
 
   const stored = await writeBounded(context.bucket, grant.key, request.body, length, contentType);
 
+  // Bytes first, record second. See the note at the top of `objects.ts`: R2 is the
+  // truth and D1 follows it, so a failure here leaves an object with no record
+  // rather than a record for an object that is not there. The second is worse,
+  // because then a join returns a row and the image it points at is a 404.
+  if (context.db !== undefined) {
+    await recordObject(context.db, {
+      key: grant.key,
+      bucket: context.bucketName,
+      auth: context.auth,
+      sizeBytes: length,
+      contentType,
+    });
+  }
+
   // The key is a path built from a verified claim, so it is not caller data, but
   // it is also not interesting enough to log on every upload. The policy name and
   // the size are what an operator needs to see.
@@ -281,7 +306,15 @@ export async function deleteObject(context: StorageContext): Promise<void> {
     fileName: context.fileName,
   });
 
+  // Bytes first here too, and this direction is the stronger argument. A failure
+  // after this line leaves a record for something already gone, which is a lie SQL
+  // tells and nothing more. The other order would leave the BYTES in place after
+  // the caller asked for them to be deleted, still downloadable by anyone who
+  // knows the key, which is the deletion not having happened.
   await context.bucket.delete(grant.key);
+  if (context.db !== undefined) {
+    await forgetObject(context.db, grant.key);
+  }
 
   logEvent({
     event: 'storage_write',

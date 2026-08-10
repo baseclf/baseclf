@@ -525,6 +525,7 @@ async function handleStorage(request: Request, env: Env, target: StorageTarget):
 
   const context = {
     bucket: env.BUCKET,
+    db: env.DB,
     buckets: registry.buckets,
     auth,
     bucketName: target.bucket,

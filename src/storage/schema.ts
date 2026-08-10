@@ -35,4 +35,37 @@ export const STORAGE_SCHEMA: readonly string[] = Object.freeze([
      mime_types     TEXT,
      PRIMARY KEY (bucket, name)
    ) STRICT`,
+
+  // What exists, in a place SQL can reach.
+  //
+  // This is the whole point of the table rather than a convenience. R2 is not in
+  // D1, so without a row here there is no way for any statement to know an object
+  // exists, and "join object metadata with application data" is not a thing that
+  // can be written at all. An application stores the key in its own column and
+  // joins on it.
+  //
+  // `owner` is nullable because a policy with a literal prefix needs no claim, and
+  // an anonymous upload under such a policy has no uid to record. It holds the
+  // identity that wrote LAST rather than the one that created: under a shared
+  // prefix, whoever writes last owns the bytes, and recording the first writer
+  // would be a record of something that is no longer true.
+  //
+  // Times come from `unixepoch()`, which D1 has and which returns INTEGER.
+  // `strftime('%s','now')` returns TEXT and would be the wrong type for these
+  // columns in a STRICT table. Measured, rules/01 §G7.
+  `CREATE TABLE IF NOT EXISTS _storage_objects (
+     key          TEXT PRIMARY KEY NOT NULL,
+     bucket       TEXT NOT NULL,
+     owner        TEXT,
+     size_bytes   INTEGER NOT NULL,
+     content_type TEXT,
+     created_at   INTEGER NOT NULL,
+     updated_at   INTEGER NOT NULL
+   ) STRICT`,
+
+  // Two indexes, and both are a bill rather than a nicety. D1 charges for rows
+  // scanned, not rows returned (rules/01 §D), so a lookup by owner or by bucket
+  // without one is a full scan charged on every request that makes it.
+  'CREATE INDEX IF NOT EXISTS _storage_objects_owner ON _storage_objects (owner)',
+  'CREATE INDEX IF NOT EXISTS _storage_objects_bucket ON _storage_objects (bucket)',
 ]);

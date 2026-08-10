@@ -19,6 +19,8 @@ import { bearer, jwt } from 'better-auth/plugins';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import worker, { type Env } from '../index.js';
+import { seedDatabase, seedStandardPolicies } from '../policy/__fixtures__/schema.js';
+import { resetRegistry } from '../policy/registry.js';
 import { resetStorageRegistry } from './registry.js';
 import { STORAGE_SCHEMA } from './schema.js';
 
@@ -80,6 +82,15 @@ beforeAll(async () => {
   }) as typeof fetch;
 
   await (await getMigrations(authOptions)).runMigrations();
+
+  // The REST side is seeded too, and not for its own sake. The I8 tests at the
+  // bottom have to show that an engine table is refused *because of its prefix*,
+  // and that only means something if an ordinary exposed table answers 200 in the
+  // same run. Without this the registry cannot load at all and every REST request
+  // answers 500, which is fail-closed and proves nothing about I8.
+  await seedDatabase(env.DB);
+  await seedStandardPolicies(env.DB);
+  resetRegistry();
 
   for (const statement of STORAGE_SCHEMA) {
     await env.DB.prepare(statement).run();
@@ -316,5 +327,66 @@ describe('CORS on the storage path', () => {
 
     expect(response.status).toBe(404);
     expect(response.headers.get('access-control-allow-origin')).toBe('https://app.example.test');
+  });
+});
+
+/**
+ * Invariant I8 for the three tables this slice added.
+ *
+ * The `_` prefix is what keeps them off the API, and I8 asks for that in two
+ * independent places so that neither has to be right on its own. Both already
+ * existed and neither needed changing, which is the point of the convention. This
+ * asserts it rather than assuming it, because "it inherits the protection" is a
+ * claim and the tables are new.
+ */
+describe('the storage tables are never reachable through REST', () => {
+  const engineTables = ['_storage_objects', '_storage_policies', '_storage_buckets'];
+
+  it('lets an ordinary exposed table through, so the refusals below mean something', async () => {
+    // The control. If this were 404 as well, the tests after it would pass for the
+    // wrong reason: nothing exposed rather than this prefix refused.
+    expect((await call('/rest/v1/posts')).status).toBe(200);
+  });
+
+  it('refuses a read of each one', async () => {
+    for (const table of engineTables) {
+      const response = await call(`/rest/v1/${table}`);
+
+      expect(response.status, `${table} answered ${response.status}`).toBe(404);
+      expect(await response.json()).toEqual({ error: 'Not found.', code: 'NOT_FOUND' });
+    }
+  });
+
+  it('refuses a write to each one', async () => {
+    for (const table of engineTables) {
+      const response = await call(`/rest/v1/${table}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ key: 'avatars/anything.png' }),
+      });
+
+      expect(response.status, `${table} answered ${response.status}`).toBe(404);
+    }
+  });
+
+  it('still refuses one that somebody added to _exposed_tables on purpose', async () => {
+    // The second of the two places. A migration bug, or somebody being clever with
+    // `wrangler d1 execute`, can put an engine table in the exposure list. The
+    // registry drops such a row at load, so the router never gets the chance, and
+    // the router would refuse it anyway.
+    await env.DB.prepare(
+      'INSERT OR REPLACE INTO _exposed_tables (table_name, enabled, version) VALUES (?, 1, 1)',
+    )
+      .bind('_storage_objects')
+      .run();
+
+    try {
+      const response = await call('/rest/v1/_storage_objects');
+      expect(response.status).toBe(404);
+    } finally {
+      await env.DB.prepare('DELETE FROM _exposed_tables WHERE table_name = ?')
+        .bind('_storage_objects')
+        .run();
+    }
   });
 });
