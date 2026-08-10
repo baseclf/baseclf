@@ -151,12 +151,40 @@ export function assertIdentifiersAreReal(
   }
 }
 
-export interface ExecuteOptions {
-  readonly executor: D1Executor;
+export interface PrepareOptions {
   /** A select or a write. Both arrive here already carrying their policy. */
   readonly node: RootOperationNode;
   readonly catalogue: Catalogue;
   readonly scope: IdentifierScope;
+}
+
+export interface ExecuteOptions extends PrepareOptions {
+  readonly executor: D1Executor;
+}
+
+/**
+ * Compile a node to SQL and run every check that must pass before it may reach
+ * D1. Returns the statement; sends nothing.
+ *
+ * Split out of `executeStatement` so that "a statement that has been checked"
+ * is defined in exactly one place, and so the checks can be exercised, and
+ * their cost measured, without a database in the way. Execution is the only
+ * caller that matters; anything else that compiles a node without coming
+ * through here would be skipping invariants I6 and I7.
+ */
+export function prepareStatement(options: PrepareOptions): CompiledQuery {
+  const compiled: CompiledQuery = new SqliteQueryCompiler().compileQuery(
+    options.node,
+    // The compiler only uses the id for logging hooks we do not install.
+    { queryId: 'baseclf' },
+  );
+
+  assertIdentifiersAreReal(compiled.sql, options.node, options.catalogue, options.scope);
+  // Statement separators, the hundred parameter ceiling, placeholder to
+  // parameter agreement, statement length.
+  assertExecutable(compiled);
+
+  return compiled;
 }
 
 export interface ExecuteResult<R> {
@@ -179,16 +207,7 @@ export interface ExecuteResult<R> {
  * for a row that was not there and for a row the policy withheld alike.
  */
 export async function executeStatement<R>(options: ExecuteOptions): Promise<ExecuteResult<R>> {
-  const compiled: CompiledQuery = new SqliteQueryCompiler().compileQuery(
-    options.node,
-    // The compiler only uses the id for logging hooks we do not install.
-    { queryId: 'baseclf' },
-  );
-
-  assertIdentifiersAreReal(compiled.sql, options.node, options.catalogue, options.scope);
-  // Statement separators, the hundred parameter ceiling, placeholder to
-  // parameter agreement, statement length.
-  assertExecutable(compiled);
+  const compiled = prepareStatement(options);
 
   const statement =
     compiled.parameters.length > 0
