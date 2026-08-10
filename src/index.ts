@@ -7,16 +7,34 @@
  * auth/claims.ts.
  */
 
-import { anonymousContext } from './auth/claims.js';
+import { type AuthEnv, getAuth, isAuthPath, verifierConfig } from './auth/index.js';
+import { authenticate } from './auth/verify.js';
 import { getCatalogue } from './db/index.js';
+import type { AuthCtx } from './policy/index.js';
 import { getRegistry } from './policy/index.js';
 import type { WriteOperation } from './policy/write.js';
 import { operationForMethod, readTable, tableFromPath, writeTable } from './rest/index.js';
 import { BaseclfError } from './utils/errors.js';
 import { logError } from './utils/log.js';
 
-export interface Env {
+export interface Env extends AuthEnv {
   readonly DB: D1Database;
+}
+
+/**
+ * Who this request is, or a refusal.
+ *
+ * Both data paths go through here, and there is deliberately no third way to
+ * obtain a context inside `fetch`. A bad token throws rather than degrading to
+ * anonymous: silently serving the public view to somebody whose session just
+ * expired looks like their data vanished.
+ *
+ * When authentication is not configured at all, this is still not a reason to
+ * let a request through as anonymous. `authSettings` throws, the request gets a
+ * 500, and the deployment is visibly broken rather than quietly open.
+ */
+async function identify(request: Request, env: Env): Promise<AuthCtx> {
+  return authenticate(request, verifierConfig(env));
 }
 
 /**
@@ -75,13 +93,17 @@ function resultHeaders(
 async function handleRead(request: Request, env: Env, table: string): Promise<Response> {
   const session = env.DB.withSession(request.headers.get('x-d1-bookmark') ?? 'first-unconstrained');
 
-  const [catalogue, registry] = await Promise.all([getCatalogue(session), getRegistry(session)]);
+  const [auth, catalogue, registry] = await Promise.all([
+    identify(request, env),
+    getCatalogue(session),
+    getRegistry(session),
+  ]);
 
   const result = await readTable({
     executor: session,
     catalogue,
     registry,
-    auth: anonymousContext(),
+    auth,
     table,
     search: new URL(request.url).searchParams,
   });
@@ -128,13 +150,17 @@ async function handleWrite(
   }
 
   const session = env.DB.withSession(request.headers.get('x-d1-bookmark') ?? 'first-unconstrained');
-  const [catalogue, registry] = await Promise.all([getCatalogue(session), getRegistry(session)]);
+  const [auth, catalogue, registry] = await Promise.all([
+    identify(request, env),
+    getCatalogue(session),
+    getRegistry(session),
+  ]);
 
   const result = await writeTable({
     executor: session,
     catalogue,
     registry,
-    auth: anonymousContext(),
+    auth,
     table,
     search: new URL(request.url).searchParams,
     operation,
@@ -165,6 +191,13 @@ export default {
 
       if (url.pathname === '/_schema') {
         return await describeSchema(env);
+      }
+
+      // The identity provider owns this prefix. It is checked before the table
+      // router rather than after, so a table can never shadow it, and it never
+      // reaches `tableFromPath` in the first place.
+      if (isAuthPath(url.pathname)) {
+        return await getAuth(env).handler(request);
       }
 
       const table = tableFromPath(url.pathname);

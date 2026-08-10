@@ -21,5 +21,29 @@
       "database_name": "baseclf",
       "database_id": "00000000-0000-0000-0000-000000000000"
     }
-  ]
+  ],
+
+  "vars": {
+    // The origin this Worker is served from. Getting it wrong is the most
+    // common cause of redirect_uri_mismatch, so the engine refuses to start
+    // rather than inferring one per request.
+    "BETTER_AUTH_URL": "https://baseclf.example.workers.dev",
+
+    // Comma separated origins allowed to call the auth endpoints. A frontend on
+    // another origin must be listed here or its preflight fails.
+    "BETTER_AUTH_TRUSTED_ORIGINS": "http://localhost:3000",
+
+    // Off by default, and that is a measurement rather than a preference.
+    // Hashing a password costs 58 ms of CPU against a free-plan budget of 10 ms
+    // for the whole request, and the cost is inherent to the scrypt parameters.
+    // OAuth performs no hash, so social login works on any plan. Set "true"
+    // only on a paid plan.
+    "BETTER_AUTH_EMAIL_PASSWORD": "false"
+  }
+
+  // BETTER_AUTH_SECRET is deliberately absent. It is a secret, so it goes in
+  // with `wrangler secret put BETTER_AUTH_SECRET` and never into this file.
+  // Without it the engine refuses every request rather than serving them all
+  // anonymously, because a deployment missing its secret should be visibly
+  // broken rather than quietly open.
 }

@@ -33,7 +33,7 @@ import { createLocalJWKSet, type JSONWebKeySet, type JWK, type JWTPayload, jwtVe
 import type { AuthCtx } from '../policy/types.js';
 import { BaseclfError } from '../utils/errors.js';
 import { logEvent } from '../utils/log.js';
-import { contextFromClaims, type VerifiedClaims } from './claims.js';
+import { anonymousContext, contextFromClaims, type VerifiedClaims } from './claims.js';
 
 /** The only signature algorithm this engine accepts. See the auth skill, trap 4. */
 export const ACCEPTED_ALGORITHM = 'ES256';
@@ -229,7 +229,7 @@ export async function verifyToken(token: string, config: VerifierConfig): Promis
  */
 export async function authenticate(request: Request, config: VerifierConfig): Promise<AuthCtx> {
   const token = bearerToken(request);
-  if (token === null) return contextFromClaims({});
+  if (token === null) return anonymousContext();
 
   return contextFromClaims(await verifyToken(token, config));
 }

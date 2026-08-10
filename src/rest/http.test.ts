@@ -6,9 +6,11 @@
  * last one is the one that matters, and it is why these run through `fetch`
  * instead of asserting on a result object.
  *
- * Every request here is anonymous, because that is the only identity V1 and V2
- * can produce. There is no header that changes it, deliberately, so these
- * exercise the anon policies and the write tests elsewhere exercise the rest.
+ * Every request here is anonymous, in the sense that none of them presents a
+ * token. That is now a real identity rather than the only one available: the
+ * worker verifies a bearer token when one arrives, and a request without one
+ * is the anon role, which has policies of its own. See identity.test.ts for the
+ * other half.
  */
 
 import { env } from 'cloudflare:workers';
@@ -23,8 +25,20 @@ import {
 } from '../policy/__fixtures__/schema.js';
 import { resetRegistry } from '../policy/registry.js';
 
+/**
+ * The worker refuses to serve anything when identity is unconfigured, so these
+ * tests have to configure it even though none of them signs in. That refusal is
+ * deliberate and is asserted on its own in identity.test.ts: a deployment
+ * missing its secret should be visibly broken rather than quietly open.
+ */
+const testEnv = {
+  ...env,
+  BETTER_AUTH_SECRET: 'test-secret-not-used-to-sign-anything-real',
+  BETTER_AUTH_URL: 'https://baseclf.test',
+};
+
 function call(path: string, init: RequestInit = {}): Promise<Response> {
-  return worker.fetch(new Request(`https://baseclf.test${path}`, init), env);
+  return worker.fetch(new Request(`https://baseclf.test${path}`, init), testEnv);
 }
 
 function json(path: string, method: string, body: unknown, headers: HeadersInit = {}) {
