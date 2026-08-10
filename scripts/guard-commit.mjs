@@ -62,6 +62,15 @@ const VIETNAMESE = /[àáảãạăằắẳẵặâầấẩẫậèéẻẽẹ
 /** Files that ship to the public and must therefore be English only. */
 const ENGLISH_ONLY = /^(src\/|docs\/|examples\/|README|LICENS|CONTRIBUTING|CHANGELOG|packages\/)/;
 
+/**
+ * Em-dash and en-dash. The design system calls this ban binary and it applies to
+ * every string a user can read, so it belongs here rather than in anyone's memory.
+ * Restructure with a period, a comma, a colon, or parentheses.
+ */
+const LONG_DASH = /[—–]/;
+/** Machine-written files nobody edits by hand, so their punctuation is not ours. */
+const GENERATED = /^(worker-configuration\.d\.ts|.*\.min\.(js|css)|dist\/|.*\.lock)/;
+
 const TEXT_EXT = /\.(ts|tsx|js|jsx|mjs|cjs|json|jsonc|md|css|html|yml|yaml|toml|txt|sh|sql)$/;
 
 /* ---------------------------------------------------------------- run --- */
@@ -125,6 +134,19 @@ for (const file of files) {
         file,
         kind: 'NON-ENGLISH TEXT',
         detail: `line ${idx + 1}. Public surfaces are English only. See rule 04 section A.`,
+      });
+    }
+  }
+
+  if (ENGLISH_ONLY.test(file) && !GENERATED.test(file)) {
+    const idx = lines.findIndex((l) => LONG_DASH.test(l));
+    if (idx !== -1) {
+      failures.push({
+        file,
+        kind: 'LONG DASH',
+        detail:
+          `line ${idx + 1}. Em-dash and en-dash are banned in anything a user reads. ` +
+          'Use a period, a comma, a colon, or parentheses. See _design_system/DESIGN.md section 9.',
       });
     }
   }
