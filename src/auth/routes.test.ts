@@ -28,8 +28,14 @@ const configured: Env = {
   BETTER_AUTH_URL: BASE_URL,
 };
 
-/** The same deployment with nothing configured at all. */
-const { BETTER_AUTH_SECRET: _noSecret, BETTER_AUTH_URL: _noUrl, ...bare } = configured;
+/**
+ * The same deployment with nothing configured at all.
+ *
+ * Not cast into shape: both fields are optional on Env, so leaving them out is
+ * a value the type already allows. A cast here would be a way of asserting the
+ * exact thing under test.
+ */
+const bare: Env = (({ BETTER_AUTH_SECRET, BETTER_AUTH_URL, ...rest }) => rest)(configured);
 
 function call(path: string, ip: string, on: Env = configured): Promise<Response> {
   return worker.fetch(
@@ -42,7 +48,7 @@ describe('the diagnostic endpoint', () => {
   it('answers for a deployment with no secret, which is when it is needed', async () => {
     // Everything else on this deployment answers 500. If the diagnostic did
     // too, the endpoint whose job is to explain the outage would be part of it.
-    const response = await call('/api/auth/_diagnose', '203.0.113.10', bare as Env);
+    const response = await call('/api/auth/_diagnose', '203.0.113.10', bare);
     expect(response.status).toBe(200);
 
     const body = (await response.json()) as { secret_configured: boolean; warnings: string[] };
@@ -125,6 +131,39 @@ describe('the rate limiter in front of the auth endpoints', () => {
     for (let attempt = 1; attempt <= 30; attempt += 1) {
       expect((await call('/api/auth/_diagnose', ip)).status).toBe(200);
     }
+  });
+});
+
+describe('the scheduled sweep', () => {
+  it('removes a counter nothing could still be counting against, and spares a live one', async () => {
+    // Only the platform calls this handler, so without a test the cron is a
+    // statement nobody has ever run. It is also the one job that could become a
+    // bypass: deleting a row still inside its window hands its owner a fresh
+    // allowance, which is why the retention is an order of magnitude past the
+    // longest window rather than merely longer than it.
+    resetRateLimitTableMemo();
+    await call('/api/auth/sign-in/email', '203.0.113.50');
+
+    await env.DB.prepare(
+      'INSERT OR REPLACE INTO "_rate_limit" ("key", "window_start", "hits") VALUES (?1, unixepoch() - 86400, 9)',
+    )
+      .bind('sweep_test|stale')
+      .run();
+    await env.DB.prepare(
+      'INSERT OR REPLACE INTO "_rate_limit" ("key", "window_start", "hits") VALUES (?1, unixepoch(), 9)',
+    )
+      .bind('sweep_test|live')
+      .run();
+
+    await worker.scheduled({ scheduledTime: 0, cron: '17 * * * *', noRetry: () => {} }, configured);
+
+    const remaining = await env.DB.prepare('SELECT "key" FROM "_rate_limit" WHERE "key" LIKE ?1')
+      .bind('sweep_test|%')
+      .all<{ key: string }>();
+    const keys = remaining.results.map((row) => row.key);
+
+    expect(keys).not.toContain('sweep_test|stale');
+    expect(keys).toContain('sweep_test|live');
   });
 });
 
