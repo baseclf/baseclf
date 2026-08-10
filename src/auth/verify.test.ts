@@ -16,7 +16,7 @@ import { env } from 'cloudflare:workers';
 import { betterAuth } from 'better-auth';
 import { getMigrations } from 'better-auth/db/migration';
 import { bearer, jwt } from 'better-auth/plugins';
-import { exportJWK, generateKeyPair, SignJWT } from 'jose';
+import { exportJWK, generateKeyPair, type JSONWebKeySet, type JWK, SignJWT } from 'jose';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { BaseclfError } from '../utils/errors.js';
@@ -377,5 +377,231 @@ describe('authenticate', () => {
 
     expect(Object.keys(context).sort()).toEqual(['app', 'email', 'role', 'uid']);
     expect(JSON.stringify(context)).not.toContain('user_metadata');
+  });
+});
+
+/**
+ * Rotation, made to happen rather than waited for.
+ *
+ * The retry after ERR_JWKS_NO_MATCHING_KEY is the one branch here that only
+ * production runs. It runs on the day a key rotates, and if it is wrong then
+ * every request 401s at once, which is the worst imaginable moment to discover
+ * it. So these tests do not wait for an issuer to rotate on its own: both key
+ * sets are minted here, and the endpoint changes its mind exactly when told to.
+ *
+ * Better Auth is deliberately absent from this section. It mints one key set
+ * and has no reason to replace it on request, and the whole subject is the
+ * moment between two key sets, which only a hand-built endpoint holds still.
+ */
+
+const ROTATION_ISSUER = 'https://rotating-issuer.test';
+const ROTATION_AUDIENCE = 'baseclf-rotation';
+
+/** An issuer's signing key, with the public half shaped the way a JWKS carries it. */
+interface RotationKey {
+  readonly kid: string;
+  readonly privateKey: CryptoKey;
+  readonly publicJwk: JWK;
+}
+
+/**
+ * A key pair that a key set can be built from and a token signed with.
+ *
+ * The `kid` is not decoration. `jose` only reports ERR_JWKS_NO_MATCHING_KEY
+ * when it can rule every key in the set out, and with no `kid` in the header it
+ * cannot: it keeps the single key it has, checks the signature against it, and
+ * fails with a different code that this path deliberately does not retry. A
+ * rotation test whose two keys share a `kid`, or carry none, exercises the
+ * wrong branch and passes anyway.
+ */
+async function rotationKey(kid: string): Promise<RotationKey> {
+  const { privateKey, publicKey } = await generateKeyPair('ES256', { extractable: true });
+
+  return {
+    kid,
+    privateKey,
+    publicJwk: { ...(await exportJWK(publicKey)), kid, alg: 'ES256', use: 'sig' },
+  };
+}
+
+/** What each scenario's endpoint answers with at this moment. */
+const servedKeySets = new Map<string, JSONWebKeySet>();
+/** How many times each scenario's endpoint was actually reached. */
+const timesFetched = new Map<string, number>();
+
+/**
+ * A JWKS URL of its own for every scenario.
+ *
+ * `loadJwks` caches by URL through the Cache API, and that cache outlives the
+ * test that filled it. Two scenarios sharing a URL would share a cached key
+ * set, so the second one would be reading the first one's leftovers while
+ * appearing to arrange its own. Every count below would then be measuring the
+ * wrong thing, and nothing would look wrong. Distinct URLs are what keeps these
+ * tests independent.
+ */
+function scenario(name: string): VerifierConfig {
+  return {
+    jwksUrl: `${ROTATION_ISSUER}/jwks/${name}`,
+    issuer: ROTATION_ISSUER,
+    audience: ROTATION_AUDIENCE,
+  };
+}
+
+/** Point a scenario's endpoint at a key set, replacing whatever it served before. */
+function nowServes(config: VerifierConfig, ...keys: readonly RotationKey[]): void {
+  servedKeySets.set(config.jwksUrl, { keys: keys.map((key) => key.publicJwk) });
+}
+
+function fetchesOf(config: VerifierConfig): number {
+  return timesFetched.get(config.jwksUrl) ?? 0;
+}
+
+async function tokenFrom(
+  key: RotationKey,
+  config: VerifierConfig,
+  subject: string,
+  expiresAt: string | number = '1h',
+): Promise<string> {
+  return new SignJWT({})
+    .setProtectedHeader({ alg: 'ES256', kid: key.kid })
+    .setIssuer(config.issuer)
+    .setAudience(config.audience)
+    .setSubject(subject)
+    .setExpirationTime(expiresAt)
+    .sign(key.privateKey);
+}
+
+describe('when the issuer rotates its signing key', () => {
+  let restoreFetch = (): void => {};
+
+  beforeAll(() => {
+    // Chained onto whatever this file already installed, and installed in a
+    // hook for the same reason the top-level one gives: module scope has run to
+    // completion before the first test starts, so an interceptor set up there
+    // is never in effect while anything is being tested. Any URL that is not
+    // one of these scenarios falls through to the Better Auth interceptor,
+    // which still refuses the rest of the internet loudly.
+    const outer = globalThis.fetch;
+    const delegate = outer.bind(globalThis);
+
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+
+      const served = servedKeySets.get(url);
+      if (served === undefined) return delegate(input, init);
+
+      timesFetched.set(url, (timesFetched.get(url) ?? 0) + 1);
+      return new Response(JSON.stringify(served), {
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as typeof fetch;
+
+    restoreFetch = () => {
+      globalThis.fetch = outer;
+    };
+  });
+
+  afterAll(() => {
+    restoreFetch();
+  });
+
+  it('accepts a token signed by the new key after dropping the cached key set once', async () => {
+    const config = scenario('heals');
+    const retired = await rotationKey('key-2026-07');
+    const current = await rotationKey('key-2026-08');
+
+    // Warm the cache the way production does, with an ordinary verification.
+    nowServes(config, retired);
+    const settled = await tokenFrom(retired, config, 'u_before');
+    await verifyToken(settled, config);
+    expect(fetchesOf(config)).toBe(1);
+
+    // Prove the cache is really holding the old set before rotating anything,
+    // because the rest of this test means nothing otherwise. If the put had
+    // stored nothing, the verification after the rotation would fetch the new
+    // set on its first attempt and succeed without ever reaching the branch
+    // under test, and the final count would still read two.
+    await verifyToken(settled, config);
+    expect(fetchesOf(config)).toBe(1);
+
+    // The rotation. Tokens signed by a key our cached copy predates start
+    // arriving immediately, long before any TTL would have expired.
+    nowServes(config, current);
+    const claims = await verifyToken(await tokenFrom(current, config, 'u_after'), config);
+
+    // It succeeded, rather than merely failing to throw.
+    expect(claims.sub).toBe('u_after');
+
+    // And the endpoint was reached exactly once more, so the stale set did come
+    // back from the cache, was dropped once, and the refetch did not repeat.
+    expect(fetchesOf(config)).toBe(2);
+  });
+
+  it('writes the refreshed key set back, so the rotation costs one refetch and not one per request', async () => {
+    const config = scenario('persists');
+    const retired = await rotationKey('key-2026-07');
+    const current = await rotationKey('key-2026-08');
+
+    nowServes(config, retired);
+    await verifyToken(await tokenFrom(retired, config, 'u_before'), config);
+
+    nowServes(config, current);
+    const token = await tokenFrom(current, config, 'u_after');
+    await verifyToken(token, config);
+    expect(fetchesOf(config)).toBe(2);
+
+    // The next request pays nothing. If the refresh had handed the fresh set to
+    // its caller without storing it, every request for the rest of this
+    // deployment's life would fetch twice and still answer correctly, so the
+    // only visible symptom would be a quiet doubling of outbound requests
+    // against a subrequest budget of 50.
+    await expect(verifyToken(token, config)).resolves.toBeTruthy();
+    expect(fetchesOf(config)).toBe(2);
+  });
+
+  it('still refuses with 401 when the refreshed key set has no matching key either', async () => {
+    const config = scenario('still-unknown');
+    const issuerKey = await rotationKey('key-2026-07');
+    const impostorKey = await rotationKey('key-nobody-published');
+
+    nowServes(config, issuerKey);
+    await verifyToken(await tokenFrom(issuerKey, config, 'u_before'), config);
+
+    // A forged token whose `kid` matches nothing, before the refresh or after
+    // it. The retry is an allowance for rotation, not a second chance at a
+    // signature, and the refusal has to survive the extra round trip intact.
+    const refused = await expectUnauthenticated(
+      verifyToken(await tokenFrom(impostorKey, config, 'u_impostor'), config),
+    );
+
+    expect(fetchesOf(config)).toBe(2);
+
+    // The refusal came from the retry rather than from the first attempt. Every
+    // refusal on this path carries the same status, code and message by design
+    // (invariant I5), so without checking the diagnostic the assertions above
+    // would hold even if the refresh had never happened at all.
+    expect(refused.detail).toContain('after refreshing the key set');
+  });
+
+  it('does not refetch for a refusal that a fresh key set could not fix', async () => {
+    const config = scenario('no-pointless-refresh');
+    const key = await rotationKey('key-2026-07');
+
+    nowServes(config, key);
+    await verifyToken(await tokenFrom(key, config, 'u_before'), config);
+    expect(fetchesOf(config)).toBe(1);
+
+    // Signed by the very key the endpoint publishes, and expired. `jose` finds
+    // the key and then rejects the claim, so there is no key set anywhere that
+    // would make this token valid.
+    const expired = await tokenFrom(key, config, 'u_stale', Math.floor(Date.now() / 1000) - 3600);
+    const refused = await expectUnauthenticated(verifyToken(expired, config));
+
+    // The narrow condition on the retry is load-bearing rather than tidy. A
+    // refresh on any refusal would let anyone turn a stream of junk tokens into
+    // a stream of outbound requests to the issuer, one each, paid for out of
+    // this Worker's subrequest budget.
+    expect(fetchesOf(config)).toBe(1);
+    expect(refused.detail).not.toContain('after refreshing');
   });
 });
