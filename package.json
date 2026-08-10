@@ -17,8 +17,9 @@
     "build": "wrangler deploy --dry-run --outdir=dist",
     "cf-typegen": "wrangler types",
     "guard": "node scripts/guard-commit.mjs --all",
+    "build:theme": "node scripts/build-theme.mjs",
     "check:design": "node scripts/check-design-tokens.mjs",
-    "check": "npm run typecheck && npm run lint && npm run test",
+    "check": "npm run typecheck && npm run lint && npm run test && npm run check:design",
     "measure:bundle": "node scripts/measure-bundle.mjs",
     "demo:v1": "node scripts/demo-v1.mjs",
     "demo:v2": "node scripts/demo-v2.mjs"
