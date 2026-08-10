@@ -65,12 +65,29 @@ export interface AuthRefreshDeclinedEvent {
   readonly reason: 'cooldown';
 }
 
+/**
+ * An object was written or removed.
+ *
+ * No key, and that is the same argument as everywhere else in this file rather
+ * than caution for its own sake. A key contains a uid, so it names a person, and
+ * a log line naming who uploaded what is the kind of record that turns out to be
+ * personal data long after anybody decided to keep it. The policy name says which
+ * grant allowed it, which is what an operator is actually looking for.
+ */
+export interface StorageWriteEvent {
+  readonly event: 'storage_write';
+  readonly operation: 'upload' | 'delete';
+  readonly policy: string;
+  readonly bytes: number;
+}
+
 export type LogEvent =
   | QueryEvent
   | PolicyRefusalEvent
   | ErrorEvent
   | AuthEvent
-  | AuthRefreshDeclinedEvent;
+  | AuthRefreshDeclinedEvent
+  | StorageWriteEvent;
 
 export function logEvent(event: LogEvent): void {
   console.log(JSON.stringify(event));

@@ -21,6 +21,7 @@ export default defineConfig({
       wrangler: { configPath: './wrangler.jsonc' },
       miniflare: {
         d1Databases: ['DB'],
+        r2Buckets: ['BUCKET'],
       },
     }),
   ],

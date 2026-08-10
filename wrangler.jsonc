@@ -30,6 +30,20 @@
     }
   ],
 
+  // Objects are proxied through this Worker rather than reached with a presigned
+  // URL. R2 egress is free, so the proxy costs nothing extra, and it is the only
+  // arrangement where a policy decision sits on the path of every byte.
+  //
+  // ⚠️ CORS for a bucket is a bucket-level property and cannot be set here. If
+  // a browser ever talks to the bucket directly, it needs
+  // `wrangler r2 bucket cors set`. See rules/01 section F.
+  "r2_buckets": [
+    {
+      "binding": "BUCKET",
+      "bucket_name": "baseclf-objects"
+    }
+  ],
+
   "vars": {
     // The origin this Worker is served from. Getting it wrong is the most
     // common cause of redirect_uri_mismatch, so the engine refuses to start
