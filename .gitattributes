@@ -1,0 +1,20 @@
+# This repository stores LF and checks out LF, on every platform.
+#
+# Without this, a clone on Windows with core.autocrlf=true gets CRLF in the
+# working tree, while Biome formats to LF. Any file Biome has not rewritten
+# then fails the format check for a reason that has nothing to do with its
+# contents, and `git diff` shows nothing, so the report and the evidence
+# disagree. Measured on 2026-08-11: restoring one untouched file with
+# `git checkout` was enough to turn `npm run check` red.
+#
+# Nothing here is a Windows tool that needs CRLF. The Worker runtime, the test
+# runner and the formatter all want LF.
+* text=auto eol=lf
+
+# Binary, so never touched.
+*.png binary
+*.jpg binary
+*.webp binary
+*.woff binary
+*.woff2 binary
+*.ico binary
