@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>BaseCLF CORS check</title>
+    <style>
+      body { font: 14px ui-monospace, monospace; margin: 24px; max-width: 76ch; }
+      h1 { font-size: 16px; }
+      table { border-collapse: collapse; width: 100%; margin-top: 12px; }
+      th, td { border: 1px solid #ccc; padding: 6px 8px; text-align: left; vertical-align: top; }
+      .pass { font-weight: bold; }
+      .fail { font-weight: bold; }
+    </style>
+  </head>
+  <body>
+    <h1>BaseCLF CORS check</h1>
+    <p id="context">running</p>
+    <table>
+      <thead>
+        <tr><th>check</th><th>expected</th><th>observed</th><th>verdict</th></tr>
+      </thead>
+      <tbody id="results"></tbody>
+    </table>
+    <p id="summary"></p>
+
+    <script>
+      // The deployment under test. Only its origin matters here.
+      const API = 'https://baseclf.raspy-firefly-4c0b.workers.dev';
+
+      // Port 4321 is listed in BETTER_AUTH_TRUSTED_ORIGINS; 4322 is not. The
+      // page is identical on both, so any difference in outcome is the
+      // browser enforcing the allowlist rather than anything in this file.
+      const TRUSTED = location.origin === 'http://localhost:4321';
+
+      const rows = document.getElementById('results');
+      let passed = 0;
+      let failed = 0;
+
+      function record(name, expected, observed, ok) {
+        const tr = document.createElement('tr');
+        for (const [text, cls] of [
+          [name, ''],
+          [expected, ''],
+          [observed, ''],
+          [ok ? 'PASS' : 'FAIL', ok ? 'pass' : 'fail'],
+        ]) {
+          const td = document.createElement('td');
+          td.textContent = text;
+          if (cls) td.className = cls;
+          tr.appendChild(td);
+        }
+        rows.appendChild(tr);
+        if (ok) passed += 1;
+        else failed += 1;
+      }
+
+      /** Whether a fetch completed at all. A CORS refusal rejects with TypeError. */
+      async function attempt(path, init) {
+        try {
+          const response = await fetch(`${API}${path}`, init);
+          return { reached: true, response };
+        } catch (error) {
+          return { reached: false, why: String(error) };
+        }
+      }
+
+      async function run() {
+        document.getElementById('context').textContent =
+          `page origin ${location.origin}, which is ${TRUSTED ? 'ON' : 'NOT ON'} the allowlist`;
+
+        // 1. A simple GET. No preflight is involved, so this only tests the
+        //    allow-origin header on the response itself.
+        {
+          const r = await attempt('/health');
+          record(
+            'simple GET /health',
+            TRUSTED ? 'reaches the page' : 'blocked by the browser',
+            r.reached ? `read status ${r.response.status}` : 'blocked',
+            r.reached === TRUSTED,
+          );
+        }
+
+        // 2. An Authorization header makes this a preflighted request, which
+        //    is the path every real call from a signed-in client takes.
+        {
+          const r = await attempt('/health', {
+            headers: { authorization: 'Bearer not-a-real-token' },
+          });
+          record(
+            'preflighted GET with Authorization',
+            TRUSTED ? 'preflight passes' : 'preflight refused',
+            r.reached ? `read status ${r.response.status}` : 'blocked',
+            r.reached === TRUSTED,
+          );
+        }
+
+        // 3. A header the server does not list in allow-headers. The preflight
+        //    must refuse this even from an allowed origin, or the allow list is
+        //    not being enforced by anybody.
+        {
+          const r = await attempt('/health', { headers: { 'x-not-allowed': '1' } });
+          record(
+            'preflighted GET with an unlisted header',
+            'blocked, from either origin',
+            r.reached ? 'reached, which it should not have' : 'blocked',
+            r.reached === false,
+          );
+        }
+
+        // 4. Exposed headers, checked on a refusal. This proves two things at
+        //    once: that an error response carries CORS headers, and that
+        //    retry-after is readable rather than hidden by the browser.
+        {
+          let refused = null;
+          let blocked = false;
+          for (let i = 0; i < 30 && refused === null; i += 1) {
+            const r = await attempt('/api/auth/sign-in/email', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ email: 'probe@example.test', password: 'x'.repeat(12) }),
+            });
+            if (!r.reached) { blocked = true; break; }
+            if (r.response.status === 429) refused = r.response;
+          }
+
+          if (!TRUSTED) {
+            record(
+              'rate limited response, from an unlisted origin',
+              'blocked by the browser',
+              blocked ? 'blocked' : 'reached',
+              blocked,
+            );
+          } else {
+            const retry = refused && refused.headers.get('retry-after');
+            record(
+              'reads Retry-After off a 429',
+              'a number',
+              retry === null || retry === undefined ? 'null, so it is hidden' : retry,
+              Boolean(retry),
+            );
+
+            // A header the server does not expose must stay invisible even
+            // though it is on the wire.
+            const hidden = refused && refused.headers.get('vary');
+            record(
+              'cannot read a header that is not exposed',
+              'null',
+              hidden === null || hidden === undefined ? 'null' : String(hidden),
+              !hidden,
+            );
+          }
+        }
+
+        document.getElementById('summary').textContent =
+          `RESULT ${failed === 0 ? 'ALL PASS' : 'FAILURES'}: ${passed} passed, ${failed} failed`;
+      }
+
+      run();
+    </script>
+  </body>
+</html>
