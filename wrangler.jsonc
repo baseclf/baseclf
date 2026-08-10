@@ -13,6 +13,13 @@
     "logs": { "enabled": true }
   },
 
+  // Sweeps spent rows out of the _rate_limit table. Off the hour on purpose:
+  // every cron written as "0 * * * *" fires at the same moment across the whole
+  // platform, and there is no reason for this one to queue behind them.
+  "triggers": {
+    "crons": ["17 * * * *"]
+  },
+
   // Placeholder ids. `npx create-baseclf` provisions the real resources into
   // the user's own Cloudflare account and rewrites these. Never commit real ids.
   "d1_databases": [
@@ -46,4 +53,16 @@
   // Without it the engine refuses every request rather than serving them all
   // anonymously, because a deployment missing its secret should be visibly
   // broken rather than quietly open.
+  //
+  // The OAuth provider credentials are absent for the same reason. Set the pair
+  // for each provider you want to offer, then redeploy:
+  //
+  //   wrangler secret put GOOGLE_CLIENT_ID
+  //   wrangler secret put GOOGLE_CLIENT_SECRET
+  //   wrangler secret put GITHUB_CLIENT_ID
+  //   wrangler secret put GITHUB_CLIENT_SECRET
+  //
+  // A provider with only one of its two values set is not offered at all.
+  // GET /api/auth/_diagnose reports which half is missing, along with the exact
+  // redirect URI to register in the provider's console.
 }

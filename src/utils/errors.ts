@@ -19,11 +19,20 @@ export type ErrorCode =
   | 'MALFORMED_SQL'
   | 'UNSUPPORTED_OPERATOR'
   | 'UNSUPPORTED_QUERY'
+  // Ours, not the caller's: a limit or a bucket name the engine itself built
+  // wrong. Separate from MALFORMED_SQL because that one means the statement did
+  // not do what the code believes it does, which is a different investigation.
+  | 'INVALID_CONFIGURATION'
   // identity
   // Deliberately distinct from the 404 family. A 401 says "these credentials
   // were not accepted", which the caller needs in order to refresh or sign in
   // again, and which reveals nothing about whether any particular row exists.
   | 'UNAUTHENTICATED'
+  // Rate limiting. Distinct from the 404 family on purpose: "you are going too
+  // fast" is about the caller's behaviour rather than about what exists, so it
+  // reveals nothing, and a client that cannot tell it apart from a refusal will
+  // retry immediately and make things worse.
+  | 'RATE_LIMITED'
   // the only code a 404 ever shows a client, whatever it was internally
   | 'NOT_FOUND'
   // platform

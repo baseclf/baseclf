@@ -30,12 +30,13 @@ import { getMigrations } from 'better-auth/db/migration';
 import { bearer, jwt } from 'better-auth/plugins';
 
 import { BaseclfError } from '../utils/errors.js';
+import { type ProviderEnv, socialProviders } from './providers.js';
 import type { VerifierConfig } from './verify.js';
 
 /** The role every verified session carries. See decision 1 above. */
 export const AUTHENTICATED_ROLE = 'authenticated';
 
-export interface AuthEnv {
+export interface AuthEnv extends ProviderEnv {
   readonly DB: D1Database;
   /** Signs sessions. From `wrangler secret`, never from source. */
   readonly BETTER_AUTH_SECRET?: string;
@@ -74,6 +75,40 @@ function misconfigured(detail: string): BaseclfError {
 }
 
 /**
+ * What is configured, reported rather than judged.
+ *
+ * Separate from `authSettings` because the two callers want opposite things.
+ * The request path wants a refusal: a deployment missing its secret must not
+ * serve anything. The diagnostic endpoint wants an answer, and it wants one
+ * most urgently in exactly the case that makes `authSettings` throw. An
+ * endpoint whose job is to explain a broken deployment cannot be an endpoint
+ * that refuses to answer because the deployment is broken.
+ *
+ * Note what this reports about the secret: whether it is set, never anything
+ * about its value. Presence is what an operator needs; validity is what an
+ * attacker would like.
+ */
+export interface AuthConfig {
+  readonly secretConfigured: boolean;
+  /** As configured, trimmed. Empty when unset. Not validated here. */
+  readonly baseURL: string;
+  readonly trustedOrigins: readonly string[];
+  readonly emailAndPassword: boolean;
+}
+
+export function authConfig(env: AuthEnv): AuthConfig {
+  return {
+    secretConfigured: (env.BETTER_AUTH_SECRET?.trim() ?? '').length > 0,
+    baseURL: env.BETTER_AUTH_URL?.trim() ?? '',
+    trustedOrigins: (env.BETTER_AUTH_TRUSTED_ORIGINS ?? '')
+      .split(',')
+      .map((origin) => origin.trim())
+      .filter((origin) => origin.length > 0),
+    emailAndPassword: env.BETTER_AUTH_EMAIL_PASSWORD?.trim().toLowerCase() === 'true',
+  };
+}
+
+/**
  * Read the settings, or refuse.
  *
  * Deliberately strict. Better Auth will accept a missing base URL and infer one
@@ -81,26 +116,22 @@ function misconfigured(detail: string): BaseclfError {
  * becomes somebody's afternoon. See the auth skill, trap 1.
  */
 export function authSettings(env: AuthEnv): AuthSettings {
+  const config = authConfig(env);
+
   const secret = env.BETTER_AUTH_SECRET?.trim();
-  if (!secret) {
+  if (!config.secretConfigured || secret === undefined) {
     throw misconfigured('BETTER_AUTH_SECRET is not set. Set it with `wrangler secret put`.');
   }
 
-  const baseURL = env.BETTER_AUTH_URL?.trim();
-  if (!baseURL) {
+  if (config.baseURL.length === 0) {
     throw misconfigured('BETTER_AUTH_URL is not set. It must be the origin this Worker serves.');
   }
 
-  const trustedOrigins = (env.BETTER_AUTH_TRUSTED_ORIGINS ?? '')
-    .split(',')
-    .map((origin) => origin.trim())
-    .filter((origin) => origin.length > 0);
-
   return {
     secret,
-    baseURL,
-    trustedOrigins,
-    emailAndPassword: env.BETTER_AUTH_EMAIL_PASSWORD?.trim().toLowerCase() === 'true',
+    baseURL: config.baseURL,
+    trustedOrigins: config.trustedOrigins,
+    emailAndPassword: config.emailAndPassword,
   };
 }
 
@@ -120,6 +151,10 @@ function authOptions(env: AuthEnv, settings: AuthSettings) {
     baseURL: settings.baseURL,
     trustedOrigins: [...settings.trustedOrigins],
     emailAndPassword: { enabled: settings.emailAndPassword },
+    // Only the providers whose id and secret are both present. Half a provider
+    // is not offered, and `_diagnose` says which half is missing rather than
+    // leaving somebody to work out why a button is not on the page.
+    socialProviders: socialProviders(env),
     plugins: [
       // Tokens in a header rather than a cookie. The frontend is on another
       // origin, and a third-party cookie is blocked by Safari today and by
@@ -166,7 +201,23 @@ function buildAuth(env: AuthEnv, settings: AuthSettings) {
 
 type AuthInstance = ReturnType<typeof buildAuth>;
 
-let cached: { readonly settings: AuthSettings; readonly instance: AuthInstance } | null = null;
+/**
+ * What the instance was built from, reduced to something comparable.
+ *
+ * Provider ids are in here so that changing which providers exist rebuilds the
+ * instance. Without that, a test that adds a provider would be served the
+ * instance built before it and would pass while proving nothing, which is a
+ * failure mode this project has already been bitten by twice.
+ */
+function fingerprint(settings: AuthSettings, env: AuthEnv): string {
+  return [
+    settings.secret,
+    settings.baseURL,
+    Object.keys(socialProviders(env)).sort().join('+'),
+  ].join(' ');
+}
+
+let cached: { readonly fingerprint: string; readonly instance: AuthInstance } | null = null;
 
 /** For tests, which need a fresh instance per fixture. */
 export function resetAuth(): void {
@@ -181,17 +232,12 @@ export function resetAuth(): void {
  */
 export function getAuth(env: AuthEnv): AuthInstance {
   const settings = authSettings(env);
+  const key = fingerprint(settings, env);
 
-  if (
-    cached !== null &&
-    cached.settings.secret === settings.secret &&
-    cached.settings.baseURL === settings.baseURL
-  ) {
-    return cached.instance;
-  }
+  if (cached !== null && cached.fingerprint === key) return cached.instance;
 
   const instance = buildAuth(env, settings);
-  cached = { settings, instance };
+  cached = { fingerprint: key, instance };
   return instance;
 }
 
