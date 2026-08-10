@@ -107,7 +107,6 @@
   --neutral-500: #696973;
   --neutral-550: #63636D;
   --neutral-600: #52525B;
-  --neutral-650: #46464F;
   --neutral-675: #43434E;
   --neutral-700: #3B3B43;
   --neutral-750: #2E2E36;
@@ -164,7 +163,7 @@
   --border-subtle: var(--neutral-100);
   --border-default: var(--neutral-200);
   --border-strong: var(--neutral-300);
-  --border-control: var(--neutral-650);
+  --border-control: var(--neutral-450);
 
   --ink-primary: var(--neutral-900);
   --ink-secondary: var(--neutral-600);
