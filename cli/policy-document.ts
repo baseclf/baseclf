@@ -57,6 +57,9 @@ export interface Statement {
  * wrong, and the message from `PolicyError` says which rule it broke.
  */
 export interface PolicyDocument {
+  /**
+   * The parsed form. Used to decide whether the document is allowed, never stored.
+   */
   readonly definition: TableDefinition;
   /**
    * The binds exactly as written.
@@ -67,6 +70,25 @@ export interface PolicyDocument {
    * load, so what goes into `_policy_binds` has to be the original body.
    */
   readonly binds: Readonly<Record<string, unknown>>;
+  /**
+   * The policies exactly as written.
+   *
+   * 🔴 The same reason as `binds`, and it was learned the hard way. An earlier version
+   * stored `definition.policies`, which is the **compiled AST**: a `using` written as
+   * `{"author_id":{"_eq":"$auth.uid"}}` was stored as
+   * `{"kind":"compare","column":"author_id",…}`. `loadRegistry` feeds the stored
+   * column straight back into `parseTableDefinition`, which reads the source grammar,
+   * so nothing written that way could ever be read back.
+   *
+   * It fails loudly, which is the one mercy, but it fails for the **whole registry**:
+   * one bad row and `/rest/v1/*` answers 500 for every table on the deployment,
+   * including tables configured before this command existed.
+   *
+   * ⚠️ The rule this file now follows without exception: **parse to decide, store the
+   * source.** The parse result is an answer to "may this be stored", not a value to
+   * store.
+   */
+  readonly policies: readonly Readonly<Record<string, unknown>>[];
 }
 
 export function readPolicyDocument(text: string): PolicyDocument {
@@ -97,7 +119,21 @@ export function readPolicyDocument(text: string): PolicyDocument {
     assertBindParses(definition.table, binds, name);
   }
 
-  return { definition, binds };
+  return { definition, binds, policies: extractPolicies(raw) };
+}
+
+/**
+ * The policy objects as written.
+ *
+ * Taken by position, and the parse above is what makes that safe: it has already
+ * confirmed `policies` is an array of well formed objects with unique names, so
+ * `definition.policies[i]` and this array describe the same policy.
+ */
+function extractPolicies(raw: unknown): readonly Readonly<Record<string, unknown>>[] {
+  if (typeof raw !== 'object' || raw === null) return [];
+  const value = (raw as { policies?: unknown }).policies;
+  if (!Array.isArray(value)) return [];
+  return value as readonly Readonly<Record<string, unknown>>[];
 }
 
 function extractBinds(raw: unknown): Readonly<Record<string, unknown>> {
@@ -167,18 +203,30 @@ function json(value: unknown): string | null {
   return value === undefined ? null : JSON.stringify(value);
 }
 
-function policyRow(table: string, policy: PolicyDef): Statement {
+/**
+ * One row, built from the SOURCE policy rather than the parsed one.
+ *
+ * `parsed` is passed only for the fields the parser normalises and the registry
+ * re-derives identically: the name, the operation and the roles are plain strings and
+ * arrays either way. Everything that is an expression comes from `source`, because an
+ * expression is where the two grammars differ.
+ */
+function policyRow(
+  table: string,
+  parsed: PolicyDef,
+  source: Readonly<Record<string, unknown>>,
+): Statement {
   return {
     sql: `INSERT INTO "_policies" (${POLICY_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     params: [
       table,
-      policy.name,
-      policy.operation,
-      JSON.stringify(policy.roles),
-      json(policy.using),
-      json(policy.check),
-      json(policy.columns),
-      json(policy.set),
+      parsed.name,
+      parsed.operation,
+      JSON.stringify(parsed.roles),
+      json(source['using']),
+      json(source['check']),
+      json(source['columns']),
+      json(source['set']),
     ],
   };
 }
@@ -208,8 +256,15 @@ export function writeStatements(document: PolicyDocument, nextVersion: number): 
     });
   }
 
-  for (const policy of definition.policies) {
-    statements.push(policyRow(table, policy));
+  for (const [index, policy] of definition.policies.entries()) {
+    const source = document.policies[index];
+    if (source === undefined) {
+      // Cannot happen: the parse produced one entry per source entry. Checked rather
+      // than assumed, because the alternative is writing `undefined` into a column
+      // the registry reads as a policy.
+      throw new Error(`No source policy for "${policy.name}". The document changed under us.`);
+    }
+    statements.push(policyRow(table, policy, source));
   }
 
   // The switch. Nothing before this makes the table reachable, and this is one

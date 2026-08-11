@@ -26,11 +26,11 @@ import {
   BINDING_ID_FIELD,
   CloudflareError,
   type Credentials,
+  enableWorkersDev,
   ensureBucket,
   ensureDatabase,
   ensureNamespace,
   ensureSubdomain,
-  enableWorkersDev,
   type Fetcher,
   MODULE_CONTENT_TYPE,
   REQUIRED_COMPATIBILITY_FLAGS,
@@ -241,7 +241,9 @@ function api(state: State): Fetcher {
       if (state.namespaces.some((n) => n.title === title)) {
         // ⚠️ The behaviour that makes KV different: a duplicate title is a hard
         // failure, so provisioning cannot just create and shrug.
-        return Promise.resolve(refuse(10014, 'a namespace with this account ID and title already exists'));
+        return Promise.resolve(
+          refuse(10014, 'a namespace with this account ID and title already exists'),
+        );
       }
       const created = { id: `kv_${state.namespaces.length + 1}`, title };
       state.namespaces.push(created);
@@ -256,7 +258,8 @@ function api(state: State): Fetcher {
       const wanted = decodeURIComponent(byName[1] as string);
       const jurisdiction = new Headers(init?.headers).get('cf-r2-jurisdiction');
       const found = state.buckets.find(
-        (bucket) => bucket.name === wanted && (state.jurisdictions[wanted] ?? null) === jurisdiction,
+        (bucket) =>
+          bucket.name === wanted && (state.jurisdictions[wanted] ?? null) === jurisdiction,
       );
 
       return Promise.resolve(
@@ -681,9 +684,7 @@ describe('the compatibility date, whose default is 2021 rather than today', () =
     await uploadScript(api(state), CREDENTIALS, uploadOptions());
 
     expect(state.scripts.baseclf?.compatibilityDate).toBe('2026-07-28');
-    expect(state.scripts.baseclf?.compatibilityDate).not.toBe(
-      PLATFORM_DEFAULT_COMPATIBILITY_DATE,
-    );
+    expect(state.scripts.baseclf?.compatibilityDate).not.toBe(PLATFORM_DEFAULT_COMPATIBILITY_DATE);
   });
 
   it('refuses a malformed date before anything is sent', async () => {
@@ -758,9 +759,7 @@ describe('bindings_inherit, which decides whether a lost binding is loud', () =>
     // secret that was set an hour ago. Nothing errors, and every request afterwards
     // is answered by a Worker that cannot verify a token.
     const state = freshState();
-    const inherit: readonly ScriptBinding[] = [
-      { kind: 'inherit', name: 'BETTER_AUTH_SECRET' },
-    ];
+    const inherit: readonly ScriptBinding[] = [{ kind: 'inherit', name: 'BETTER_AUTH_SECRET' }];
 
     await expect(
       uploadScript(api(state), CREDENTIALS, uploadOptions({ bindings: inherit })),

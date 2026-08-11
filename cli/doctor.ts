@@ -152,7 +152,8 @@ function checkReachable(result: Awaited<ReturnType<typeof probe>>): Check {
         `The deployment did not answer: ${result.error}. A brand new address does this ` +
         'for about half a minute, while its certificate is issued. It also looks like ' +
         'this if the address is wrong.',
-      action: `Wait up to ${PROPAGATION_GRACE_SECONDS} seconds and run this again. If it ` +
+      action:
+        `Wait up to ${PROPAGATION_GRACE_SECONDS} seconds and run this again. If it ` +
         'does not change, check the URL and that the deploy finished.',
     };
   }
@@ -225,7 +226,11 @@ function checkSchema(result: Awaited<ReturnType<typeof probe>>): Check {
  */
 function checkKeys(result: Awaited<ReturnType<typeof probe>>): Check {
   if ('error' in result) {
-    return { name: 'keys', verdict: 'deny', detail: `/api/auth/jwks did not answer: ${result.error}` };
+    return {
+      name: 'keys',
+      verdict: 'deny',
+      detail: `/api/auth/jwks did not answer: ${result.error}`,
+    };
   }
 
   if (result.status !== 200) {
@@ -240,7 +245,9 @@ function checkKeys(result: Awaited<ReturnType<typeof probe>>): Check {
     };
   }
 
-  const keys = parse<{ keys?: readonly { kty?: string; alg?: string; crv?: string }[] }>(result.text);
+  const keys = parse<{ keys?: readonly { kty?: string; alg?: string; crv?: string }[] }>(
+    result.text,
+  );
   const first = keys?.keys?.[0];
 
   if (first === undefined) {
@@ -377,7 +384,8 @@ export async function runDoctor(baseUrl: string, fetcher: Fetcher = fetch): Prom
           name: 'url',
           verdict: 'deny',
           detail: `"${baseUrl}" is not a URL, so there is nothing to ask.`,
-          action: 'Pass the origin the deployment is served from, for example https://baseclf.example.workers.dev',
+          action:
+            'Pass the origin the deployment is served from, for example https://baseclf.example.workers.dev',
         },
       ],
     };

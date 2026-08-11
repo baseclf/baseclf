@@ -195,7 +195,8 @@ const VOICE_RULES: readonly { readonly pattern: RegExp; readonly why: string }[]
     why: 'filler verb from the banned list in DESIGN.md section 9.',
   },
   {
-    pattern: /\b(?:your data is safe|100% secure|completely secure|cannot be hacked|fully secure)\b/iu,
+    pattern:
+      /\b(?:your data is safe|100% secure|completely secure|cannot be hacked|fully secure)\b/iu,
     why: 'a safety claim. Rule 00 forbids these. Say what is enforced and name the caveat.',
   },
   {

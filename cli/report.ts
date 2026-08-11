@@ -16,7 +16,9 @@ import type { Check, DoctorReport } from './doctor.js';
 import { copyable, type Style, styledResultLine } from './output.js';
 
 function renderCheck(check: Check, style: Style): readonly string[] {
-  const lines: string[] = [styledResultLine(check.verdict, `${check.name}: ${check.detail}`, style)];
+  const lines: string[] = [
+    styledResultLine(check.verdict, `${check.name}: ${check.detail}`, style),
+  ];
 
   if (check.action !== undefined) lines.push(`  ${check.action}`);
   // At column zero, so a double-click selects it and nothing else. The one thing in

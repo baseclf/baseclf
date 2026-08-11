@@ -64,8 +64,27 @@ export class D1ApiError extends Error {
 
 interface QueryEnvelope {
   readonly success?: boolean;
-  readonly result?: readonly { readonly results?: readonly unknown[] }[];
+  readonly result?: readonly {
+    readonly results?: readonly unknown[];
+    readonly meta?: Record<string, unknown>;
+  }[];
   readonly errors?: readonly { readonly code?: number; readonly message?: string }[];
+}
+
+/**
+ * One statement's worth of answer.
+ *
+ * ⭐ `meta` is carried rather than dropped, and it is real. Measured on 2026-08-12:
+ * the endpoint returns `duration`, `rows_read`, `rows_written`, `changes`,
+ * `last_row_id`, `changed_db` and `size_after`, which is everything `D1Meta`
+ * declares. The first version of this returned an empty object and the type checker
+ * refused it, which was the right answer: `rows_read` is what D1 bills on
+ * (`rules/01` section D), so a transport that invented a zero would be lying about
+ * somebody's bill in any code that later looked.
+ */
+export interface QueryResult {
+  readonly rows: readonly unknown[];
+  readonly meta: Record<string, unknown>;
 }
 
 export interface Database {
@@ -126,7 +145,7 @@ export async function runSql(
   endpoint: D1Endpoint,
   sql: string,
   params: readonly unknown[] = [],
-): Promise<readonly (readonly unknown[])[]> {
+): Promise<readonly QueryResult[]> {
   const { accountId, token } = endpoint.credentials;
 
   const response = await endpoint.fetcher(
@@ -152,7 +171,41 @@ export async function runSql(
     );
   }
 
-  return (envelope.result ?? []).map((entry) => entry.results ?? []);
+  return (envelope.result ?? []).map((entry) => ({
+    rows: entry.results ?? [],
+    meta: entry.meta ?? {},
+  }));
+}
+
+/**
+ * The fields `D1Meta` declares, checked rather than assumed.
+ *
+ * ⭐ Measured on 2026-08-12: the endpoint really does return all of them. So this
+ * validates rather than fills in, and throws when one is missing.
+ *
+ * Filling a missing field with zero was the other option and it is the worse one.
+ * `rows_read` is what D1 bills on (`rules/01` section D), so a transport that
+ * invented a zero would be quietly wrong about somebody's bill in any code that
+ * later looked at it. A transport that stops is a transport somebody fixes.
+ */
+function asD1Meta(raw: Record<string, unknown>): D1Meta & Record<string, unknown> {
+  const NUMBERS = ['duration', 'size_after', 'rows_read', 'rows_written', 'last_row_id', 'changes'];
+
+  for (const field of NUMBERS) {
+    if (typeof raw[field] !== 'number') {
+      throw new D1ApiError(
+        `The database did not report "${field}". This transport claims to return the ` +
+          'same metadata the binding does, and it cannot.',
+        500,
+      );
+    }
+  }
+
+  if (typeof raw['changed_db'] !== 'boolean') {
+    throw new D1ApiError('The database did not report "changed_db".', 500);
+  }
+
+  return raw as D1Meta & Record<string, unknown>;
 }
 
 /**
@@ -184,9 +237,17 @@ class RestStatement {
     return this;
   }
 
-  async all<T = unknown>(): Promise<{ results: T[]; success: true; meta: Record<string, never> }> {
-    const [rows = []] = await runSql(this.#endpoint, this.#sql, this.#params);
-    return { results: rows as T[], success: true, meta: {} };
+  async all<T = unknown>(): Promise<{
+    results: T[];
+    success: true;
+    meta: D1Meta & Record<string, unknown>;
+  }> {
+    const [first] = await runSql(this.#endpoint, this.#sql, this.#params);
+    return {
+      results: (first?.rows ?? []) as T[],
+      success: true,
+      meta: asD1Meta(first?.meta ?? {}),
+    };
   }
 
   first(): never {

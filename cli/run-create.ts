@@ -143,7 +143,9 @@ async function resolveCredential(
     const whoami = await host.refreshLogin();
 
     if (whoami === null) {
-      write(styledResultLine('deny', 'That Cloudflare login needs refreshing, and wrangler', style));
+      write(
+        styledResultLine('deny', 'That Cloudflare login needs refreshing, and wrangler', style),
+      );
       write(note('could not be run to do it. These logins last an hour.'));
       write(note(''));
       write(note('Run this once, then try again:'));

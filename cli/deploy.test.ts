@@ -9,10 +9,9 @@
  */
 
 import { describe, expect, it } from 'vitest';
-
-import { isPropagating, PROPAGATION_GRACE_SECONDS, type Fetcher } from './doctor.js';
-import { findVoiceViolations } from './output.js';
 import { POLL_INTERVAL_MS, waitForDeployment } from './deploy.js';
+import { type Fetcher, isPropagating, PROPAGATION_GRACE_SECONDS } from './doctor.js';
+import { findVoiceViolations } from './output.js';
 
 const URL_UNDER_TEST = 'https://shop.someone.workers.dev';
 
@@ -83,7 +82,11 @@ describe('an address that never comes up', () => {
   it('gives up eventually rather than polling forever', async () => {
     const { fetcher, calls } = answering([500]);
 
-    await waitForDeployment(fetcher, URL_UNDER_TEST, { ...instant, graceSeconds: 9, intervalMs: 3_000 });
+    await waitForDeployment(fetcher, URL_UNDER_TEST, {
+      ...instant,
+      graceSeconds: 9,
+      intervalMs: 3_000,
+    });
 
     expect(calls).toHaveLength(3);
   });

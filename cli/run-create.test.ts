@@ -310,7 +310,10 @@ describe('when it cannot start', () => {
   it('refreshes and carries on when the credential has aged out', async () => {
     // The case the refresh was written for. These last an hour, so anybody who logged
     // in earlier in the day lands here.
-    const h = harness({ authFileText: authFile('2026-08-11T23:00:00.000Z'), refreshTo: authFile() });
+    const h = harness({
+      authFileText: authFile('2026-08-11T23:00:00.000Z'),
+      refreshTo: authFile(),
+    });
 
     expect(await runCreate([], h.write, PLAIN, h.host)).toBe('ok');
     expect(h.refreshAttempts()).toBe(1);

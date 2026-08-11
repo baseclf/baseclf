@@ -13,10 +13,10 @@ import { describe, expect, it } from 'vitest';
 
 import {
   bindingsFor,
+  CREATE_PLAN,
   checkFrontendOrigin,
   checkProjectName,
   collectAnswers,
-  CREATE_PLAN,
   DEFAULT_FRONTEND_ORIGIN,
   DEFAULT_PROJECT_NAME,
   deriveResourceNames,
@@ -24,8 +24,8 @@ import {
   MAX_ANSWER_ATTEMPTS,
   promptFor,
   REQUIRED_BINDING_NAMES,
-  SIGNING_SECRET_NAME,
   SECRET_BYTES,
+  SIGNING_SECRET_NAME,
   varsFor,
 } from './create.js';
 import { findVoiceViolations } from './output.js';

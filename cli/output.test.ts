@@ -59,7 +59,7 @@ describe('the palette', () => {
 
   it('emits no escape codes when the caller says the terminal has no colour', () => {
     for (const verdict of VERDICTS) {
-      // eslint-disable-next-line no-control-regex
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: the escape byte is the subject. These assertions are about ANSI codes, so a regex without a control character would be a regex about something else.
       expect(styledResultLine(verdict, 'text', PLAIN)).not.toMatch(/\[/);
     }
   });
@@ -70,12 +70,14 @@ describe('the palette', () => {
     expect(line).toContain('[31m');
     // The text is left unpainted on purpose: a long warning wrapped in escape codes
     // is harder to read, and a piped log fills with them.
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: the escape byte is the subject. A regex about ANSI codes without a control character in it would be a regex about something else.
     expect(line).toMatch(/\[0m the table is not exposed$/);
   });
 
   it('colours the mark for each verdict with that verdict, and no other', () => {
     for (const verdict of VERDICTS) {
       const line = styledResultLine(verdict, 'text', { colour: true });
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: the escape byte is the subject. A regex about ANSI codes without a control character in it would be a regex about something else.
       const codes = [...line.matchAll(/\[(\d+)m/g)].map((match) => Number(match[1]));
 
       expect(codes).toEqual([ansiFor(verdict), 0]);

@@ -36,7 +36,10 @@ const healthy: Env = {
 /** Routes every request into the worker, so doctor is asking a real deployment. */
 function against(deployment: Env): Fetcher {
   return (url, init) =>
-    worker.fetch(new Request(url, { ...init, headers: { 'CF-Connecting-IP': '198.51.100.20' } }), deployment);
+    worker.fetch(
+      new Request(url, { ...init, headers: { 'CF-Connecting-IP': '198.51.100.20' } }),
+      deployment,
+    );
 }
 
 /** Answers whatever the test says, for failures a real database cannot be put into. */
@@ -252,7 +255,9 @@ describe('input and infrastructure that is simply absent', () => {
     // Everything downstream still fails hard: those endpoints really did not answer,
     // and reporting them as merely young would hide a deployment that is broken.
     expect(
-      report.checks.filter((check) => check.name !== 'reachable').every((c) => c.verdict === 'deny'),
+      report.checks
+        .filter((check) => check.name !== 'reachable')
+        .every((c) => c.verdict === 'deny'),
     ).toBe(true);
   });
 
@@ -304,7 +309,10 @@ describe('what the reader actually sees', () => {
     // in this environment (no provider is configured), so the closing line would be
     // the not-ok one and this would be asserting nothing.
     const allWell = standIn({
-      '/api/auth/jwks': { status: 200, body: '{"keys":[{"kty":"EC","alg":"ES256","crv":"P-256"}]}' },
+      '/api/auth/jwks': {
+        status: 200,
+        body: '{"keys":[{"kty":"EC","alg":"ES256","crv":"P-256"}]}',
+      },
       '/api/auth/_diagnose': { status: 200, body: '{"secret_configured":true,"warnings":[]}' },
     });
     const report = await runDoctor(BASE_URL, allWell);

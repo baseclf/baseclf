@@ -22,7 +22,7 @@
  * stopped waiting, and what to run next.
  */
 
-import { isPropagating, PROPAGATION_GRACE_SECONDS, type Fetcher } from './doctor.js';
+import { type Fetcher, isPropagating, PROPAGATION_GRACE_SECONDS } from './doctor.js';
 
 /** How long between attempts. Short enough to feel prompt, long enough not to hammer. */
 export const POLL_INTERVAL_MS = 3_000;

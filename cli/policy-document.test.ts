@@ -151,6 +151,48 @@ describe('the order the write happens in', () => {
     }
   });
 
+  it('🔴 writes every expression in the source grammar the registry reads back', () => {
+    // The bug this test exists for, found by an audit and not by anything here.
+    //
+    // `writeStatements` used to serialise `definition.policies`, which is the parsed
+    // AST: a `using` written as {"author_id":{"_eq":"$auth.uid"}} was stored as
+    // {"kind":"compare","column":"author_id",...}. `loadRegistry` feeds the stored
+    // column straight back into `parseTableDefinition`, which reads the source
+    // grammar, so nothing written that way could ever be read back.
+    //
+    // It fails loudly, and it fails for the WHOLE registry: one such row and
+    // /rest/v1/* answers 500 for every table on the deployment, including tables
+    // configured before this command existed.
+    //
+    // The sibling test below covered binds, which is the one column that already
+    // took its value from the source document, so it passed throughout.
+    const using = { author_id: { _eq: '$auth.uid' } };
+    const check = { status: { _eq: 'draft' } };
+
+    const parsed = readPolicyDocument(
+      document({
+        policies: [
+          {
+            name: 'update_own',
+            for: 'update',
+            to: ['authenticated'],
+            using,
+            check,
+            columns: ['title'],
+          },
+        ],
+      }),
+    );
+
+    const insert = writeStatements(parsed, 1).find(
+      (s) => s.sql.includes('_policies') && s.sql.includes('INSERT'),
+    );
+
+    expect(JSON.parse(String(insert?.params[4]))).toEqual(using);
+    expect(JSON.parse(String(insert?.params[5]))).toEqual(check);
+    expect(JSON.parse(String(insert?.params[6]))).toEqual(['title']);
+  });
+
   it('writes binds in the form they were written, not the expanded form', () => {
     // The parser expands binds into the policies that use them. The registry stores
     // them unexpanded and expands them again on every load, so writing the expanded

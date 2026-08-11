@@ -241,7 +241,10 @@ export function parseEnvFile(text: string): Readonly<Record<string, string>> {
     const equals = line.indexOf('=');
     if (equals <= 0) continue;
 
-    const name = line.slice(0, equals).trim().replace(/^export\s+/, '');
+    const name = line
+      .slice(0, equals)
+      .trim()
+      .replace(/^export\s+/, '');
     if (!KEY_PATTERN.test(name)) continue;
 
     const rest = line.slice(equals + 1).trim();
