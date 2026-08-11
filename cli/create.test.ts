@@ -30,7 +30,7 @@ import {
 } from './create.js';
 import { findVoiceViolations } from './output.js';
 
-describe('the project name, which has to suit four services at once', () => {
+describe('the project name, which has to suit three services at once', () => {
   it('accepts the default it offers, or the default is not an answer', () => {
     expect(checkProjectName(DEFAULT_PROJECT_NAME).ok).toBe(true);
   });
@@ -92,11 +92,19 @@ describe('the frontend origin, whose failure mode is an opaque CORS error', () =
 });
 
 describe('resource names, derived rather than asked for', () => {
+  it('🔴 does not include a KV namespace, since nothing reads one', () => {
+    // Provisioning used to create one because the original plan listed it. Nothing
+    // in `src/` reads `env.CACHE`, and the JWKS caching KV was meant for uses the
+    // Cache API instead. Creating it put a resource on somebody's account, and a
+    // step in their onboarding, for something that does not exist.
+    expect(Object.keys(deriveResourceNames('shop'))).toEqual(['script', 'database', 'bucket']);
+    expect(REQUIRED_BINDING_NAMES).not.toContain('CACHE');
+  });
+
   it('gives each service its own name so an account stays readable', () => {
     expect(deriveResourceNames('shop')).toEqual({
       script: 'shop',
       database: 'shop',
-      namespace: 'shop-cache',
       bucket: 'shop-objects',
     });
   });
@@ -104,7 +112,7 @@ describe('resource names, derived rather than asked for', () => {
 
 describe('⭐ bindings, where a wrong name deploys and then answers undefined', () => {
   const names = deriveResourceNames('shop');
-  const bindings = bindingsFor(names, 'd1_uuid', 'kv_id', { A_VAR: 'v' }, false);
+  const bindings = bindingsFor(names, 'd1_uuid', { A_VAR: 'v' }, false);
 
   it('names the bindings what src/ reads, not what the project is called', () => {
     // The trap from the other side. `src/` reads env.DB, env.CACHE and env.BUCKET
@@ -142,7 +150,7 @@ describe('⭐ bindings, where a wrong name deploys and then answers undefined', 
   });
 
   it('inherits it on a redeploy, so an upload cannot drop one already set', () => {
-    const redeploy = bindingsFor(names, 'd1_uuid', 'kv_id', {}, true);
+    const redeploy = bindingsFor(names, 'd1_uuid', {}, true);
 
     expect(redeploy).toContainEqual({ kind: 'inherit', name: SIGNING_SECRET_NAME });
   });

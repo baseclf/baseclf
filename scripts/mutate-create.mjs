@@ -187,6 +187,16 @@ const MUTATIONS = [
     replace: 'return `${question}\\n  \\n  [${fallback}] `;',
   },
   {
+    // Provisioning used to create a KV namespace because the original plan listed
+    // one. Nothing reads `env.CACHE`, so it was a resource on somebody's account
+    // and a step in their onboarding for something that does not exist.
+    name: 'the KV namespace put back, which nothing reads',
+    file: CREATE,
+    expect: 'the no-KV-namespace test',
+    find: / {4}bucket: `\$\{project\}-objects`,/,
+    replace: '    namespace: `${project}-cache`,\n    bucket: `${project}-objects`,',
+  },
+  {
     // Printing the URL and stopping sends the reader to a 404 at the exact moment
     // they are deciding whether this product works. `rules/02` section C2.
     name: 'the wait for the address dropped from the plan',

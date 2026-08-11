@@ -11,7 +11,7 @@
  * There are two, and the reasoning for the cuts matters more than the two that
  * survived:
  *
- *   1. **A project name.** It names four resources on the reader's own account, so
+ *   1. **A project name.** It names three resources on the reader's own account, so
  *      a default that collides would take over somebody else's deployment on the
  *      second run rather than making a second one.
  *   2. **The origin the frontend runs on.** Without it, a browser on any other
@@ -40,14 +40,14 @@ import type { ScriptBinding } from './cloudflare.js';
 /**
  * What a project may be called, and why this is stricter than any one service.
  *
- * The name becomes a Worker script, a D1 database, a KV namespace title and an R2
- * bucket, and those four do not share a naming rule. This project has not measured
- * where each one draws its line, and `CLAUDE.md` is explicit that an unmeasured
- * limit is to be reported as unknown rather than inferred.
+ * The name becomes a Worker script, a D1 database and an R2 bucket, and those three
+ * do not share a naming rule. This project has not measured where each one draws
+ * its line, and `CLAUDE.md` is explicit that an unmeasured limit is to be reported
+ * as unknown rather than inferred.
  *
  * So the pattern is the conservative intersection: lowercase letters, digits and
  * hyphens, starting with a letter, ending with a letter or digit. It is narrower
- * than any of the four almost certainly allows. That costs a reader the occasional
+ * than any of the three almost certainly allows. That costs a reader the occasional
  * underscore and buys never discovering the real limit halfway through
  * provisioning, with two resources created and two not.
  *
@@ -104,7 +104,7 @@ export function checkProjectName(name: string): NameCheck {
       reason:
         'A project name can use lowercase letters, digits and hyphens, and has to start ' +
         'with a letter. That is narrower than Cloudflare requires, on purpose: the name ' +
-        'has to suit four different services at once.',
+        'has to suit three different services at once.',
     };
   }
   return { ok: true };
@@ -141,24 +141,36 @@ export function checkFrontendOrigin(value: string): NameCheck {
 export interface ResourceNames {
   readonly script: string;
   readonly database: string;
-  readonly namespace: string;
   readonly bucket: string;
 }
 
 /**
- * The four resource names, derived rather than asked for.
+ * ⚠️ There is no KV namespace here, and there used to be.
  *
- * Four more questions would buy nothing: nobody has an opinion about what the KV
- * namespace behind their deployment is called, and every extra field is another
- * place to stop. Suffixed rather than reusing the bare name for all four, because
- * an account holding several of these should be readable in the Cloudflare
- * dashboard without opening anything.
+ * The plan this project started from listed one, and provisioning was written to
+ * create it. Nothing reads it: `grep` over `src/` finds no `env.CACHE`, no
+ * `KVNamespace`, and `Env` declares only `DB` and `BUCKET`. The JWKS caching that
+ * KV was meant for uses the Cache API instead (`auth/verify.ts`), which is a
+ * different decision made for a measured reason: KV has a sixty second minimum TTL
+ * (`rules/02` section E).
+ *
+ * So creating one would put a resource on somebody's account, and a step in their
+ * onboarding, for something that does not exist. It comes back when code that
+ * reads it does, and not before.
+ */
+
+/**
+ * The resource names, derived rather than asked for.
+ *
+ * More questions would buy nothing: nobody has an opinion about what the bucket
+ * behind their deployment is called, and every extra field is another place to
+ * stop. The bucket is suffixed rather than sharing the bare name, so an account
+ * holding several of these is readable in the dashboard without opening anything.
  */
 export function deriveResourceNames(project: string): ResourceNames {
   return {
     script: project,
     database: project,
-    namespace: `${project}-cache`,
     bucket: `${project}-objects`,
   };
 }
@@ -167,10 +179,15 @@ export function deriveResourceNames(project: string): ResourceNames {
  * The bindings the Worker is deployed with.
  *
  * ⚠️ The binding NAMES are fixed and are not derived from the project name. `src/`
- * reads `env.DB`, `env.BUCKET` and `env.CACHE` as literals, so a deployment whose
- * bindings are named after the project would upload cleanly, report success, and
- * answer every request with an undefined binding. That is the first of the four
- * traps in `cloudflare.ts`, reached from the other direction.
+ * reads `env.DB` and `env.BUCKET` as literals, so a deployment whose bindings are
+ * named after the project would upload cleanly, report success, and answer every
+ * request with an undefined binding. That is the first of the four traps in
+ * `cloudflare.ts`, reached from the other direction.
+ *
+ * 🔴 This is not hypothetical. On 2026-08-11 `wrangler r2 bucket create` offered to
+ * add the binding to the config and suggested `baseclf_objects`, derived from the
+ * bucket name. Accepting it deployed a Worker with no `env.BUCKET`, and nothing on
+ * any surface said so. `rules/02` section B1.
  *
  * The resource id for each goes under a different field per type, which is why this
  * builds `ScriptBinding` values rather than raw objects: `BINDING_ID_FIELD` is the
@@ -179,7 +196,6 @@ export function deriveResourceNames(project: string): ResourceNames {
 export function bindingsFor(
   names: ResourceNames,
   databaseId: string,
-  namespaceId: string,
   vars: Readonly<Record<string, string>>,
   /**
    * Whether the deployment already has a signing secret to carry forward.
@@ -200,7 +216,6 @@ export function bindingsFor(
 ): readonly ScriptBinding[] {
   return [
     { kind: 'resource', type: 'd1', name: 'DB', id: databaseId },
-    { kind: 'resource', type: 'kv_namespace', name: 'CACHE', id: namespaceId },
     { kind: 'resource', type: 'r2_bucket', name: 'BUCKET', id: names.bucket },
     ...Object.entries(vars).map(
       ([name, value]): ScriptBinding => ({ kind: 'text', name, value }),
@@ -215,11 +230,7 @@ export function bindingsFor(
 export const SIGNING_SECRET_NAME = 'BETTER_AUTH_SECRET';
 
 /** The binding names `src/` reads. Exported so a test can hold them to the code. */
-export const REQUIRED_BINDING_NAMES: readonly string[] = Object.freeze([
-  'DB',
-  'CACHE',
-  'BUCKET',
-]);
+export const REQUIRED_BINDING_NAMES: readonly string[] = Object.freeze(['DB', 'BUCKET']);
 
 /**
  * The environment variables a deployment cannot start without.
@@ -409,7 +420,6 @@ export interface CreatePlanStep {
 export const CREATE_PLAN: readonly CreatePlanStep[] = Object.freeze([
   { title: 'Check the Cloudflare login', consequence: 'nothing can be created without it' },
   { title: 'Create the database', consequence: 'the engine has nowhere to keep policies' },
-  { title: 'Create the cache namespace', consequence: 'signing keys are fetched every request' },
   { title: 'Create the bucket', consequence: 'uploads have nowhere to go' },
   { title: 'Claim the workers.dev subdomain', consequence: 'the deployment has no address' },
   { title: 'Upload the Worker', consequence: 'nothing is deployed' },
