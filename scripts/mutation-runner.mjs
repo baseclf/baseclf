@@ -16,6 +16,16 @@
  *      survive for a known reason, and this reports it when one of them stops
  *      surviving, because that means the recorded reason has gone stale.
  *
+ *   3. 🔴 A mutation that makes the code loop forever is a BROKEN mutation, not a
+ *      surviving one, and this runner cannot tell the difference: both look like a
+ *      suite that never returns. Worse, the restore below lives in a `finally`, so
+ *      killing the run leaves the source file on disk in its mutated state, and an
+ *      untracked file cannot be recovered with git. Happened on 2026-08-11 with an
+ *      unbounded poll loop, whose `knownSurvivor` note had already said it would
+ *      hang; the note was the warning. **Do not write a mutation that removes a
+ *      loop bound.** Cover the bound from the other side, by counting iterations
+ *      against a known budget.
+ *
  * Callers pass their own mutation list. See `mutate-jwks-brake.mjs` for the shape.
  */
 

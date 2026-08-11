@@ -33,6 +33,22 @@ import type { Verdict } from './output.js';
 /** How long a caller may wait for a fresh deployment to start answering. */
 export const PROPAGATION_GRACE_SECONDS = 45;
 
+/**
+ * Whether a status is what a workers.dev URL does while it is still coming up.
+ *
+ * A new one answers 404, then 500, then 200, over about half a minute, and the 404
+ * carries `error code: 1042`, which in that window does not mean what it means at
+ * any other time (`rules/02` section C2).
+ *
+ * Exported and shared rather than written twice. `create` waits on this and
+ * `doctor` reports on it, and two copies of one judgment is exactly the shape that
+ * produced debt 31 and 35, where the diagnostic and the CORS layer disagreed about
+ * what counted as a match and neither was obviously wrong on its own.
+ */
+export function isPropagating(status: number): boolean {
+  return status === 404 || status >= 500;
+}
+
 export interface Check {
   /** Short, lowercase, stable. Used as the line label and in tests. */
   readonly name: string;
@@ -129,7 +145,7 @@ function checkReachable(result: Awaited<ReturnType<typeof probe>>): Check {
     return { name: 'reachable', verdict: 'allow', detail: 'The deployment answers on /health.' };
   }
 
-  if (result.status === 404 || result.status >= 500) {
+  if (isPropagating(result.status)) {
     return {
       name: 'reachable',
       verdict: 'attention',
