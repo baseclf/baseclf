@@ -24,7 +24,7 @@ import { decideToken, explainRefusal } from './token.js';
 //
 // They read as placeholders rather than as random strings, because a fake that looks
 // exactly like a real token is a liability in a public repository: a secret scanner
-// flags it, a reader cannot tell, and  blocked the commit
+// flags it, a reader cannot tell, and `scripts/guard-commit.mjs` blocked the commit
 // that first used realistic-looking ones. The guard was right to. Its pattern needs
 // twenty or more characters after the prefix, so these are shorter than that, which
 // also means nothing here can be mistaken for a credential.
