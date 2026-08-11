@@ -19,6 +19,7 @@ import { diagnose } from './auth/diagnose.js';
 import { type AuthEnv, authConfig, getAuth, isAuthPath, verifierConfig } from './auth/index.js';
 import { providerStatuses } from './auth/providers.js';
 import { authenticate } from './auth/verify.js';
+import { applyEngineSchema } from './db/bootstrap.js';
 import { getCatalogue } from './db/index.js';
 import type { AuthCtx } from './policy/index.js';
 import { getRegistry } from './policy/index.js';
@@ -339,6 +340,41 @@ async function ensureRateLimitTableOnce(db: D1Database): Promise<void> {
 /** For tests, which start from a database that has just been rebuilt. */
 export function resetRateLimitTableMemo(): void {
   rateLimitTableReady = null;
+}
+
+/**
+ * The engine's own tables, created once per isolate if this deployment lacks them.
+ *
+ * Same shape and the same reasoning as the rate limit memo above, and the same
+ * caveat: provisioning should create these up front, and this is the floor rather
+ * than the plan. What it buys is that a deployment nobody provisioned answers
+ * requests instead of returning a D1 error naming a table its owner has never
+ * heard of. Until this existed, that was every deployment, because nothing outside
+ * the tests applied `POLICY_SCHEMA` or `STORAGE_SCHEMA`.
+ *
+ * Concurrent isolates racing is harmless for the same reason: every statement is
+ * `IF NOT EXISTS`, asserted in `applyEngineSchema` rather than assumed. The memo
+ * is only kept on success, so a failure is retried by the next request rather than
+ * remembered for the life of the isolate.
+ *
+ * ⚠️ This does not create Better Auth's tables, and that is deliberate rather than
+ * an omission. See the note at the top of `db/bootstrap.ts`: repairing a drifted
+ * auth schema fails partway and does not roll back, so it is not something to do
+ * on a path nobody asked to run.
+ */
+let engineSchemaReady: Promise<void> | null = null;
+
+async function ensureEngineSchemaOnce(db: D1Database): Promise<void> {
+  engineSchemaReady ??= applyEngineSchema(db).catch((error: unknown) => {
+    engineSchemaReady = null;
+    throw error;
+  });
+  await engineSchemaReady;
+}
+
+/** For tests, which start from a database that has just been rebuilt. */
+export function resetEngineSchemaMemo(): void {
+  engineSchemaReady = null;
 }
 
 /**
@@ -665,11 +701,17 @@ async function respond(request: Request, env: Env): Promise<Response> {
 
     const object = storageTargetFromPath(url.pathname);
     if (object !== null) {
+      // Both data paths need the engine's tables and the auth path does not, so
+      // the cost of the check sits on the two that use it. See the note on
+      // `ensureEngineSchemaOnce`: this is the floor, not the plan.
+      await ensureEngineSchemaOnce(env.DB);
       return await handleStorage(request, env, object);
     }
 
     const table = tableFromPath(url.pathname);
     if (table !== null) {
+      await ensureEngineSchemaOnce(env.DB);
+
       if (request.method === 'GET' || request.method === 'HEAD') {
         return await handleRead(request, env, table);
       }
