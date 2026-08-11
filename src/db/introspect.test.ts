@@ -1,6 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { beforeAll, describe, expect, it } from 'vitest';
 
+import type { D1Executor } from './dialect.js';
 import { getCatalogue, introspect, resetCatalogue } from './introspect.js';
 
 beforeAll(async () => {
@@ -169,5 +170,40 @@ describe('getCatalogue', () => {
     const after = await getCatalogue(env.DB);
     expect(after).not.toBe(before);
     expect(after.hasTable('articles')).toBe(true);
+  });
+
+  it('retries after a failed read instead of memoising the failure', async () => {
+    // 🔴 This was `cached ??= introspect(executor)`, which keeps a rejected promise
+    // and never replaces it. Of the three memos that had that shape this is the one
+    // that matters most, and it is not the one an audit reported: introspection is
+    // PRAGMA sweeps, so it fails for reasons that have nothing to do with the data.
+    // A timeout, or the six connection limit in `rules/02` section A, and the isolate
+    // could never read a schema again.
+    //
+    // Written here as well as in `utils/memo.test.ts` because sharing a helper is a
+    // claim about this file, and a claim about this file needs a test in it.
+    resetCatalogue();
+
+    let failNext = true;
+    const flaky: D1Executor = {
+      prepare: (query: string) => {
+        if (failNext) {
+          failNext = false;
+          return {
+            bind: () => flaky.prepare(query),
+            all: async () => {
+              throw new Error('D1 was busy');
+            },
+          } as unknown as D1PreparedStatement;
+        }
+        return env.DB.prepare(query);
+      },
+      batch: (statements) => env.DB.batch(statements),
+    };
+
+    await expect(getCatalogue(flaky)).rejects.toThrow();
+
+    const catalogue = await getCatalogue(flaky);
+    expect(catalogue.hasTable('articles')).toBe(true);
   });
 });

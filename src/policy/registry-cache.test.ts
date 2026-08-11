@@ -1,19 +1,25 @@
 /**
  * What the registry cache does, measured rather than described.
  *
- * These three behaviours were reported by an audit of the policy write path and are
- * verified here rather than taken on the report's word. Two of them are known and the
- * registry's own comment says so; the value of writing them down is that the CLI was
- * shipping comments claiming the opposite, and a claim nobody can test is a claim that
- * stays wrong.
+ * These behaviours were reported by an audit of the policy write path and are verified
+ * here rather than taken on the report's word. The value of writing them down is that
+ * the CLI was shipping comments claiming the opposite, and a claim nobody can test is a
+ * claim that stays wrong.
  *
- * None of these is a leak. All three are the difference between what an operator is
- * told happened and what actually happened.
+ * None of them is a leak. They are the difference between what an operator is told
+ * happened and what actually happened.
+ *
+ * ⚠️ **F4 is now a fix rather than a finding, and its test asserts the opposite of
+ * what it used to.** That is the one edit `rules/03` section G would otherwise forbid,
+ * so it is called out here: the old assertion described a bug, the bug is gone, and a
+ * test still demanding it would be demanding the bug back. F2 and F3 are unchanged and
+ * still describe live behaviour.
  */
 
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { getRegistry, loadRegistry, resetRegistry } from './registry.js';
+import type { D1Executor } from '../db/dialect.js';
+import { getRegistry, resetRegistry } from './registry.js';
 import { POLICY_SCHEMA } from './schema.js';
 
 const APPLICATION = [
@@ -105,14 +111,43 @@ describe('F2: what a version bump actually invalidates', () => {
   });
 });
 
+/**
+ * An executor whose first query never answers until the test says so.
+ *
+ * Needed because the race below is about what happens *while* a load is in flight,
+ * and a real D1 answers too quickly to get in between.
+ */
+function gatedExecutor(): { executor: D1Executor; fail: (cause: Error) => void } {
+  let reject: (cause: Error) => void = () => {};
+  const gate = new Promise<never>((_, rejectGate) => {
+    reject = rejectGate;
+  });
+
+  const statement = {
+    bind: () => statement,
+    all: () => gate,
+    first: () => gate,
+    run: () => gate,
+    raw: () => gate,
+  } as unknown as D1PreparedStatement;
+
+  return {
+    executor: { prepare: () => statement, batch: async () => [] } as unknown as D1Executor,
+    fail: (cause) => {
+      reject(cause);
+    },
+  };
+}
+
 describe('F4: what happens to an isolate that saw a broken registry', () => {
-  it('keeps failing after the data is repaired, because the rejection is memoised', async () => {
-    // `cached ??= loadRegistry(...)` stores the promise. A rejected promise is not
-    // null, so `??=` never replaces it. Reasoning about that is easy to get wrong,
-    // which is why it is measured.
+  it('recovers once the data is repaired, rather than staying broken until it recycles', async () => {
+    // 🔴 This test asserted the opposite until the bug it described was fixed.
+    // `cached ??= loadRegistry(...)` stored the promise, and a rejected promise is
+    // not null, so `??=` never replaced it: one malformed row broke the isolate for
+    // as long as it lived, and repairing the data changed nothing.
     //
-    // Fail-closed, so not a leak. It matters because it turns any single malformed
-    // row from "broken until fixed" into "broken until every isolate recycles".
+    // Fail-closed throughout, so this was never a leak. What it was is an outage with
+    // no bound on it, which the operator could not end by fixing the cause.
     await env.DB.prepare(INSERT_POLICY)
       .bind(
         'posts',
@@ -133,17 +168,57 @@ describe('F4: what happens to an isolate that saw a broken registry', () => {
 
     await expect(getRegistry(env.DB)).rejects.toThrow();
 
+    // Asked twice while still broken, because a memo that forgets a failure has to
+    // keep failing for the right reason rather than because it cached one.
+    await expect(getRegistry(env.DB)).rejects.toThrow();
+
     // Repair it, exactly as an operator would.
     await env.DB.prepare('DELETE FROM _policies WHERE table_name = ?').bind('posts').run();
     await env.DB.prepare(INSERT_POLICY)
       .bind(...policyRow('read', ['id']))
       .run();
 
-    // A fresh load is fine, so the data really is repaired.
-    await expect(loadRegistry(env.DB)).resolves.toBeDefined();
+    const registry = await getRegistry(env.DB);
+    expect(registry.candidates('posts', 'select', 'authenticated')[0]?.columns).toEqual(['id']);
 
-    // The isolate is not.
-    await expect(getRegistry(env.DB)).rejects.toThrow();
+    // And it is a memo again: the repaired load is held, not repeated.
+    expect(await getRegistry(env.DB)).toBe(registry);
+  });
+
+  it('does not let a failure discard the load that replaced it', async () => {
+    // ⚠️ The obvious fix clears the memo from the failure handler unconditionally,
+    // and that is wrong in one case nothing else in this file would have caught.
+    // `resetRegistry` can run while a load is in flight. The next call then starts a
+    // fresh one, which may already have succeeded by the time the abandoned load
+    // fails, and an unconditional clear throws that good result away.
+    //
+    // A load nobody is waiting for must not be able to reach back into the memo.
+    await env.DB.prepare(INSERT_POLICY)
+      .bind(...policyRow('read', ['id']))
+      .run();
+    await env.DB.prepare(
+      'INSERT INTO _exposed_tables (table_name, enabled, version) VALUES (?, 1, 1)',
+    )
+      .bind('posts')
+      .run();
+
+    const gated = gatedExecutor();
+
+    // In flight, and about to be abandoned. The outcome is captured now rather than
+    // awaited later, so the rejection is never unhandled.
+    const abandoned = getRegistry(gated.executor).then(
+      () => 'resolved',
+      () => 'rejected',
+    );
+
+    resetRegistry();
+    const good = await getRegistry(env.DB);
+
+    gated.fail(new Error('the load nobody is waiting for'));
+    expect(await abandoned).toBe('rejected');
+
+    // Same object. The abandoned failure did not reach the memo.
+    expect(await getRegistry(env.DB)).toBe(good);
   });
 });
 

@@ -20,6 +20,7 @@ import { assertExecutable } from '../db/guards.js';
 import { type Catalogue, getCatalogue, SYSTEM_TABLE_PREFIX } from '../db/introspect.js';
 import { PolicyError } from '../utils/errors.js';
 import { logEvent } from '../utils/log.js';
+import { isolateMemo } from '../utils/memo.js';
 import { parseTableDefinition } from './parse.js';
 import type { Operation, PolicyDef, TableDefinition } from './types.js';
 import { validateTableDefinition } from './validate.js';
@@ -317,13 +318,18 @@ function buildRegistry(
  * `_exposed_tables.version` is a V7 concern, when policies become editable
  * through the Studio.
  */
-let cached: Promise<Registry> | null = null;
+/**
+ * 🔴 A failure is not kept, and it used to be. `cached ??= loadRegistry(executor)`
+ * memoised a rejected promise, so one malformed row broke the isolate for as long as
+ * it lived and repairing the data did not help. Reported as debt F4, measured in
+ * `registry-cache.test.ts`, and it was never only here: see `utils/memo.ts`.
+ */
+const memo = isolateMemo<Registry>();
 
 export function getRegistry(executor: D1Executor): Promise<Registry> {
-  cached ??= loadRegistry(executor);
-  return cached;
+  return memo.get(() => loadRegistry(executor));
 }
 
 export function resetRegistry(): void {
-  cached = null;
+  memo.reset();
 }

@@ -12,7 +12,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import { BaseclfError } from '../utils/errors.js';
 import { authorizeStorage } from './policy.js';
-import { loadStorageRegistry } from './registry.js';
+import { getStorageRegistry, loadStorageRegistry, resetStorageRegistry } from './registry.js';
 import { STORAGE_SCHEMA } from './schema.js';
 
 const ANN = { role: 'authenticated', uid: 'u_ann', email: null, app: {} };
@@ -245,5 +245,51 @@ describe('a bucket with no policies at all', () => {
         }),
       ).toThrow(BaseclfError);
     }
+  });
+});
+
+describe('the memo behind getStorageRegistry', () => {
+  it('recovers once a bad row is repaired, rather than refusing until the isolate recycles', async () => {
+    // 🔴 The same shape as debt F4 next door, and it arrived here by the file above
+    // saying it copied the policy registry deliberately. It copied this too, and the
+    // note it left was only about F2, so nothing pointed at it.
+    //
+    // Fail-closed, so storage refused rather than allowed. What it meant is that an
+    // operator who fixed the row watched storage stay broken with no way to end it.
+    resetStorageRegistry();
+
+    await env.DB.prepare('INSERT INTO _storage_buckets (bucket, enabled, version) VALUES (?, 1, 1)')
+      .bind('avatars')
+      .run();
+    await env.DB.prepare(
+      'INSERT INTO _storage_policies (bucket, name, operation, roles, prefix,' +
+        ' max_size_bytes, mime_types) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    )
+      .bind('avatars', 'own', 'upload', '{not json', 'avatars/$auth.uid/', null, null)
+      .run();
+
+    await expect(getStorageRegistry(env.DB)).rejects.toThrow();
+
+    await env.DB.prepare('DELETE FROM _storage_policies WHERE bucket = ?').bind('avatars').run();
+    await env.DB.prepare(
+      'INSERT INTO _storage_policies (bucket, name, operation, roles, prefix,' +
+        ' max_size_bytes, mime_types) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    )
+      .bind(
+        'avatars',
+        'own',
+        'upload',
+        JSON.stringify(['authenticated']),
+        'avatars/$auth.uid/',
+        null,
+        null,
+      )
+      .run();
+
+    const registry = await getStorageRegistry(env.DB);
+    expect(registry.buckets.has('avatars')).toBe(true);
+
+    // And it is a memo again rather than a reload every time.
+    expect(await getStorageRegistry(env.DB)).toBe(registry);
   });
 });

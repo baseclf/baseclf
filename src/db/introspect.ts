@@ -15,6 +15,7 @@
  */
 
 import { BaseclfError } from '../utils/errors.js';
+import { isolateMemo } from '../utils/memo.js';
 import type { D1Executor } from './dialect.js';
 import { assertExecutable } from './guards.js';
 
@@ -193,15 +194,21 @@ export async function introspect(executor: D1Executor): Promise<Catalogue> {
  *
  * Deliberately not a module-scope eager call: the Workers startup CPU budget is
  * one second, and schema reads belong inside `fetch`, not in global scope.
+ *
+ * 🔴 This was `cached ??= introspect(executor)`, which keeps a **rejected** promise
+ * and never replaces it. Of the places that had that bug this is the worst, and it
+ * is not the one that got reported: introspection is PRAGMA sweeps, so it fails for
+ * reasons that have nothing to do with the data, such as a timeout or the six
+ * connection limit in `rules/02` section A. One transient error and the isolate can
+ * never read a schema again. See `utils/memo.ts`.
  */
-let cached: Promise<Catalogue> | null = null;
+const memo = isolateMemo<Catalogue>();
 
 export function getCatalogue(executor: D1Executor): Promise<Catalogue> {
-  cached ??= introspect(executor);
-  return cached;
+  return memo.get(() => introspect(executor));
 }
 
 /** Drop the memo. Call after a migration, and in tests. */
 export function resetCatalogue(): void {
-  cached = null;
+  memo.reset();
 }

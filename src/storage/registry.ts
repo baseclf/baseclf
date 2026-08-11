@@ -16,6 +16,7 @@ import type { D1Executor } from '../db/dialect.js';
 import { assertExecutable } from '../db/guards.js';
 import { PolicyError } from '../utils/errors.js';
 import { logEvent } from '../utils/log.js';
+import { isolateMemo } from '../utils/memo.js';
 import {
   type StorageBucketDefinition,
   type StorageOperation,
@@ -181,14 +182,20 @@ export async function loadStorageRegistry(executor: D1Executor): Promise<Storage
  * at once across the fleet. `_storage_buckets.version` exists for a fleet-wide
  * invalidation and nothing reads it yet. Copying the shape means copying the debt,
  * so it is written down in both places rather than looking solved in one.
+ *
+ * 🔴 And it copied a second debt nobody had written down, which is the cost of the
+ * paragraph above being about only one of them. `cached ??= loadStorageRegistry(...)`
+ * keeps a **rejected** promise, so an isolate that saw one bad row refused every
+ * storage request for as long as it lived, repaired data or not. That was reported
+ * as F4 against the policy registry alone. It was here too, and in `getCatalogue`.
+ * See `utils/memo.ts`.
  */
-let cached: Promise<StorageRegistry> | null = null;
+const memo = isolateMemo<StorageRegistry>();
 
 export function getStorageRegistry(executor: D1Executor): Promise<StorageRegistry> {
-  cached ??= loadStorageRegistry(executor);
-  return cached;
+  return memo.get(() => loadStorageRegistry(executor));
 }
 
 export function resetStorageRegistry(): void {
-  cached = null;
+  memo.reset();
 }
