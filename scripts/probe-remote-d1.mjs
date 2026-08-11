@@ -24,7 +24,7 @@
  *   - Deletes the throwaway database in a finally block.
  */
 
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -218,13 +218,13 @@ async function probeRateLimiterIdiom() {
 
 async function probeNullsOrdering() {
   await q(`CREATE TABLE _probe_nulls (id INTEGER PRIMARY KEY, body TEXT)`);
-  await q(
-    `INSERT INTO _probe_nulls (id, body) VALUES (1,'a'),(2,NULL),(3,'b'),(4,NULL),(5,'c')`,
-  );
+  await q(`INSERT INTO _probe_nulls (id, body) VALUES (1,'a'),(2,NULL),(3,'b'),(4,NULL),(5,'c')`);
 
   const shape = (rows) => rows.map((x) => (x.body === null ? 'NULL' : x.body)).join(',');
 
-  let r = await q(`SELECT id, body FROM _probe_nulls ORDER BY "_probe_nulls"."body" ASC NULLS LAST`);
+  let r = await q(
+    `SELECT id, body FROM _probe_nulls ORDER BY "_probe_nulls"."body" ASC NULLS LAST`,
+  );
   record(
     'N1',
     'ORDER BY <qualified> ASC NULLS LAST — the exact shape Kysely emits',
@@ -285,7 +285,11 @@ async function probeStrictAffinity() {
     );
     const accepted = r.ok;
     const outcome =
-      expectation === '?' ? 'INFO' : (accepted ? 'accept' : 'reject') === expectation ? 'PASS' : 'FAIL';
+      expectation === '?'
+        ? 'INFO'
+        : (accepted ? 'accept' : 'reject') === expectation
+          ? 'PASS'
+          : 'FAIL';
     record(
       pid,
       title,
@@ -368,7 +372,9 @@ function writeReport() {
   lines.push('# D1 Probe REMOTE — xác nhận lại bốn caveat "chưa đo remote"');
   lines.push('');
   lines.push(`Chạy lúc: ${new Date().toISOString()}`);
-  lines.push(`Đường đi: D1 REST \`/query\` endpoint (cần bound param, \`wrangler d1 execute\` không có)`);
+  lines.push(
+    `Đường đi: D1 REST \`/query\` endpoint (cần bound param, \`wrangler d1 execute\` không có)`,
+  );
   lines.push(`Database tạm: \`${DB_NAME}\` (đã xoá sau khi chạy)`);
   lines.push('');
   lines.push('## Tổng quan');

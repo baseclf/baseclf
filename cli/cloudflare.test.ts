@@ -32,10 +32,42 @@ import {
   ensureSubdomain,
   enableWorkersDev,
   type Fetcher,
+  MODULE_CONTENT_TYPE,
+  REQUIRED_COMPATIBILITY_FLAGS,
   REQUIRED_TOKEN_PERMISSIONS,
+  type ScriptBinding,
+  ScriptUploadError,
+  toApiBinding,
+  uploadScript,
 } from './cloudflare.js';
 
 const CREDENTIALS: Credentials = { accountId: 'acct_7f3c91', token: 'cfut_not-a-real-token' };
+
+/**
+ * A binding as it arrives over the wire.
+ *
+ * `type` and `name` are always there; which field carries the id depends on the type,
+ * which is the asymmetry the whole map exists for.
+ */
+interface ApiBinding {
+  type: string;
+  name: string;
+  [field: string]: string;
+}
+
+/** What the stand-in ends up with after an upload, in the shape a test can read. */
+interface DeployedScript {
+  mainModule: string;
+  /** ⚠️ The platform's own default when the upload does not carry one. */
+  compatibilityDate: string;
+  compatibilityFlags: string[];
+  bindings: ApiBinding[];
+  moduleNames: string[];
+  moduleTypes: Record<string, string>;
+  observability: unknown;
+  /** Inherit bindings the platform could not resolve and threw away in silence. */
+  droppedInherits: string[];
+}
 
 interface State {
   databases: { uuid: string; name: string }[];
@@ -46,6 +78,11 @@ interface State {
   /** Every request made, so a test can assert how many calls a run costs. */
   calls: string[];
   jurisdictions: Record<string, string>;
+  scripts: Record<string, DeployedScript>;
+  /** Binding names already on the deployed script, which `inherit` can resolve to. */
+  existingBindings: Record<string, string[]>;
+  /** Bytes actually received per module, so a truncated body is visible. */
+  receivedModuleBytes: Record<string, number>;
 }
 
 function freshState(): State {
@@ -57,7 +94,30 @@ function freshState(): State {
     workersDev: [],
     calls: [],
     jurisdictions: {},
+    scripts: {},
+    existingBindings: {},
+    receivedModuleBytes: {},
   };
+}
+
+/**
+ * What the API uses when an upload carries no `compatibility_date`.
+ *
+ * Not today, and not an error. A Worker dated this runs and answers requests while
+ * behaving differently from every API this project measured.
+ */
+const PLATFORM_DEFAULT_COMPATIBILITY_DATE = '2021-11-02';
+
+const MODULE = { name: 'index.js', content: 'export default { fetch: () => new Response() }' };
+
+function uploadOptions(overrides: Record<string, unknown> = {}) {
+  return {
+    name: 'baseclf',
+    modules: [MODULE],
+    mainModule: 'index.js',
+    compatibilityDate: '2026-07-28',
+    ...overrides,
+  } as Parameters<typeof uploadScript>[2];
 }
 
 function ok(result: unknown): Response {
@@ -72,11 +132,79 @@ function refuse(code: number, message: string, status = 200): Response {
 function api(state: State): Fetcher {
   const account = `/accounts/${CREDENTIALS.accountId}`;
 
-  return (rawUrl, init) => {
+  return async (rawUrl, init) => {
     const url = new URL(rawUrl);
     const path = url.pathname.replace('/client/v4', '');
     const method = init?.method ?? 'GET';
     state.calls.push(`${method} ${path}${url.search}`);
+
+    const upload = /\/workers\/scripts\/([^/]+)$/.exec(path);
+    if (upload !== null && method === 'PUT') {
+      const script = decodeURIComponent(upload[1] as string);
+      const body = init?.body;
+
+      // A content type set by hand replaces the boundary the parts are found with,
+      // so the server has a body it cannot read. Modelled rather than assumed away,
+      // because the obvious client sets `application/json` on everything.
+      const declared = new Headers(init?.headers).get('content-type');
+      if (declared !== null && !declared.startsWith('multipart/')) {
+        return refuse(10021, `a multipart body declared as ${declared} cannot be parsed`, 400);
+      }
+      if (!(body instanceof FormData)) {
+        return refuse(10021, 'expected multipart/form-data', 400);
+      }
+
+      const metadataPart = body.get('metadata');
+      const metadata = JSON.parse(await (metadataPart as Blob).text()) as Record<string, unknown>;
+
+      const moduleNames: string[] = [];
+      const moduleTypes: Record<string, string> = {};
+      for (const [key, value] of body.entries()) {
+        if (key === 'metadata' || typeof value === 'string') continue;
+        moduleNames.push(key);
+        moduleTypes[key] = (value as Blob).type;
+        // Read the bytes rather than trusting the part is there. A body that carries
+        // a truncated module deploys and then fails at runtime.
+        state.receivedModuleBytes[key] = (await (value as Blob).text()).length;
+      }
+
+      // ⚠️ The trap, modelled the way the record describes it. An inherit binding
+      // that resolves to nothing is dropped in silence unless `bindings_inherit`
+      // says strict, in which case it is refused.
+      const strict = url.searchParams.get('bindings_inherit') === 'strict';
+      const known = state.existingBindings[script] ?? [];
+      const declaredBindings = (metadata.bindings ?? []) as ApiBinding[];
+      const kept: ApiBinding[] = [];
+      const dropped: string[] = [];
+
+      for (const binding of declaredBindings) {
+        if (binding.type === 'inherit' && !known.includes(binding.name)) {
+          if (strict) {
+            return refuse(10021, `cannot inherit binding "${binding.name}": it is not set`, 400);
+          }
+          dropped.push(binding.name);
+          continue;
+        }
+        kept.push(binding);
+      }
+
+      state.scripts[script] = {
+        mainModule: String(metadata.main_module ?? ''),
+        // No date in the upload does not mean an error. It means 2021.
+        compatibilityDate: String(
+          metadata.compatibility_date ?? PLATFORM_DEFAULT_COMPATIBILITY_DATE,
+        ),
+        compatibilityFlags: (metadata.compatibility_flags ?? []) as string[],
+        bindings: kept,
+        moduleNames,
+        moduleTypes,
+        observability: metadata.observability,
+        droppedInherits: dropped,
+      };
+      state.existingBindings[script] = kept.map((binding) => binding.name);
+
+      return ok({ id: script, etag: `etag_${Object.keys(state.scripts).length}` });
+    }
 
     if (path === `${account}/d1/database` && method === 'GET') {
       // D1 filters by name, which is why the lookup is one call rather than a walk.
@@ -95,8 +223,18 @@ function api(state: State): Fetcher {
     }
 
     if (path === `${account}/storage/kv/namespaces` && method === 'GET') {
-      // No title filter. A page walk is the only option.
-      return Promise.resolve(ok(state.namespaces));
+      // No title filter, so a page walk is the only option, and this pages by
+      // number the way the real endpoint does.
+      //
+      // ⚠️ It did not, until a mutation survived. A stand-in that answers every
+      // page with the whole list makes a walk and a single request return the same
+      // thing, so removing the walk changes nothing any test can see. The paging is
+      // the point of the fixture, not decoration on it.
+      const perPage = Number(url.searchParams.get('per_page') ?? '100');
+      const page = Number(url.searchParams.get('page') ?? '1');
+      const ordered = [...state.namespaces].sort((a, b) => (a.title < b.title ? -1 : 1));
+
+      return Promise.resolve(ok(ordered.slice((page - 1) * perPage, page * perPage)));
     }
     if (path === `${account}/storage/kv/namespaces` && method === 'POST') {
       const { title } = JSON.parse(String(init?.body)) as { title: string };
@@ -108,6 +246,24 @@ function api(state: State): Fetcher {
       const created = { id: `kv_${state.namespaces.length + 1}`, title };
       state.namespaces.push(created);
       return Promise.resolve(ok(created));
+    }
+
+    // One bucket by name, which is what `r2 bucket info` asks and what the lookup
+    // uses. Absent arrives as a 404, and jurisdiction is a header here too: a
+    // bucket in a jurisdiction is not visible from outside it.
+    const byName = /\/r2\/buckets\/([^/]+)$/.exec(path);
+    if (byName !== null && method === 'GET') {
+      const wanted = decodeURIComponent(byName[1] as string);
+      const jurisdiction = new Headers(init?.headers).get('cf-r2-jurisdiction');
+      const found = state.buckets.find(
+        (bucket) => bucket.name === wanted && (state.jurisdictions[wanted] ?? null) === jurisdiction,
+      );
+
+      return Promise.resolve(
+        found === undefined
+          ? refuse(10006, 'The specified bucket does not exist', 404)
+          : ok({ name: found.name }),
+      );
     }
 
     if (path === `${account}/r2/buckets` && method === 'GET') {
@@ -284,7 +440,64 @@ describe('creating a KV namespace, where a duplicate is a hard failure', () => {
   });
 });
 
+describe('walking a list that does not fit on one page', () => {
+  it('finds a namespace that sits past the first page', async () => {
+    // What asking for only the first page did: the namespace was not found, so it
+    // was created, so KV hard-failed on the duplicate title, so the code looked
+    // again at the same single page and gave up. The account was fine throughout.
+    const state = freshState();
+    for (let n = 0; n < 150; n += 1) {
+      state.namespaces.push({ id: `kv_${n}`, title: `other-${String(n).padStart(3, '0')}` });
+    }
+    state.namespaces.push({ id: 'kv_wanted', title: 'zz-baseclf-cache' });
+
+    const result = await ensureNamespace(api(state), CREDENTIALS, 'zz-baseclf-cache');
+
+    expect(result.created).toBe(false);
+    expect(result.namespace.id).toBe('kv_wanted');
+    expect(state.namespaces).toHaveLength(151);
+  });
+
+  it('asks for a second page rather than trusting the first to hold everything', async () => {
+    const state = freshState();
+    for (let n = 0; n < 150; n += 1) {
+      state.namespaces.push({ id: `kv_${n}`, title: `other-${String(n).padStart(3, '0')}` });
+    }
+
+    await ensureNamespace(api(state), CREDENTIALS, 'zz-baseclf-cache');
+
+    expect(state.calls.some((call) => call.includes('page=2'))).toBe(true);
+  });
+
+  it('stops rather than walking forever when a list never says it is done', async () => {
+    // Not a hang. An endpoint that answers every page with a full one would spin
+    // until the invocation was killed, and nothing would say why.
+    const endless: Fetcher = () =>
+      Promise.resolve(
+        ok(Array.from({ length: 100 }, (_, n) => ({ id: `kv_${n}`, title: `never-${n}` }))),
+      );
+
+    await expect(ensureNamespace(endless, CREDENTIALS, 'baseclf-cache')).rejects.toThrow(
+      /not advancing|far more than/,
+    );
+  });
+});
+
 describe('creating a bucket', () => {
+  it('finds an existing one by name without attempting a create', async () => {
+    // The lookup is an optimisation: a conflict on the create is absorbed either
+    // way. What it buys is not sending a request that is known to fail, and only
+    // the request count shows that, which is the same lesson KV taught.
+    const state = freshState();
+    state.buckets.push({ name: 'baseclf-objects' });
+
+    const before = state.calls.length;
+    const result = await ensureBucket(api(state), CREDENTIALS, 'baseclf-objects');
+
+    expect(result.created).toBe(false);
+    expect(state.calls.slice(before).filter((call) => call.startsWith('POST'))).toEqual([]);
+  });
+
   it('is safe to run twice', async () => {
     const state = freshState();
     await ensureBucket(api(state), CREDENTIALS, 'baseclf-objects');
@@ -418,5 +631,281 @@ describe('the whole chain, run twice', () => {
     expect(database.created).toBe(false);
     expect(database.database.uuid).toBe('d1_existing');
     expect(bucket.created).toBe(true);
+  });
+});
+
+describe('uploading the script, which is the step that deploys anything', () => {
+  it('sends a multipart body rather than one declared as JSON', async () => {
+    // The client sets a JSON content type on every other call. Doing it here replaces
+    // the boundary the parts are found with, and the body becomes unreadable.
+    const state = freshState();
+    await uploadScript(api(state), CREDENTIALS, uploadOptions());
+
+    expect(state.scripts.baseclf?.moduleNames).toEqual(['index.js']);
+  });
+
+  it('sends the module as ESM, not as a service worker script', async () => {
+    const state = freshState();
+    await uploadScript(api(state), CREDENTIALS, uploadOptions());
+
+    expect(state.scripts.baseclf?.moduleTypes['index.js']).toBe(MODULE_CONTENT_TYPE);
+  });
+
+  it('names the main module, so the platform knows which part to start', async () => {
+    const state = freshState();
+    await uploadScript(api(state), CREDENTIALS, uploadOptions());
+
+    expect(state.scripts.baseclf?.mainModule).toBe('index.js');
+  });
+
+  it('carries a module the size of the real bundle without truncating it', async () => {
+    // Every other test here uses a module of a few dozen bytes, and the engine builds
+    // to roughly 1.8 MB. A body that is fine small and lossy large would pass all of
+    // them and ship a broken Worker, so this one is the size of the real thing.
+    const state = freshState();
+    const big = 'x'.repeat(1_800_000);
+    await uploadScript(
+      api(state),
+      CREDENTIALS,
+      uploadOptions({ modules: [{ name: 'index.js', content: big }] }),
+    );
+
+    expect(state.scripts.baseclf?.moduleNames).toEqual(['index.js']);
+    expect(state.receivedModuleBytes['index.js']).toBe(big.length);
+  });
+});
+
+describe('the compatibility date, whose default is 2021 rather than today', () => {
+  it('deploys the date it was given, and never the platform default', async () => {
+    const state = freshState();
+    await uploadScript(api(state), CREDENTIALS, uploadOptions());
+
+    expect(state.scripts.baseclf?.compatibilityDate).toBe('2026-07-28');
+    expect(state.scripts.baseclf?.compatibilityDate).not.toBe(
+      PLATFORM_DEFAULT_COMPATIBILITY_DATE,
+    );
+  });
+
+  it('refuses a malformed date before anything is sent', async () => {
+    // Refused here rather than trusted to be rejected there. A value the API ignores
+    // fails exactly the way a missing one does, which is silently and in 2021.
+    const state = freshState();
+    const error = (await uploadScript(
+      api(state),
+      CREDENTIALS,
+      uploadOptions({ compatibilityDate: 'last tuesday' }),
+    ).catch((e: unknown) => e)) as Error;
+
+    expect(error).toBeInstanceOf(ScriptUploadError);
+    expect(error.message).toContain('compatibility_date');
+    expect(state.calls).toEqual([]);
+  });
+
+  it('refuses an empty date, which is the missing case wearing a different hat', async () => {
+    const state = freshState();
+    const error = (await uploadScript(
+      api(state),
+      CREDENTIALS,
+      uploadOptions({ compatibilityDate: '' }),
+    ).catch((e: unknown) => e)) as Error;
+
+    expect(error).toBeInstanceOf(ScriptUploadError);
+    expect(error.message).toContain('compatibility_date');
+    expect(state.calls).toEqual([]);
+  });
+
+  it('keeps nodejs_compat even when the caller passes flags of its own', async () => {
+    // Without it `node:crypto` is absent, and the failure lands on the first request
+    // that touches auth rather than on the deploy that caused it.
+    const state = freshState();
+    await uploadScript(
+      api(state),
+      CREDENTIALS,
+      uploadOptions({ compatibilityFlags: ['streaming_tail_worker'] }),
+    );
+
+    expect(state.scripts.baseclf?.compatibilityFlags).toContain('nodejs_compat');
+    expect(state.scripts.baseclf?.compatibilityFlags).toContain('streaming_tail_worker');
+  });
+
+  it('does not list nodejs_compat twice when the caller passes it too', async () => {
+    const state = freshState();
+    await uploadScript(
+      api(state),
+      CREDENTIALS,
+      uploadOptions({ compatibilityFlags: ['nodejs_compat'] }),
+    );
+
+    const flags = state.scripts.baseclf?.compatibilityFlags ?? [];
+    expect(flags.filter((flag) => flag === 'nodejs_compat')).toHaveLength(1);
+  });
+
+  it('has a required-flags list that is not empty, or the merge guards nothing', () => {
+    expect(REQUIRED_COMPATIBILITY_FLAGS.length).toBeGreaterThan(0);
+  });
+});
+
+describe('bindings_inherit, which decides whether a lost binding is loud', () => {
+  it('asks for strict, so an unresolvable inherit is refused', async () => {
+    const state = freshState();
+    await uploadScript(api(state), CREDENTIALS, uploadOptions());
+
+    expect(state.calls.some((call) => call.includes('bindings_inherit=strict'))).toBe(true);
+  });
+
+  it('fails rather than deploying a Worker missing a binding it asked to keep', async () => {
+    // The failure this guards against is a redeploy that silently ships without a
+    // secret that was set an hour ago. Nothing errors, and every request afterwards
+    // is answered by a Worker that cannot verify a token.
+    const state = freshState();
+    const inherit: readonly ScriptBinding[] = [
+      { kind: 'inherit', name: 'BETTER_AUTH_SECRET' },
+    ];
+
+    await expect(
+      uploadScript(api(state), CREDENTIALS, uploadOptions({ bindings: inherit })),
+    ).rejects.toBeInstanceOf(CloudflareError);
+
+    expect(state.scripts.baseclf).toBeUndefined();
+  });
+
+  it('carries an inherit through when the binding is actually there', async () => {
+    const state = freshState();
+    state.existingBindings.baseclf = ['BETTER_AUTH_SECRET'];
+
+    await uploadScript(
+      api(state),
+      CREDENTIALS,
+      uploadOptions({ bindings: [{ kind: 'inherit', name: 'BETTER_AUTH_SECRET' }] }),
+    );
+
+    expect(state.scripts.baseclf?.bindings).toEqual([
+      { type: 'inherit', name: 'BETTER_AUTH_SECRET' },
+    ]);
+    expect(state.scripts.baseclf?.droppedInherits).toEqual([]);
+  });
+});
+
+describe('binding shapes, where the id field differs per type', () => {
+  it('puts each resource id under the field Cloudflare reads for that type', async () => {
+    const state = freshState();
+    const bindings: readonly ScriptBinding[] = [
+      { kind: 'resource', type: 'd1', name: 'DB', id: 'd1_1' },
+      { kind: 'resource', type: 'kv_namespace', name: 'CACHE', id: 'kv_1' },
+      { kind: 'resource', type: 'r2_bucket', name: 'BUCKET', id: 'baseclf-objects' },
+    ];
+
+    await uploadScript(api(state), CREDENTIALS, uploadOptions({ bindings }));
+
+    expect(state.scripts.baseclf?.bindings).toEqual([
+      { type: 'd1', name: 'DB', id: 'd1_1' },
+      { type: 'kv_namespace', name: 'CACHE', namespace_id: 'kv_1' },
+      { type: 'r2_bucket', name: 'BUCKET', bucket_name: 'baseclf-objects' },
+    ]);
+  });
+
+  it('sends a var as plain_text, and has no shape that puts a secret in the body', () => {
+    // Secrets go in on their own endpoint. `inherit` is how one already set survives
+    // a redeploy, so nothing here ever needs to carry a secret value.
+    const text = toApiBinding({ kind: 'text', name: 'BETTER_AUTH_URL', value: 'https://x.dev' });
+
+    expect(text).toEqual({
+      type: 'plain_text',
+      name: 'BETTER_AUTH_URL',
+      text: 'https://x.dev',
+    });
+  });
+
+  it('refuses two bindings under one name rather than letting the server pick', async () => {
+    const state = freshState();
+    const clashing: readonly ScriptBinding[] = [
+      { kind: 'resource', type: 'd1', name: 'DB', id: 'd1_1' },
+      { kind: 'resource', type: 'd1', name: 'DB', id: 'd1_2' },
+    ];
+
+    const error = (await uploadScript(
+      api(state),
+      CREDENTIALS,
+      uploadOptions({ bindings: clashing }),
+    ).catch((e: unknown) => e)) as Error;
+
+    expect(error).toBeInstanceOf(ScriptUploadError);
+    expect(error.message).toContain('Two bindings are both named');
+    expect(state.calls).toEqual([]);
+  });
+});
+
+describe('what the upload refuses locally, before spending a request', () => {
+  // Each of these asserts the message, not only the type. Four refusals share one
+  // error class, and an empty module list satisfies the main-module check too, so a
+  // test that reads the type alone passes whichever branch fired. That has already
+  // caught this project out twice.
+  const refusal = async (overrides: Record<string, unknown>, state: State) =>
+    (await uploadScript(api(state), CREDENTIALS, uploadOptions(overrides)).catch(
+      (error: unknown) => error,
+    )) as Error;
+
+  it('refuses a main module that is not among the modules', async () => {
+    const state = freshState();
+    const error = await refusal({ mainModule: 'worker.js' }, state);
+
+    expect(error).toBeInstanceOf(ScriptUploadError);
+    expect(error.message).toContain('is not among the modules given');
+    expect(state.calls).toEqual([]);
+  });
+
+  it('refuses two modules under one name, since which part survives is unknown', async () => {
+    const state = freshState();
+    const error = await refusal(
+      { modules: [MODULE, { name: 'index.js', content: 'other' }] },
+      state,
+    );
+
+    expect(error).toBeInstanceOf(ScriptUploadError);
+    expect(error.message).toContain('Two modules are both named');
+    expect(state.calls).toEqual([]);
+  });
+
+  it('refuses an upload with no modules at all, naming that as the reason', async () => {
+    const state = freshState();
+    const error = await refusal({ modules: [] }, state);
+
+    expect(error).toBeInstanceOf(ScriptUploadError);
+    // Not the main-module message, which an empty list also satisfies.
+    expect(error.message).toContain('at least one module');
+    expect(state.calls).toEqual([]);
+  });
+});
+
+describe('observability, which is what makes a broken deployment readable', () => {
+  it('is on for every upload rather than left to a caller to remember', async () => {
+    const state = freshState();
+    await uploadScript(api(state), CREDENTIALS, uploadOptions());
+
+    expect(state.scripts.baseclf?.observability).toEqual({ enabled: true });
+  });
+});
+
+describe('uploading twice', () => {
+  it('replaces rather than accumulating, so a rerun finishes an interrupted one', async () => {
+    const state = freshState();
+    const fetcher = api(state);
+
+    await uploadScript(fetcher, CREDENTIALS, uploadOptions());
+    await uploadScript(fetcher, CREDENTIALS, uploadOptions());
+
+    expect(Object.keys(state.scripts)).toEqual(['baseclf']);
+    expect(state.scripts.baseclf?.moduleNames).toEqual(['index.js']);
+  });
+
+  it('reports a refusal that arrives as 200 rather than treating it as deployed', async () => {
+    const refusing: Fetcher = () => Promise.resolve(refuse(10000, 'Authentication error'));
+
+    const error = await uploadScript(refusing, CREDENTIALS, uploadOptions()).catch(
+      (e: unknown) => e,
+    );
+
+    expect(error).toBeInstanceOf(CloudflareError);
+    expect((error as CloudflareError).codes).toContain(10000);
   });
 });
