@@ -5,8 +5,14 @@ import { findVoiceViolations, PLAIN } from './output.js';
 import { CREATE_FIXED_TEXT, type CreateHost, runCreate } from './run-create.js';
 
 const TOKEN_CANARY = 'oauth-token-never-printed';
-/** Shaped like a real one, which is 32 lowercase hex characters, and made up. */
-const ACCOUNT = 'f0e1d2c3b4a5968778695a4b3c2d1e0f';
+/**
+ * Shaped like a real one, which is 32 lowercase hex characters, and made up.
+ *
+ * The eight leading zeros are what the commit guard reads as "this is a fixture". A
+ * real account id going into a test file is the mistake that rule exists for, and it
+ * had already happened once by the time it was written.
+ */
+const ACCOUNT = '00000000b4a5968778695a4b3c2d1e0f';
 const NOW = new Date('2026-08-12T00:00:00.000Z');
 
 interface Recorded {

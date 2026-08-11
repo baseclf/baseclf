@@ -13,12 +13,17 @@ import { findVoiceViolations, PLAIN } from './output.js';
 const TOKEN_CANARY = 'oauth-token-never-printed';
 
 /**
- * ⚠️ Made up, and it has to be. The first version of this file pasted a real account
- * id in, because one was to hand. A real id is on the never-commit list in `rules/05`
- * section B and this is a public repository, so the fixture is built out of a
- * recognisable pattern instead. It is long enough to prove the preview truncates.
+ * ⚠️ Made up, and the eight leading zeros are the convention rather than decoration.
+ *
+ * The first version of this file pasted a real account id in, because one was to
+ * hand. A real id is on the never-commit list in `rules/05` section B and this is a
+ * public repository. It was caught by reading the file, and the commit guard let it
+ * past, so the guard now flags any id-shaped value and treats eight leading zeros as
+ * the mark of a fixture. Same shape as the placeholder in `wrangler.jsonc`.
+ *
+ * Still thirty two characters, so the preview below has something real to truncate.
  */
-const ACCOUNT_ID = 'a1b2c3d4e5f60718293a4b5c6d7e8f90';
+const ACCOUNT_ID = '00000000e5f60718293a4b5c6d7e8f90';
 const NOW = new Date('2026-08-12T00:00:00.000Z');
 
 const WHOAMI = [

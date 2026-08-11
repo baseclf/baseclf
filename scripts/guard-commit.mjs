@@ -60,6 +60,31 @@ const SECRET_PATTERNS = [
   },
 ];
 
+/**
+ * 🔴 Any Cloudflare-shaped id at all, wherever it appears.
+ *
+ * The rule above only fires when the value is assigned to one of five key names, and
+ * on 2026-08-12 a real account id went into a test fixture as `const ACCOUNT_ID =`
+ * and sailed straight through: the alternatives are matched case-sensitively and that
+ * is not one of them. It was caught by reading the file, which is not a mechanism.
+ *
+ * So this looks at the value instead of at what it is called. Measured before writing
+ * it: the whole repository contained exactly three bare 32-hex strings, two of them
+ * fixtures written that same hour and one a content hash wrangler generates. There is
+ * no ordinary use of this shape here to protect.
+ *
+ * ## Why the carve-out is eight zeros
+ *
+ * A fixture has to look like the real thing or the test proves nothing, so there has
+ * to be some way to write one. Rather than a comment a reader can add to anything,
+ * the escape is structural: a fake id starts with eight zeros. It is unmistakable to
+ * a reader, it needs no list to maintain, and the chance of a real Cloudflare id
+ * beginning that way is about one in four billion. It also matches the placeholder
+ * already used in `wrangler.jsonc`.
+ */
+const FAKE_ID_PREFIX = /^0{8}/;
+const CLOUDFLARE_ID = /\b[0-9a-f]{32}\b|\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/g;
+
 /** Latin letters carrying Vietnamese diacritics. Rule 04 section A. */
 const VIETNAMESE = /[àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ]/i;
 /** Files that ship to the public and must therefore be English only. */
@@ -127,6 +152,27 @@ for (const file of files) {
         kind: `SECRET: ${name}`,
         detail: `line ${idx + 1}. Rotate it immediately if it is real, then remove it.`,
       });
+    }
+  }
+
+  // Generated files are excluded because nobody types what is in them, and the one
+  // here carries a content hash of exactly this shape. Excluding them is safe for the
+  // opposite reason to usual: a tool writes them from the repository, not from an
+  // account.
+  if (!GENERATED.test(file)) {
+    for (const [index, line] of lines.entries()) {
+      const found = (line.match(CLOUDFLARE_ID) ?? []).filter((id) => !FAKE_ID_PREFIX.test(id));
+      if (found.length === 0) continue;
+
+      failures.push({
+        file,
+        kind: 'SECRET: Cloudflare resource id',
+        detail:
+          `line ${index + 1}. Account, database and namespace ids never enter this ` +
+          'repository. If it is a fixture, start it with eight zeros so it cannot be ' +
+          'mistaken for a real one.',
+      });
+      break;
     }
   }
 
