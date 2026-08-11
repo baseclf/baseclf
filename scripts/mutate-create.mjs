@@ -138,6 +138,55 @@ const MUTATIONS = [
     ],
   },
   {
+    // 🔴 The bound exists because `ask` can be attached to something that is not a
+    // person. A pipe already at end of file returns empty forever, and without a
+    // cap that is a command that never returns and never says why.
+    //
+    // ⚠️ Written as "one attempt" rather than "no bound". A mutation that removes a
+    // loop bound HANGS the runner rather than failing a test, and the restore is in
+    // a `finally` a killed process never reaches. See the third trap in
+    // `mutation-runner.mjs`, learned the expensive way on 2026-08-11.
+    name: 'the retry budget cut to one, so a typo ends the command',
+    file: CREATE,
+    expect: 'the asks-again test',
+    find: /export const MAX_ANSWER_ATTEMPTS = 3;/,
+    replace: 'export const MAX_ANSWER_ATTEMPTS = 1;',
+  },
+  {
+    // Silently taking the default after three bad answers deploys something the
+    // reader did not ask for, under a name they did not choose.
+    name: 'a run out of attempts falling back to the default rather than stopping',
+    file: CREATE,
+    expect: 'the gives-up test',
+    find: / {2}return null;\n\}/,
+    replace: '  return fallback;\n}',
+  },
+  {
+    // An empty line is how every prompt in every CLI says "use the default".
+    name: 'an empty answer taken literally rather than as the default',
+    file: CREATE,
+    expect: 'the presses-enter test',
+    find: / {4}const value = raw === '' \? fallback : raw;/,
+    replace: '    const value = raw;',
+  },
+  {
+    // The reason is what turns a rejected answer into a fixed one. Without it the
+    // reader sees the same prompt again and has to guess what changed.
+    name: 'the reason for a rejection swallowed, so the prompt just repeats',
+    file: CREATE,
+    expect: 'the says-what-was-wrong test',
+    find: / {4}write\(` {2}\$\{verdict\.reason\}`\);/,
+    replace: "    write('  Try again.');",
+  },
+  {
+    // The reason a question is asked is what tells a reader whether to keep going.
+    name: 'the reason dropped from the prompt, leaving a bare question',
+    file: CREATE,
+    expect: 'the says-why-it-is-asking test',
+    find: /return `\$\{question\}\\n {2}\$\{why\}\\n {2}\[\$\{fallback\}\] `;/,
+    replace: 'return `${question}\\n  \\n  [${fallback}] `;',
+  },
+  {
     // Printing the URL and stopping sends the reader to a 404 at the exact moment
     // they are deciding whether this product works. `rules/02` section C2.
     name: 'the wait for the address dropped from the plan',

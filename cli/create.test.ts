@@ -15,11 +15,14 @@ import {
   bindingsFor,
   checkFrontendOrigin,
   checkProjectName,
+  collectAnswers,
   CREATE_PLAN,
   DEFAULT_FRONTEND_ORIGIN,
   DEFAULT_PROJECT_NAME,
   deriveResourceNames,
   generateSecret,
+  MAX_ANSWER_ATTEMPTS,
+  promptFor,
   REQUIRED_BINDING_NAMES,
   SIGNING_SECRET_NAME,
   SECRET_BYTES,
@@ -223,13 +226,128 @@ describe('the plan, whose order is the design', () => {
   });
 });
 
+describe('asking the two questions', () => {
+  /** Answers each prompt from a list, then keeps returning empty. */
+  function answering(lines: readonly string[]) {
+    const asked: string[] = [];
+    const written: string[] = [];
+    let index = 0;
+
+    const ask = (prompt: string) => {
+      asked.push(prompt);
+      const line = lines[index] ?? '';
+      index += 1;
+      return Promise.resolve(line);
+    };
+
+    return { ask, asked, written, write: (text: string) => written.push(text) };
+  }
+
+  it('takes the answers given', async () => {
+    const harness = answering(['shop', 'http://localhost:5173']);
+
+    const collected = await collectAnswers(harness.ask, harness.write);
+
+    expect(collected).toEqual({
+      ok: true,
+      answers: { project: 'shop', frontendOrigin: 'http://localhost:5173' },
+    });
+  });
+
+  it('takes the default when the reader just presses enter', async () => {
+    const harness = answering(['', '']);
+
+    const collected = await collectAnswers(harness.ask, harness.write);
+
+    expect(collected.ok === true && collected.answers).toEqual({
+      project: DEFAULT_PROJECT_NAME,
+      frontendOrigin: DEFAULT_FRONTEND_ORIGIN,
+    });
+  });
+
+  it('trims what was typed, since a trailing space is not part of a name', async () => {
+    const harness = answering([' shop ', ' http://localhost:5173 ']);
+
+    const collected = await collectAnswers(harness.ask, harness.write);
+
+    expect(collected.ok === true && collected.answers.project).toBe('shop');
+  });
+
+  it('says why it is asking, on every question', async () => {
+    // A reader who cannot tell what a question is for is a reader deciding whether
+    // to keep going. BUILD-PROGRESS section V5 requires this of every field.
+    const harness = answering(['', '']);
+
+    await collectAnswers(harness.ask, harness.write);
+
+    expect(harness.asked).toHaveLength(2);
+    for (const prompt of harness.asked) {
+      expect(prompt.split('\n')[1]?.trim().length).toBeGreaterThan(20);
+    }
+  });
+
+  it('asks again when the answer cannot be used, and says what was wrong', async () => {
+    const harness = answering(['My_Shop', 'shop', 'http://localhost:5173']);
+
+    const collected = await collectAnswers(harness.ask, harness.write);
+
+    expect(collected.ok === true && collected.answers.project).toBe('shop');
+    expect(harness.written.join('\n')).toContain('hyphens');
+  });
+
+  it('⭐ gives up rather than looping when nothing usable ever arrives', async () => {
+    // The likeliest way here is not three typos. It is a script with nothing on
+    // stdin, where an unbounded prompt is a command that never returns and never
+    // says why.
+    const harness = answering(['!!', '!!', '!!', '!!', '!!']);
+
+    const collected = await collectAnswers(harness.ask, harness.write);
+
+    expect(collected.ok).toBe(false);
+    expect(harness.asked).toHaveLength(MAX_ANSWER_ATTEMPTS);
+  });
+
+  it('names the way out for a script, not just the failure', async () => {
+    const harness = answering(['!!', '!!', '!!']);
+
+    const collected = await collectAnswers(harness.ask, harness.write);
+
+    expect(collected.ok === false && collected.lines.join(' ')).toContain('script');
+  });
+
+  it('stops at the first question rather than asking the second pointlessly', async () => {
+    const harness = answering(['!!', '!!', '!!']);
+
+    await collectAnswers(harness.ask, harness.write);
+
+    // All three attempts went to the project name. Asking for an origin after
+    // giving up on the name would collect an answer nothing is going to use.
+    expect(new Set(harness.asked).size).toBe(1);
+  });
+});
+
 describe('everything this file can print', () => {
-  it('breaks no voice rule', () => {
+  it('breaks no voice rule', async () => {
     // The rendered strings, not the source: the exclamation rule cannot survive
     // being run over code. Every reason and every plan line goes through, because
     // a checker that only covers what somebody remembered to list is one that drifts.
     const rendered = [
       ...CREATE_PLAN.flatMap((step) => [step.title, step.consequence]),
+      // The prompts are the first thing anybody reads, so they go through the same
+      // check as everything else. Collected by driving the real questions rather
+      // than by listing them here, because a list drifts from what is asked.
+      ...(await (async () => {
+        const asked: string[] = [];
+        await collectAnswers(
+          (prompt) => {
+            asked.push(prompt);
+            return Promise.resolve('');
+          },
+          () => undefined,
+        );
+        return asked;
+      })()),
+      promptFor('A question', 'Why it is needed.', 'a-default'),
       ...['My-App', 'my_app', 'ab', 'a'.repeat(60), ' app'].map((name) => {
         const check = checkProjectName(name);
         return check.ok ? '' : check.reason;

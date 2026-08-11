@@ -261,6 +261,125 @@ export function generateSecret(): string {
     .replace(/=+$/, '');
 }
 
+/**
+ * Read one line from the reader.
+ *
+ * Injected, because reading a line needs `node:` and the rest of this file is meant
+ * to run in the same test runner as the engine. It returns the line raw, empty
+ * included: deciding that an empty answer means the default is a decision, and
+ * decisions belong on this side of the seam where they are covered. The Node shell
+ * does the reading and nothing else.
+ */
+export type Ask = (prompt: string) => Promise<string>;
+
+type Writer = (text: string) => void;
+
+/**
+ * How many times one question may be answered wrongly before this gives up.
+ *
+ * There is a cap because there has to be one. `ask` can be attached to something
+ * that is not a person: a pipe that is already at end of file returns empty
+ * forever, and without a bound that is a command that never returns and never says
+ * why. Three is enough for a typo and few enough to notice.
+ */
+export const MAX_ANSWER_ATTEMPTS = 3;
+
+/**
+ * One question, with the reason it is being asked and the answer that is assumed.
+ *
+ * The reason is not decoration. `BUILD-PROGRESS` section V5 is explicit that every
+ * field has to be able to say why it is needed, because a reader who cannot tell
+ * what a question is for is a reader deciding whether to keep going.
+ */
+export function promptFor(question: string, why: string, fallback: string): string {
+  return `${question}\n  ${why}\n  [${fallback}] `;
+}
+
+export type Collected =
+  | { readonly ok: true; readonly answers: CreateAnswers }
+  | { readonly ok: false; readonly lines: readonly string[] };
+
+/**
+ * Ask one question until the answer is usable, or until the attempts run out.
+ *
+ * An empty line takes the default, which is the convention every prompt follows and
+ * is why `ask` hands the line back raw rather than deciding for itself.
+ */
+async function askUntilValid(
+  ask: Ask,
+  write: Writer,
+  prompt: string,
+  fallback: string,
+  check: (value: string) => NameCheck,
+): Promise<string | null> {
+  for (let attempt = 1; attempt <= MAX_ANSWER_ATTEMPTS; attempt += 1) {
+    const raw = (await ask(prompt)).trim();
+    const value = raw === '' ? fallback : raw;
+
+    const verdict = check(value);
+    if (verdict.ok) return value;
+
+    write(`  ${verdict.reason}`);
+  }
+
+  return null;
+}
+
+/**
+ * The two questions, in order, with everything else decided elsewhere.
+ *
+ * Returns the refusal rather than throwing it, because running out of attempts is
+ * not an error in the sense the error handler means: nothing went wrong, the
+ * command simply has nothing to go on, and the exit code for that is the one that
+ * says retrying the identical invocation will not help.
+ */
+export async function collectAnswers(ask: Ask, write: Writer): Promise<Collected> {
+  const project = await askUntilValid(
+    ask,
+    write,
+    promptFor(
+      'Project name',
+      'Names the database, the bucket and the Worker on your account.',
+      DEFAULT_PROJECT_NAME,
+    ),
+    DEFAULT_PROJECT_NAME,
+    checkProjectName,
+  );
+
+  if (project === null) return { ok: false, lines: [gaveUp('a project name')] };
+
+  const frontendOrigin = await askUntilValid(
+    ask,
+    write,
+    promptFor(
+      'Frontend origin',
+      'Where your app runs. Without it the browser blocks every call to this API.',
+      DEFAULT_FRONTEND_ORIGIN,
+    ),
+    DEFAULT_FRONTEND_ORIGIN,
+    checkFrontendOrigin,
+  );
+
+  if (frontendOrigin === null) return { ok: false, lines: [gaveUp('a frontend origin')] };
+
+  return { ok: true, answers: { project, frontendOrigin } };
+}
+
+/**
+ * What to say when the attempts run out.
+ *
+ * Names the flag as well as the failure, because the likeliest way to reach this is
+ * not three typos: it is a script running the command with nothing on stdin, and
+ * that reader needs the non-interactive way in rather than an invitation to try
+ * again more carefully.
+ */
+function gaveUp(what: string): string {
+  return (
+    `Stopped after ${MAX_ANSWER_ATTEMPTS} attempts at ${what}. ` +
+    'If you are running this from a script, pass the answers as arguments instead.'
+  );
+}
+
 export interface CreatePlanStep {
   readonly title: string;
   /** What breaks if this step is skipped. Printed when a step fails. */
