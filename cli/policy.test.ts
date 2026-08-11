@@ -246,6 +246,25 @@ describe('the order the write happens in', () => {
     expect(expose?.params).toContain(5);
   });
 
+  it('names the table in the command it hands back', async () => {
+    // The line printed at the end used to read the file path where it meant the
+    // table, decide it looked like a filename, and print `your-table`. Every test
+    // asserted the outcome and none read the sentence, so a real run found it.
+    const h = harness({ file: policyDocument() });
+    await runPolicy(['apply', 'p.json'], h.write, PLAIN, h.host);
+
+    // Split the rendered text, not the writes: `nextAction` returns its whole block
+    // as one string, so there is no write that is only the curl line.
+    const curl = h
+      .text()
+      .split('\n')
+      .find((line) => line.startsWith('curl '));
+
+    expect(curl).toContain('/rest/v1/posts');
+    expect(curl).not.toContain('your-table');
+    expect(curl).not.toContain('p.json');
+  });
+
   it('never puts a value in the SQL', async () => {
     // Invariant I7, checked rather than trusted.
     const h = harness({ file: policyDocument() });

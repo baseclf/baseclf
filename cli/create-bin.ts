@@ -23,4 +23,5 @@ process.exitCode = await main(
   runtime.host,
   runtime.createHost,
   runtime.loginHost,
+  runtime.policyHost,
 );

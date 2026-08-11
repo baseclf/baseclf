@@ -431,13 +431,17 @@ export async function runPolicy(
     const outcome = await apply(endpoint, document, write, style);
 
     if (outcome === 'ok') {
+      // ⚠️ The table comes from the document, not from the arguments. An earlier
+      // version read `parsed.rest[1]`, which is the path to the file, and then
+      // decided the value looked like a filename and printed `your-table` instead.
+      // The one thing this line could say for certain, it left out. Found by
+      // reading the output of a real run rather than by any test, because every
+      // test asserted the command's outcome and none read the sentence.
       write(
         nextAction({
           goal: 'see it working',
           steps: ['Ask the deployment for the table, as somebody who is not signed in:'],
-          copy: `curl https://${parsed.project}.<your-subdomain>.workers.dev/rest/v1/${
-            (parsed.rest[1] ?? '').includes('.') ? 'your-table' : (parsed.rest[1] ?? 'your-table')
-          }`,
+          copy: `curl https://${parsed.project}.<your-subdomain>.workers.dev/rest/v1/${document.definition.table}`,
           verify: 'baseclf policy list',
         }),
       );

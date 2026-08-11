@@ -119,8 +119,25 @@ export const CREATE_USAGE = [
  * The refresh comes first and the read second, in that order, for the reason on
  * `refreshLogin`.
  */
+/**
+ * What resolving a credential needs, which is less than a whole `CreateHost`.
+ *
+ * Narrower on purpose, so `baseclf policy` can reuse this rather than carry a second
+ * copy of the same judgment. Two implementations of one decision about credentials is
+ * the shape that produced debts 31 and 35, and this one is about which account
+ * somebody's data ends up on.
+ */
+export interface CredentialSource {
+  readonly fetcher: Fetcher;
+  readonly refreshLogin: () => Promise<string | null>;
+  readonly readAuthFile: (path: string) => string | undefined;
+  readonly paths: MachinePaths;
+  readonly envFile?: string | undefined;
+  readonly now: () => Date;
+}
+
 async function resolveCredential(
-  host: CreateHost,
+  host: CredentialSource,
   write: Write,
   style: Style,
 ): Promise<{ token: string; warnings: readonly string[] } | null> {
@@ -139,8 +156,21 @@ async function resolveCredential(
   // it was written for, which is a token that has aged out of its hour.
   let oauth = readOAuthCredential(host.readAuthFile(derived), host.now(), derived);
 
-  if (!oauth.ok) {
+  // Refreshed when it has expired, and also when it is close, because a run can take
+  // minutes. The difference is what happens when the refresh does not help: an
+  // expired token is a refusal, a close one carries on. See the note below.
+  if (!oauth.ok || oauth.expiringSoon) {
     const whoami = await host.refreshLogin();
+
+    if (whoami === null && oauth.ok) {
+      // 🔴 Close to expiry, and wrangler could not be reached to extend it. Carrying
+      // on is right: the token still works, and refusing here was a dead zone of a
+      // couple of minutes before every expiry in which the command could not be run
+      // for a reason the reader could not act on. Measured by hitting it.
+      write(note('That Cloudflare login expires shortly. Carrying on with it.'));
+      write(note('If this fails partway, run "npx wrangler login" and try again.'));
+      return { token: oauth.token, warnings: [] };
+    }
 
     if (whoami === null) {
       write(
@@ -157,7 +187,18 @@ async function resolveCredential(
     // worth preferring: the derivation above copies wrangler's rule, and wrangler
     // saying so beats copying it correctly.
     const path = readWhoami(whoami).configPath ?? derived;
-    oauth = readOAuthCredential(host.readAuthFile(path), host.now(), path);
+    const refreshed = readOAuthCredential(host.readAuthFile(path), host.now(), path);
+
+    // ⚠️ A refresh that did not extend it is the ordinary case near expiry, not a
+    // failure: wrangler declines to renew a token it still considers valid, which is
+    // correct on its side. Keeping the usable credential is what stops the two of
+    // them deadlocking over a token neither thinks is a problem.
+    if (!refreshed.ok && oauth.ok) {
+      write(note('That Cloudflare login expires shortly and could not be renewed yet.'));
+      return { token: oauth.token, warnings: [] };
+    }
+
+    oauth = refreshed;
   }
 
   const choice = chooseCredential(
@@ -199,7 +240,7 @@ function readEnvFileToken(text: string | undefined): string | undefined {
  * costs them a resource on a bill that is not theirs.
  */
 async function resolveAccount(
-  host: CreateHost,
+  host: CredentialSource,
   token: string,
   write: Write,
   style: Style,
@@ -433,6 +474,37 @@ export async function runCreate(
   );
 
   return 'ok';
+}
+
+/**
+ * A credential and the account it acts on, or an explanation.
+ *
+ * The two halves of what every command that touches Cloudflare needs, in the order
+ * they have to happen: the account cannot be asked for without a credential, and the
+ * credential does not carry one.
+ *
+ * Exported so `baseclf policy` gets the identical behaviour, including the refusal to
+ * choose between two accounts. Somebody with a personal account and a work account
+ * should not find out which one their policies went to from the wrong bill.
+ */
+export async function resolveAccountCredential(
+  source: CredentialSource,
+  write: Write,
+  style: Style,
+): Promise<{
+  credentials: { accountId: string; token: string };
+  warnings: readonly string[];
+} | null> {
+  const credential = await resolveCredential(source, write, style);
+  if (credential === null) return null;
+
+  const account = await resolveAccount(source, credential.token, write, style);
+  if (account === null) return null;
+
+  return {
+    credentials: { accountId: account.id, token: credential.token },
+    warnings: credential.warnings,
+  };
 }
 
 /** Every fixed string this command can print, for the voice rules to check. */

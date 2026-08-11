@@ -229,6 +229,23 @@ export type OAuthCredential =
       readonly token: string;
       readonly expiresAt: Date | undefined;
       readonly scopes: readonly string[];
+      /**
+       * Valid, but not for long.
+       *
+       * 🔴 Reported rather than refused, and an earlier version refused. Measured on
+       * 2026-08-12 by running the command: a token with forty two seconds left was
+       * inside the margin, so the CLI called it expired and asked wrangler to refresh
+       * it. Wrangler declined, correctly, because from its side the token was still
+       * good. Nothing either of them did was wrong and the command could not be run.
+       *
+       * That is a dead zone of a couple of minutes before every expiry in which the
+       * tool refuses for a reason the reader cannot act on. A short command finishing
+       * in two seconds should use a token that has forty left.
+       *
+       * So the reader reports and the caller decides. `create` runs for minutes and
+       * should refresh; `policy` runs for seconds and should carry on with a warning.
+       */
+      readonly expiringSoon: boolean;
     }
   | {
       readonly ok: false;
@@ -298,7 +315,11 @@ export function readOAuthCredential(
     };
   }
 
-  if (expiresAt.getTime() - now.getTime() <= EXPIRY_MARGIN_MS) {
+  const remaining = expiresAt.getTime() - now.getTime();
+
+  // Only a token that is actually past its expiry is refused. One that is merely
+  // close is reported as close, for the reason on `expiringSoon`.
+  if (remaining <= 0) {
     return {
       ok: false,
       reason: 'expired',
@@ -309,7 +330,13 @@ export function readOAuthCredential(
     };
   }
 
-  return { ok: true, token: config.oauthToken, expiresAt, scopes: config.scopes };
+  return {
+    ok: true,
+    token: config.oauthToken,
+    expiresAt,
+    scopes: config.scopes,
+    expiringSoon: remaining <= EXPIRY_MARGIN_MS,
+  };
 }
 
 /**

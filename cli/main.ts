@@ -15,6 +15,7 @@
 import { runDoctor } from './doctor.js';
 import { LOGIN_FIXED_TEXT, type LoginHost, runLogin } from './login.js';
 import { findVoiceViolations, type Style } from './output.js';
+import { POLICY_FIXED_TEXT, type PolicyHost, runPolicy } from './policy.js';
 import { renderReport } from './report.js';
 import { CREATE_FIXED_TEXT, type CreateHost, runCreate } from './run-create.js';
 import {
@@ -28,6 +29,7 @@ import {
 
 export type Writer = (text: string) => void;
 export type { LoginHost } from './login.js';
+export type { PolicyHost } from './policy.js';
 export type { CreateHost } from './run-create.js';
 export type { Host } from './secret.js';
 
@@ -59,6 +61,7 @@ const USAGE = [
   'Commands:',
   '  login              Log in to Cloudflare, and say which account you landed on',
   '  create             Create the resources and deploy the engine to your account',
+  '  policy <verb>      Expose a table, list what is exposed, or stop exposing one',
   '  doctor <url>       Ask a deployment what is wrong with it, and what to do about it',
   '  secret set <KEY>   Set one secret on a deployed Worker, reading the value from stdin',
   '',
@@ -79,6 +82,7 @@ export async function main(
   host: Host = NO_HOST,
   createHost?: CreateHost,
   loginHost?: LoginHost,
+  policyHost?: PolicyHost,
 ): Promise<number> {
   const [command, ...rest] = argv;
 
@@ -96,6 +100,14 @@ export async function main(
       return EXIT.usage;
     }
     return OUTCOME_EXIT[await runLogin(rest, write, style, loginHost)];
+  }
+
+  if (command === 'policy') {
+    if (policyHost === undefined) {
+      write('baseclf policy needs a runtime that can reach the network and read files.');
+      return EXIT.usage;
+    }
+    return OUTCOME_EXIT[await runPolicy(rest, write, style, policyHost)];
   }
 
   if (command === 'create') {
@@ -162,6 +174,7 @@ export const FIXED_TEXT: readonly string[] = Object.freeze([
   ...SECRET_FIXED_TEXT,
   ...CREATE_FIXED_TEXT,
   ...LOGIN_FIXED_TEXT,
+  ...POLICY_FIXED_TEXT,
 ]);
 
 /** The voice rules, over everything in `FIXED_TEXT`. Used by the tests. */

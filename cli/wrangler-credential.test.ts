@@ -193,17 +193,47 @@ describe('deciding whether the login is usable', () => {
     }
   });
 
-  it('refuses a login that expires during the run, not only one already expired', () => {
-    // Provisioning is many calls. A token with thirty seconds left starts a run that
-    // fails partway through, with resources already created.
+  it('flags a login that expires during the run, and does not refuse it', () => {
+    // ⚠️ This asserted a refusal until a real run walked into what that costs.
     //
-    // ⚠️ Thirty seconds is written out rather than derived from EXPIRY_MARGIN_MS, and
-    // the first version of this test did derive it. That made the test move with the
-    // constant: setting the margin to zero moved the fixture too, the token read as
-    // already expired, and the assertion passed while the protection was gone. A
-    // mutation caught it. Ledger entry D2, which is the same shape.
+    // A token with forty two seconds left was inside the margin, so this called it
+    // expired and asked wrangler to renew it. Wrangler declined, correctly, because
+    // from its side the token was still good. Neither of them was wrong and the
+    // command could not be run: a dead zone of two minutes before every expiry.
+    //
+    // So the reader reports the fact and the caller decides. A command that takes
+    // seconds should use a token that has forty of them left.
     const thirtySecondsLeft = new Date(NOW.getTime() + 30_000).toISOString();
     const result = readOAuthCredential(configFile(thirtySecondsLeft), NOW, PATH);
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.expiringSoon).toBe(true);
+  });
+
+  it('does not flag a login with plenty of time left', () => {
+    const result = readOAuthCredential(configFile('2026-08-12T01:00:00.000Z'), NOW, PATH);
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.expiringSoon).toBe(false);
+  });
+
+  it('flags rather than refuses right up to the moment of expiry', () => {
+    // One second left is still one second. The refusal belongs to the token that has
+    // actually run out, and nothing else.
+    //
+    // ⚠️ The interval is written out rather than derived from EXPIRY_MARGIN_MS, and
+    // an earlier version of this test did derive it. That made the test move with the
+    // constant: setting the margin to zero moved the fixture too, and the assertion
+    // passed while the protection was gone. A mutation caught it. Ledger entry D2.
+    const almostGone = new Date(NOW.getTime() + 1_000).toISOString();
+    const result = readOAuthCredential(configFile(almostGone), NOW, PATH);
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.expiringSoon).toBe(true);
+  });
+
+  it('refuses a login at the exact moment it expires', () => {
+    const result = readOAuthCredential(configFile(NOW.toISOString()), NOW, PATH);
 
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toBe('expired');

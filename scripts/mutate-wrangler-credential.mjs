@@ -44,17 +44,23 @@ const MUTATIONS = [
     name: 'expiry ignored, so a dead login is used as a live one',
     file: FILE,
     expect: 'the refuses-an-expired-login test',
-    find: / {2}if \(expiresAt\.getTime\(\) - now\.getTime\(\) <= EXPIRY_MARGIN_MS\) \{/,
+    find: / {2}if \(remaining <= 0\) \{/,
     replace: '  if (false) {',
   },
   {
-    // The margin is the difference between refusing up front and failing between two
-    // steps. Zeroing it accepts a token with a second left on it.
-    name: 'the margin dropped, so a token expiring mid-run passes',
+    // The flag is what lets a caller refresh before a long run. Losing it does not
+    // refuse anything, it just stops `create` from renewing a token that is about to
+    // die between two of its steps.
+    //
+    // ⚠️ This mutation targeted the margin comparison until the design changed under
+    // it: being close to expiry used to be a refusal and is now a report, because
+    // refusing created a two minute window before every expiry in which the command
+    // could not run and the reader could do nothing about it.
+    name: 'the expiring-soon flag never set, so nothing refreshes ahead of a long run',
     file: FILE,
-    expect: 'the refuses-a-login-that-expires-during-the-run test',
-    find: /export const EXPIRY_MARGIN_MS = 120_000;/,
-    replace: 'export const EXPIRY_MARGIN_MS = 0;',
+    expect: 'the flags-a-login-that-expires-during-the-run test',
+    find: /expiringSoon: remaining <= EXPIRY_MARGIN_MS,/,
+    replace: 'expiringSoon: false,',
   },
   {
     // A missing or unreadable expiry read as "fine forever" is the same failure with

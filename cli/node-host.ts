@@ -40,7 +40,8 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 import type { LoginHost } from './login.js';
-import type { CreateHost } from './run-create.js';
+import type { PolicyHost } from './policy.js';
+import { type CreateHost, resolveAccountCredential } from './run-create.js';
 import type { Host } from './secret.js';
 import type { Platform } from './wrangler-credential.js';
 
@@ -308,4 +309,28 @@ export const runtime = {
     envFile: readEnvFile(),
     now: () => new Date(),
   } satisfies LoginHost,
+  policyHost: {
+    fetcher: fetch,
+    readFile: readTextFile,
+    // ⚠️ The same resolution `create` uses, called rather than reimplemented. It
+    // decides which Cloudflare account the policies land on, and two implementations
+    // of that decision is how they come to disagree.
+    //
+    // It writes its own refusals, which is why it takes the writer and the style.
+    credentials: () =>
+      resolveAccountCredential(
+        {
+          fetcher: fetch,
+          refreshLogin,
+          readAuthFile: readTextFile,
+          paths,
+          envFile: readEnvFile(),
+          now: () => new Date(),
+        },
+        (text: string) => {
+          process.stdout.write(`${text}\n`);
+        },
+        { colour },
+      ),
+  } satisfies PolicyHost,
 };
