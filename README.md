@@ -233,17 +233,22 @@ These were measured against a real D1 database, not read from documentation.
 
 ## Roadmap
 
-| | |
-|---|---|
-| **V0** | Skeleton, D1 dialect, schema catalogue |
-| **V1** | Policy engine, read path |
-| **V2** | Policy engine, write path with `WITH CHECK` ← **you are here** |
-| V3 | Auth: Google, GitHub, JWT |
-| V4 | Storage on R2 |
-| V5 | One-command deploy |
-| V6 | MCP server |
-| V7 | Studio, including the policy simulator |
-| V8 | SDK, docs, sample application |
+| | | |
+|---|---|---|
+| **V0** | Skeleton, D1 dialect, schema catalogue | shipped |
+| **V1** | Policy engine, read path | shipped |
+| **V2** | Policy engine, write path with `WITH CHECK` | shipped |
+| **V3** | Auth: Google, GitHub, JWT | shipped |
+| **V4** | Storage on R2 | shipped |
+| **V5** | One-command deploy | shipped ← **you are here** |
+| V6 | MCP server | |
+| V7 | Studio, including the policy simulator | |
+| V8 | SDK, docs, sample application | |
+
+What "shipped" means here: it runs, it has tests, and V5 was proved by
+provisioning a deployment onto an empty Cloudflare account with one command and
+then asking it whether it worked. It does not mean anybody other than the author
+has used it.
 
 ## Development
 
