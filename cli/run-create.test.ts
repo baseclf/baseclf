@@ -21,6 +21,8 @@ interface Harness {
   readonly lines: string[];
   readonly write: (text: string) => void;
   readonly text: () => string;
+  /** How many times wrangler was reached for. Zero is the interesting number. */
+  readonly refreshAttempts: () => number;
 }
 
 /** The wrangler config file, in the shape measured on 2026-08-12. */
@@ -52,6 +54,8 @@ interface HarnessOptions {
   /** Cloudflare's own code on the injected failure. Some of them are actionable. */
   readonly failCode?: number;
   readonly authFileText?: string | undefined;
+  /** What the file holds after a refresh, when the refresh is meant to have worked. */
+  readonly refreshTo?: string;
   readonly whoami?: string | null;
   readonly env?: Record<string, string | undefined>;
 }
@@ -132,14 +136,23 @@ function harness(options: HarnessOptions = {}): Harness {
     lines.push(text);
   };
 
+  let refreshed = 0;
+
   const host: CreateHost = {
     fetcher: fetcher as CreateHost['fetcher'],
     readWorkerBundle: async () => 'export default { fetch() {} }',
-    refreshLogin: async () => (options.whoami === undefined ? WHOAMI : options.whoami),
-    readAuthFile: () =>
-      options.authFileText === undefined && !('authFileText' in options)
+    refreshLogin: async () => {
+      refreshed += 1;
+      return options.whoami === undefined ? WHOAMI : options.whoami;
+    },
+    // A refresh rewrites the file, so what a later read sees is different. Modelling
+    // that is the only way a test can tell a refresh that worked from one that ran.
+    readAuthFile: () => {
+      if (refreshed > 0 && options.refreshTo !== undefined) return options.refreshTo;
+      return options.authFileText === undefined && !('authFileText' in options)
         ? authFile()
-        : options.authFileText,
+        : options.authFileText;
+    },
     paths: {
       platform: 'linux',
       home: '/home/reader',
@@ -151,7 +164,14 @@ function harness(options: HarnessOptions = {}): Harness {
     sleep: async () => {},
   };
 
-  return { host, sent, lines, write, text: () => lines.join('\n') };
+  return {
+    host,
+    sent,
+    lines,
+    write,
+    text: () => lines.join('\n'),
+    refreshAttempts: () => refreshed,
+  };
 }
 
 function callsTo(sent: readonly Recorded[], fragment: string, method?: string): Recorded[] {
@@ -261,12 +281,33 @@ describe('when it cannot start', () => {
     expect(h.text()).not.toMatch(/permission/i);
   });
 
-  it('refuses when wrangler cannot be run at all', async () => {
+  it('does not run wrangler at all when the credential is still good', async () => {
+    // 🔴 Measured on 2026-08-12: `npx wrangler` in a directory with no local copy goes
+    // to install the newest one, and that install was broken at the time. Refreshing
+    // unconditionally made a perfectly good credential depend on it, and the reader
+    // was told to log in when they already had.
     const h = harness({ whoami: null });
+
+    expect(await runCreate([], h.write, PLAIN, h.host)).toBe('ok');
+    expect(h.refreshAttempts()).toBe(0);
+  });
+
+  it('refuses when the credential is stale and wrangler cannot be run to refresh it', async () => {
+    const h = harness({ authFileText: authFile('2026-08-11T23:00:00.000Z'), whoami: null });
     const outcome = await runCreate([], h.write, PLAIN, h.host);
 
     expect(outcome).toBe('failed');
+    expect(h.refreshAttempts()).toBe(1);
     expect(h.text()).toContain('wrangler login');
+  });
+
+  it('refreshes and carries on when the credential has aged out', async () => {
+    // The case the refresh was written for. These last an hour, so anybody who logged
+    // in earlier in the day lands here.
+    const h = harness({ authFileText: authFile('2026-08-11T23:00:00.000Z'), refreshTo: authFile() });
+
+    expect(await runCreate([], h.write, PLAIN, h.host)).toBe('ok');
+    expect(h.refreshAttempts()).toBe(1);
   });
 
   it('refuses to choose between two accounts', async () => {

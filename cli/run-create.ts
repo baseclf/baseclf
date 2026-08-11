@@ -124,21 +124,39 @@ async function resolveCredential(
   write: Write,
   style: Style,
 ): Promise<{ token: string; warnings: readonly string[] } | null> {
-  const whoami = await host.refreshLogin();
+  const derived = wranglerAuthPath(host.paths);
 
-  if (whoami === null) {
-    // Not bundled, on purpose: wrangler is tens of megabytes and most people running
-    // this already have it, because logging in is how they got a credential at all.
-    write(styledResultLine('deny', 'Could not run wrangler.', style));
-    write(note('Log in to Cloudflare first. It opens a browser and takes a moment:'));
-    write(note('  npx wrangler login'));
-    return null;
+  // 🔴 The file is read before wrangler is run, and the order is the whole point.
+  //
+  // An earlier version refreshed first, unconditionally, and that made a working
+  // login depend on `npx wrangler` resolving. Measured on 2026-08-12 in a directory
+  // with no local wrangler: `npx` goes to install the newest one, and that install
+  // was broken at the time (wrangler 4.121.0 asks for a miniflare version that does
+  // not exist). The result was a reader with a perfectly good credential being told
+  // to log in.
+  //
+  // A token that is still good needs nothing run. The refresh below is for the case
+  // it was written for, which is a token that has aged out of its hour.
+  let oauth = readOAuthCredential(host.readAuthFile(derived), host.now(), derived);
+
+  if (!oauth.ok) {
+    const whoami = await host.refreshLogin();
+
+    if (whoami === null) {
+      write(styledResultLine('deny', 'That Cloudflare login needs refreshing, and wrangler', style));
+      write(note('could not be run to do it. These logins last an hour.'));
+      write(note(''));
+      write(note('Run this once, then try again:'));
+      write(note('  npx wrangler login'));
+      return null;
+    }
+
+    // Only now is there an authoritative answer about where the file is, and it is
+    // worth preferring: the derivation above copies wrangler's rule, and wrangler
+    // saying so beats copying it correctly.
+    const path = readWhoami(whoami).configPath ?? derived;
+    oauth = readOAuthCredential(host.readAuthFile(path), host.now(), path);
   }
-
-  const facts = readWhoami(whoami);
-  const path = facts.configPath ?? wranglerAuthPath(host.paths);
-
-  const oauth = readOAuthCredential(host.readAuthFile(path), host.now(), path);
 
   const choice = chooseCredential(
     {
