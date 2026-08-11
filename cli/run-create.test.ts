@@ -5,7 +5,8 @@ import { findVoiceViolations, PLAIN } from './output.js';
 import { CREATE_FIXED_TEXT, type CreateHost, runCreate } from './run-create.js';
 
 const TOKEN_CANARY = 'oauth-token-never-printed';
-const ACCOUNT = 'acct_9f21c4';
+/** Shaped like a real one, which is 32 lowercase hex characters, and made up. */
+const ACCOUNT = 'f0e1d2c3b4a5968778695a4b3c2d1e0f';
 const NOW = new Date('2026-08-12T00:00:00.000Z');
 
 interface Recorded {
@@ -48,6 +49,8 @@ interface HarnessOptions {
   readonly answers?: readonly string[];
   readonly healthStatus?: number;
   readonly failOn?: string;
+  /** Cloudflare's own code on the injected failure. Some of them are actionable. */
+  readonly failCode?: number;
   readonly authFileText?: string | undefined;
   readonly whoami?: string | null;
   readonly env?: Record<string, string | undefined>;
@@ -98,10 +101,11 @@ function harness(options: HarnessOptions = {}): Harness {
 
     if (options.failOn !== undefined && path.includes(options.failOn)) {
       return new Response(
-        JSON.stringify({ success: false, errors: [{ code: 10001, message: 'nope' }] }),
-        {
-          status: 500,
-        },
+        JSON.stringify({
+          success: false,
+          errors: [{ code: options.failCode ?? 10001, message: 'nope' }],
+        }),
+        { status: 500 },
       );
     }
 
@@ -325,6 +329,39 @@ describe('when a step fails', () => {
 
     expect(callsTo(h.sent, '/workers/scripts/', 'PUT')).toHaveLength(0);
     expect(callsTo(h.sent, '/schedules')).toHaveLength(0);
+  });
+
+  it('tells the reader to switch R2 on rather than repeating Cloudflare at them', async () => {
+    // 🔴 Found by the first run against a genuinely blank account, and it only shows
+    // there: R2 is off until somebody switches it on, and the API refuses every call
+    // including the read. Every account this project had used already had it on.
+    const h = harness({ failOn: '/r2/buckets', failCode: 10042 });
+    const outcome = await runCreate([], h.write, PLAIN, h.host);
+
+    expect(outcome).toBe('failed');
+    expect(h.text()).toContain('R2 Object Storage');
+    expect(h.text()).toMatch(/run this again/i);
+  });
+
+  it('does not attach the R2 advice to failures that are not about R2', async () => {
+    // A generic paragraph on every failure teaches people to stop reading the ones
+    // that matter.
+    const h = harness({ failOn: '/r2/buckets', failCode: 10001 });
+    await runCreate([], h.write, PLAIN, h.host);
+
+    expect(h.text()).not.toContain('R2 Object Storage');
+    expect(h.text()).toMatch(/Fix the cause and rerun/i);
+  });
+
+  it('keeps the account id out of the message when a call fails', async () => {
+    // Every path carries one and every failure prints its path. That id is what
+    // somebody needs to act on the account, and a terminal ends up in the screenshot
+    // attached to the bug report.
+    const h = harness({ failOn: '/d1/database' });
+    await runCreate([], h.write, PLAIN, h.host);
+
+    expect(h.text()).toContain('/accounts/...');
+    expect(h.text()).not.toContain(ACCOUNT);
   });
 
   it('calls a slow address a success, because everything is deployed', async () => {

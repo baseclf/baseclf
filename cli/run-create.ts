@@ -31,11 +31,13 @@
 
 import {
   type Account,
+  CloudflareError,
   type Credentials,
   enableWorkersDev,
   ensureBucket,
   ensureDatabase,
   ensureSubdomain,
+  explainCode,
   type Fetcher,
   listAccounts,
   putSchedules,
@@ -228,10 +230,24 @@ async function runPlan(
     return entry ?? { title: 'Unnamed step', consequence: 'unknown' };
   };
 
-  const fail = (entry: { title: string; consequence: string }, reason: string): { ok: false } => {
+  const fail = (
+    entry: { title: string; consequence: string },
+    reason: string,
+    /** Cloudflare's own codes, when the failure came from it. */
+    codes: readonly number[] = [],
+  ): { ok: false } => {
     write(styledResultLine('deny', `${entry.title}: ${reason}`, style));
     write(note(`Without this, ${entry.consequence}.`));
-    write(note('Nothing here is undone by running it again. Fix the cause and rerun.'));
+
+    // Specific advice when there is any, and only then. A generic paragraph attached
+    // to every failure teaches people to stop reading the ones that matter.
+    const advice = explainCode(codes);
+    for (const line of advice) write(line === '' ? '' : note(line));
+
+    if (advice.length === 0) {
+      write(note('Nothing here is undone by running it again. Fix the cause and rerun.'));
+    }
+
     return { ok: false };
   };
 
@@ -333,6 +349,7 @@ async function runPlan(
         consequence: 'nothing is deployed',
       },
       error instanceof Error ? error.message : String(error),
+      error instanceof CloudflareError ? error.codes : [],
     );
   }
 }

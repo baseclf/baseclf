@@ -144,7 +144,7 @@ async function call<T>(
     const messages = (envelope.errors ?? []).map((error) => error.message ?? 'no message');
 
     throw new CloudflareError(
-      `${path} answered ${response.status}: ${messages.join('; ') || 'no error given'}`,
+      `${withoutAccountId(path)} answered ${response.status}: ${messages.join('; ') || 'no error given'}`,
       response.status,
       codes,
     );
@@ -153,8 +153,71 @@ async function call<T>(
   return envelope.result as T;
 }
 
+/**
+ * The account id, taken back out of a path before it goes in a message.
+ *
+ * Every path here carries one and every failure prints its path, so without this an
+ * ordinary error puts a full account id in the terminal. That is the identifier
+ * somebody needs to act on the account, `rules/05` section B keeps it off every
+ * published surface, and a terminal is a surface: it ends up in the screenshot
+ * attached to the bug report.
+ *
+ * The rest of the path is what makes the message useful, so only the id goes.
+ *
+ * ⚠️ Matches whatever the segment is rather than what an id looks like. The first
+ * version wanted four or more hex characters, which is true of every id Cloudflare
+ * issues today and is a fact about their format rather than about this code. A
+ * redaction that stops working when somebody else changes a format, silently and only
+ * in the error path, is worse than no redaction: nobody would find out.
+ */
+export function withoutAccountId(path: string): string {
+  return path.replace(/\/accounts\/[^/?]+/, '/accounts/...');
+}
+
 /** Cloudflare's code for "that name is taken", which idempotency has to absorb. */
 export const ALREADY_EXISTS_CODES: readonly number[] = Object.freeze([10014, 10021, 1004]);
+
+/**
+ * Refusals that are somebody's to fix rather than something to retry.
+ *
+ * 🔴 Measured on a genuinely blank account on 2026-08-12, which is the only place it
+ * shows: **R2 is off until it is switched on in the dashboard, and the API refuses
+ * every call including the read.** Every account this project had used before had it
+ * on already, so provisioning had never once been run somewhere it was not.
+ *
+ * Cloudflare's own message is better than most ("Please enable R2 through the
+ * Cloudflare Dashboard") and still leaves the reader hunting, because the page it
+ * means is not where anybody looks first and the button is a one-time thing that then
+ * never appears again.
+ *
+ * ⚠️ Keyed by code rather than by matching the message. The message is prose
+ * Cloudflare can reword; the code is the part that is meant to be depended on. The
+ * project already carries one message match, on the upload path, and it is documented
+ * there as the most fragile thing in it.
+ */
+const ACTIONABLE_CODES: Readonly<Record<number, readonly string[]>> = Object.freeze({
+  10042: Object.freeze([
+    'R2 has to be switched on once per account before anything can create a bucket.',
+    'It is free to enable and the free tier covers ten gigabytes.',
+    '',
+    'Cloudflare dashboard, left sidebar, R2 Object Storage, then the button to enable it.',
+    'Then run this again. Everything created so far is kept.',
+  ]),
+});
+
+/**
+ * What a reader can do about a refusal, when there is something specific.
+ *
+ * Empty for everything else, because a generic paragraph attached to every failure
+ * teaches people to stop reading the ones that matter.
+ */
+export function explainCode(codes: readonly number[]): readonly string[] {
+  for (const code of codes) {
+    const advice = ACTIONABLE_CODES[code];
+    if (advice !== undefined) return advice;
+  }
+  return [];
+}
 
 function isAlreadyExists(error: unknown): boolean {
   if (!(error instanceof CloudflareError)) return false;

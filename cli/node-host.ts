@@ -150,17 +150,39 @@ function readEchoedLine(prompt: string): Promise<string> {
     process.stdin.resume();
 
     let value = '';
+
+    const finish = (line: string): void => {
+      process.stdin.off('data', onData);
+      process.stdin.off('end', onEnd);
+      process.stdin.pause();
+      resolve(line);
+    };
+
     const onData = (chunk: string): void => {
       value += chunk;
       const newline = value.indexOf('\n');
       if (newline === -1) return;
+      finish(value.slice(0, newline).replace(/\r$/, ''));
+    };
 
-      process.stdin.off('data', onData);
-      process.stdin.pause();
-      resolve(value.slice(0, newline).replace(/\r$/, ''));
+    // 🔴 End of file has to resolve, and the first version of this had no handler for
+    // it. A pipe that is empty or already spent never sends a newline, so the promise
+    // never settled and the command hung with a prompt on the screen and no way out.
+    //
+    // The bound in `collectAnswers` is written for exactly this case and could not
+    // help: it counts answers, and an answer that never arrives is not a count. A
+    // guard one layer above a seam cannot protect against the seam not returning.
+    //
+    // Resolving empty is the right answer rather than a convenience. Empty means "use
+    // the default" at every prompt here, so `create-baseclf < /dev/null` takes the
+    // defaults, which is what somebody scripting it means. Anything unusable still
+    // runs out of attempts and stops.
+    const onEnd = (): void => {
+      finish(value.replace(/\r?\n$/, ''));
     };
 
     process.stdin.on('data', onData);
+    process.stdin.on('end', onEnd);
   });
 }
 
