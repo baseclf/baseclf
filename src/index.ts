@@ -15,6 +15,7 @@
  *   3. Better Auth itself.
  */
 
+import { ensureAuthSchema } from './auth/bootstrap.js';
 import { diagnose } from './auth/diagnose.js';
 import { type AuthEnv, authConfig, getAuth, isAuthPath, verifierConfig } from './auth/index.js';
 import { providerStatuses } from './auth/providers.js';
@@ -378,6 +379,43 @@ export function resetEngineSchemaMemo(): void {
 }
 
 /**
+ * Better Auth's tables, created once per isolate if this deployment lacks them.
+ *
+ * Separate from the engine schema memo above because the two are not the same kind
+ * of thing. The engine's DDL says IF NOT EXISTS and answers for itself; this one
+ * has to ask Better Auth what is missing, and it has a third outcome the other does
+ * not: a schema that has drifted, which it **refuses** rather than repairs. See the
+ * note at the top of `auth/bootstrap.ts` for why, and `rules/01` §G11 for the
+ * measurement behind it.
+ *
+ * The refusal is logged rather than thrown. A deployment whose auth tables have
+ * drifted is broken, but throwing here would take out the diagnostic paths that are
+ * the only way to find out what is wrong with it, and `doctor` already reports the
+ * symptom from outside.
+ */
+let authSchemaReady: Promise<void> | null = null;
+
+async function ensureAuthSchemaOnce(env: Env): Promise<void> {
+  authSchemaReady ??= ensureAuthSchema(env.DB, env)
+    .then((outcome) => {
+      if (outcome.kind === 'refused') {
+        logError({ event: 'error', code: 'AUTH_SCHEMA_DRIFT', detail: outcome.detail });
+      }
+    })
+    .catch((error: unknown) => {
+      authSchemaReady = null;
+      throw error;
+    });
+
+  await authSchemaReady;
+}
+
+/** For tests, which start from a database that has just been rebuilt. */
+export function resetAuthSchemaMemo(): void {
+  authSchemaReady = null;
+}
+
+/**
  * Count this request, and refuse it if the budget is spent.
  *
  * Returns the refusal rather than throwing it, because a 429 is not an error in
@@ -695,6 +733,13 @@ async function respond(request: Request, env: Env): Promise<Response> {
       // trap 5.
       const limited = await enforceRateLimit(request, env, url.pathname);
       if (limited !== null) return limited;
+
+      // After the limiter, so the first request to a cold isolate cannot be used
+      // to make an unprovisioned deployment do migration work on demand. Before
+      // the handler, because the handler is what needs the tables: without them
+      // /api/auth/jwks answers 500 and every token silently fails to verify,
+      // while everything else reports a healthy deployment.
+      await ensureAuthSchemaOnce(env);
 
       return await getAuth(env).handler(request);
     }
