@@ -1,5 +1,5 @@
 {
-  "name": "baseclf",
+  "name": "create-baseclf",
   "version": "0.0.0",
   "private": true,
   "description": "Auto-REST and real row-level security for Cloudflare D1",
@@ -33,7 +33,7 @@
     "mutate:auth-bootstrap": "node scripts/mutate-auth-bootstrap.mjs",
     "mutate:create": "node scripts/mutate-create.mjs",
     "mutate:deploy": "node scripts/mutate-deploy.mjs",
-    "mutate": "npm run mutate:jwks-brake && npm run mutate:diagnose-cors && npm run mutate:storage-policy && npm run mutate:storage-router && npm run mutate:storage-wiring && npm run mutate:storage-objects && npm run mutate:storage-reconcile && npm run mutate:cli && npm run mutate:provision && npm run mutate:secret && npm run mutate:bootstrap && npm run mutate:auth-bootstrap && npm run mutate:create && npm run mutate:deploy && npm run mutate:wrangler-credential && npm run mutate:run-create",
+    "mutate": "npm run mutate:jwks-brake && npm run mutate:diagnose-cors && npm run mutate:storage-policy && npm run mutate:storage-router && npm run mutate:storage-wiring && npm run mutate:storage-objects && npm run mutate:storage-reconcile && npm run mutate:cli && npm run mutate:provision && npm run mutate:secret && npm run mutate:bootstrap && npm run mutate:auth-bootstrap && npm run mutate:create && npm run mutate:deploy && npm run mutate:wrangler-credential && npm run mutate:run-create && npm run mutate:login",
     "demo:v1": "node scripts/demo-v1.mjs",
     "demo:v2": "node scripts/demo-v2.mjs",
     "build:cli": "npm run build && node scripts/build-cli.mjs",
@@ -43,7 +43,8 @@
     "check:package": "node scripts/check-package.mjs",
     "prepack": "npm run build:cli",
     "prepublishOnly": "npm run guard && npm run check",
-    "mutate:run-create": "node scripts/mutate-run-create.mjs"
+    "mutate:run-create": "node scripts/mutate-run-create.mjs",
+    "mutate:login": "node scripts/mutate-login.mjs"
   },
   "dependencies": {
     "better-auth": "1.6.26",
@@ -60,9 +61,11 @@
     "wrangler": "4.115.0"
   },
   "bin": {
+    "create-baseclf": "./dist-cli/create-baseclf.mjs",
     "baseclf": "./dist-cli/baseclf.mjs"
   },
   "files": [
+    "dist-cli/create-baseclf.mjs",
     "dist-cli/baseclf.mjs",
     "dist-cli/worker.js",
     "LICENSING.md"

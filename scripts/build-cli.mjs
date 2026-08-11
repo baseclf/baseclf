@@ -39,7 +39,6 @@ import { build } from 'esbuild';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const OUT_DIR = join(ROOT, 'dist-cli');
-const OUT_FILE = join(OUT_DIR, 'baseclf.mjs');
 
 /** Where wrangler leaves the Worker, and where the package carries it. */
 const WORKER_SOURCE = join(ROOT, 'dist', 'index.js');
@@ -47,47 +46,67 @@ const WORKER_FILE = join(OUT_DIR, 'worker.js');
 
 mkdirSync(OUT_DIR, { recursive: true });
 
-await build({
-  entryPoints: [join(ROOT, 'cli/bin.ts')],
-  outfile: OUT_FILE,
-  bundle: true,
-  platform: 'node',
-  format: 'esm',
-  target: 'node22',
-  // Not minified. This is a developer tool, it is read when it misbehaves, and the
-  // whole thing is a few kilobytes either way.
-  minify: false,
-  // No banner. The first version of this added `#!/usr/bin/env node` as one, on the
-  // assumption that esbuild would not carry the entry's own shebang through. It
-  // does: the build produced two, and a `#!` on line 2 is a syntax error rather
-  // than a comment, so the CLI would not start at all. The check below is what
-  // caught it, which is the reason it is a check and not a comment saying this
-  // should be fine.
-});
+/**
+ * The two binaries, and why there are two.
+ *
+ * `npx create-baseclf` resolves a package by that name rather than a subcommand, which
+ * is npm's `create-*` convention. So the entry point has to exist as its own file with
+ * its own name, and both are built from the same modules.
+ *
+ * Each is checked by running it, because a CLI that compiles and then crashes on
+ * import is the failure this whole file exists to prevent. The expected string differs
+ * on purpose: `create-baseclf` should print the create help and not the command list,
+ * and a check that accepted either would not notice the two entry points being wired
+ * to the same thing.
+ */
+const BINARIES = [
+  { entry: 'cli/bin.ts', out: 'baseclf.mjs', expect: 'doctor <url>' },
+  { entry: 'cli/create-bin.ts', out: 'create-baseclf.mjs', expect: 'npx create-baseclf' },
+];
 
-// One `#!` on line 1 is a shebang. A second anywhere is a syntax error, and it is
-// the kind that only shows up when somebody runs the published package.
-const built = readFileSync(OUT_FILE, 'utf8');
-const shebangs = built.split('\n').filter((line) => line.startsWith('#!')).length;
-if (shebangs !== 1) {
-  console.error(`build-cli: the output has ${shebangs} shebang lines, expected exactly 1.`);
-  process.exit(1);
+for (const binary of BINARIES) {
+  const outfile = join(OUT_DIR, binary.out);
+
+  await build({
+    entryPoints: [join(ROOT, binary.entry)],
+    outfile,
+    bundle: true,
+    platform: 'node',
+    format: 'esm',
+    target: 'node22',
+    // Not minified. This is a developer tool, it is read when it misbehaves, and the
+    // whole thing is a few kilobytes either way.
+    minify: false,
+    // No banner. The first version of this added `#!/usr/bin/env node` as one, on the
+    // assumption that esbuild would not carry the entry's own shebang through. It
+    // does: the build produced two, and a `#!` on line 2 is a syntax error rather
+    // than a comment, so the CLI would not start at all. The check below is what
+    // caught it, which is the reason it is a check and not a comment saying this
+    // should be fine.
+  });
+
+  // One `#!` on line 1 is a shebang. A second anywhere is a syntax error, and it is
+  // the kind that only shows up when somebody runs the published package.
+  const built = readFileSync(outfile, 'utf8');
+  const shebangs = built.split('\n').filter((line) => line.startsWith('#!')).length;
+  if (shebangs !== 1) {
+    console.error(`build-cli: ${binary.out} has ${shebangs} shebang lines, expected exactly 1.`);
+    process.exit(1);
+  }
+
+  // Executable, because `npx` runs it directly on a POSIX system. A no-op on Windows,
+  // where the shim decides.
+  chmodSync(outfile, 0o755);
+
+  const printed = execFileSync('node', [outfile, '--help'], { encoding: 'utf8' });
+  if (!printed.includes(binary.expect)) {
+    console.error(`build-cli: ${binary.out} ran but did not print "${binary.expect}".`);
+    process.exit(1);
+  }
+
+  const { size } = statSync(outfile);
+  console.log(`cli: ${(size / 1024).toFixed(1)} KiB at dist-cli/${binary.out}, and it runs.`);
 }
-
-// Executable, because `npx` runs it directly on a POSIX system. A no-op on Windows,
-// where the shim decides.
-chmodSync(OUT_FILE, 0o755);
-
-// Proof it runs, not just that it built. A CLI that compiles and then crashes on
-// import is the failure this whole file exists to prevent.
-const printed = execFileSync('node', [OUT_FILE, '--help'], { encoding: 'utf8' });
-if (!printed.includes('doctor <url>')) {
-  console.error('build-cli: the built CLI ran but did not print its usage.');
-  process.exit(1);
-}
-
-const { size } = statSync(OUT_FILE);
-console.log(`cli: ${(size / 1024).toFixed(1)} KiB at dist-cli/baseclf.mjs, and it runs.`);
 
 // ---------------------------------------------------------------------------
 // The Worker the CLI deploys

@@ -31,6 +31,10 @@ import { execSync } from 'node:child_process';
 
 /** Artifacts without which the package does not work. Paths as npm reports them. */
 const REQUIRED = [
+  // The entry point `npx create-baseclf` resolves to. npm force-includes whatever
+  // `bin` points at, so this one is hard to lose, and listing it is what makes the
+  // check fail loudly if `bin` itself is ever renamed.
+  'dist-cli/create-baseclf.mjs',
   'dist-cli/baseclf.mjs',
   // The Worker itself. Absent for the entire life of the package before this check.
   'dist-cli/worker.js',
