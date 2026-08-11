@@ -28,6 +28,7 @@
  */
 
 import { execSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 
 /** Artifacts without which the package does not work. Paths as npm reports them. */
 const REQUIRED = [
@@ -104,6 +105,40 @@ function tarballFiles() {
 
 const { files, size, unpacked } = tarballFiles();
 const problems = [];
+
+/**
+ * The commands the package claims to install, checked against what it ships.
+ *
+ * 🔴 Both of these came out of the same failed publish on 2026-08-12.
+ *
+ * The paths were written `./dist-cli/x.mjs`, and npm answered every publish with
+ * `"bin[create-baseclf]" script name dist-cli/create-baseclf.mjs was invalid and
+ * removed`. It turns out to normalise rather than remove, so the package would have
+ * worked, but nobody reading that line could tell, and a warning nobody can act on
+ * during an irreversible operation is worth removing rather than living with.
+ *
+ * The second half matters more: a `bin` pointing at a file the tarball does not carry
+ * installs a command that is not there. npm does not check this, and the reader finds
+ * out when the command they were told to run does nothing.
+ */
+const manifest = JSON.parse(readFileSync('package.json', 'utf8'));
+
+for (const [command, target] of Object.entries(manifest.bin ?? {})) {
+  if (target.startsWith('./')) {
+    problems.push(
+      `bin ${command} is written "${target}". npm rewrites a leading "./" and warns ` +
+        'about it on every publish. Drop the prefix.',
+    );
+  }
+
+  const normalised = target.replace(/^\.\//, '');
+  if (!files.includes(normalised)) {
+    problems.push(
+      `bin ${command} points at ${normalised}, which is not in the tarball. That ` +
+        'installs a command that does nothing.',
+    );
+  }
+}
 
 for (const required of REQUIRED) {
   if (!files.includes(required)) {

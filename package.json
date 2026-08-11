@@ -1,7 +1,6 @@
 {
   "name": "create-baseclf",
   "version": "0.1.0",
-  "private": true,
   "description": "Auto-REST and real row-level security for Cloudflare D1",
   "license": "Apache-2.0",
   "type": "module",
@@ -62,8 +61,8 @@
     "wrangler": "4.115.0"
   },
   "bin": {
-    "create-baseclf": "./dist-cli/create-baseclf.mjs",
-    "baseclf": "./dist-cli/baseclf.mjs"
+    "create-baseclf": "dist-cli/create-baseclf.mjs",
+    "baseclf": "dist-cli/baseclf.mjs"
   },
   "files": [
     "dist-cli/create-baseclf.mjs",
