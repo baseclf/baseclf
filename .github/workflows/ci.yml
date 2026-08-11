@@ -40,5 +40,14 @@ jobs:
       - name: Test
         run: npm test
 
+      # `build:cli` runs the Worker build first, then builds both binaries and runs
+      # each one. Publishing is a real workflow now, so what CI checks is what gets
+      # published rather than only what compiles.
       - name: Build
-        run: npm run build
+        run: npm run build:cli
+
+      # The tarball, not the working tree. The first publish attempt shipped neither
+      # a Worker nor a usable bin field, and nothing in this file would have noticed:
+      # both were correct on disk and wrong in the package.
+      - name: Package
+        run: npm run check:package
