@@ -126,10 +126,28 @@ Applying is safe to repeat and is how you change a policy. It replaces every rul
 that table. While it runs the table is not exposed at all, so an interrupted run
 leaves it closed rather than half open.
 
-**A change is not instant.** A deployment that has already loaded its policies
-keeps them until that instance recycles, and nothing today forces it sooner. If you
-are **narrowing** a policy, treat the old one as still live for a while. This is the
-honest version of a thing the CLI used to imply it had solved.
+To stop exposing a table and delete its rules:
+
+```bash
+npx baseclf policy rm posts --confirm
+```
+
+The rules are not stored anywhere else, so keep the document that made them. Without
+`--confirm` the command prints what it would delete and stops, before it asks your
+account for anything.
+
+**A change is not instant, and there is no bound on how long it takes.** A deployment
+that has already loaded its policies keeps them until that instance recycles, and
+nothing today forces it sooner. Measured against a live deployment twice on the same
+day, with nothing changed between the runs: once a removed table was still answering
+anonymous requests 393 seconds after the command reported success, and once it stopped
+after 57.
+
+The spread is the point. It is however long that instance happens to live, so no
+figure here would be a limit you could plan against. If you are **narrowing** a policy,
+including removing one, treat the old rules as still live and verify from outside
+before you rely on it. A quiet deployment is the slowest, because an instance with
+little traffic has little reason to be recycled.
 
 ### When something looks wrong
 
@@ -169,6 +187,43 @@ obeyed:
 }
 ```
 
+### Naming a condition you use more than once
+
+The same predicate tends to appear in several policies on a table, and four copies of
+what "the author" means is four places to change it and three places to get it wrong.
+A `binds` block names one:
+
+```jsonc
+{
+  "table": "posts",
+  "enabled": true,
+  "binds": {
+    "isPublished": { "status": { "_eq": "published" } },
+    "isAuthor": { "author_id": { "_eq": "$auth.uid" } }
+  },
+  "policies": [
+    { "name": "read_published", "for": "select", "to": ["anon"],
+      "using": { "$bind": "isPublished" },
+      "columns": ["id", "title", "body", "status", "author_id"] },
+    { "name": "read_own_or_published", "for": "select", "to": ["authenticated"],
+      "using": { "_or": [{ "$bind": "isPublished" }, { "$bind": "isAuthor" }] },
+      "columns": ["id", "title", "body", "status", "author_id"] }
+  ]
+}
+```
+
+A bind is a condition, not a macro. It is expanded where it is referenced, it may be
+nested inside `_and` and `_or`, and a bind that refers to itself, directly or through
+another bind, is refused rather than followed.
+
+Every bind is checked when the document is stored, **including one no policy refers
+to**. An unchecked bind sitting in the database is one that breaks on the day somebody
+first uses it, in a deployment, pointing at a file edited weeks earlier.
+
+The complete versions of both documents, one accepted and one refused, are in
+[`examples/`](examples/), along with the table they expect. Both were run against a
+live deployment.
+
 ## The problem
 
 Cloudflare gives you every piece of infrastructure a backend needs, cheaper and
@@ -189,9 +244,11 @@ Declare a policy once, as data:
 ```jsonc
 {
   "table": "posts",
+  "enabled": true,          // absent or false means nobody can reach it
   "policies": [
     { "name": "read_published", "for": "select", "to": ["anon", "authenticated"],
-      "using": { "status": { "_eq": "published" } } },
+      "using": { "status": { "_eq": "published" } },
+      "columns": ["id", "title", "body", "status", "author_id"] },
 
     { "name": "update_own", "for": "update", "to": ["authenticated"],
       "using": { "author_id": { "_eq": "$auth.uid" } },
