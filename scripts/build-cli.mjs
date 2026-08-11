@@ -1,5 +1,19 @@
 /**
- * Build the CLI into something `npx` can run.
+ * Build everything the published package ships, and prove each piece works.
+ *
+ * Two artifacts, and the second one was missing for as long as this file existed.
+ * `npm pack --dry-run` on 2026-08-12 showed the CLI in the tarball and no Worker
+ * anywhere in it: `dist/index.js` is gitignored, `package.json` had no `files` field,
+ * so npm fell back to `.gitignore` and dropped it. The CLI survived only because npm
+ * force-includes whatever `bin` points at. So the package would have installed, run,
+ * asked its two questions, and then had nothing to deploy.
+ *
+ * ⚠️ The Worker bundle is built by wrangler rather than by esbuild here, and the
+ * difference is not cosmetic: `rules/01` section G0 measured wrangler's output at 67%
+ * larger than an esbuild build of the same thing. Wrangler's is the one that runs, so
+ * wrangler's is the one that ships. `npm run build` produces it and this copies it.
+ *
+ * ## Building the CLI
  *
  * This exists because of a measurement rather than a preference. Node 24 strips
  * types from a `.ts` file without a flag, so pointing `bin` straight at
@@ -17,7 +31,7 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdirSync, readFileSync, statSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -26,6 +40,10 @@ import { build } from 'esbuild';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const OUT_DIR = join(ROOT, 'dist-cli');
 const OUT_FILE = join(OUT_DIR, 'baseclf.mjs');
+
+/** Where wrangler leaves the Worker, and where the package carries it. */
+const WORKER_SOURCE = join(ROOT, 'dist', 'index.js');
+const WORKER_FILE = join(OUT_DIR, 'worker.js');
 
 mkdirSync(OUT_DIR, { recursive: true });
 
@@ -70,3 +88,33 @@ if (!printed.includes('doctor <url>')) {
 
 const { size } = statSync(OUT_FILE);
 console.log(`cli: ${(size / 1024).toFixed(1)} KiB at dist-cli/baseclf.mjs, and it runs.`);
+
+// ---------------------------------------------------------------------------
+// The Worker the CLI deploys
+// ---------------------------------------------------------------------------
+
+if (!existsSync(WORKER_SOURCE)) {
+  console.error(
+    'build-cli: no Worker bundle at dist/index.js. Run `npm run build` first, or use ' +
+      '`npm run build:cli`, which does both in order.',
+  );
+  process.exit(1);
+}
+
+const worker = readFileSync(WORKER_SOURCE, 'utf8');
+
+// A module Worker exports a default with a fetch handler. Checking the shape rather
+// than the size catches the case that actually happens: a build that half succeeded
+// and left something no runtime will accept, which would be discovered by the reader
+// at the end of provisioning rather than here.
+if (!/export\s*\{[^}]*as default|export default/.test(worker)) {
+  console.error('build-cli: dist/index.js has no default export, so it is not a module Worker.');
+  process.exit(1);
+}
+
+copyFileSync(WORKER_SOURCE, WORKER_FILE);
+
+const workerSize = statSync(WORKER_FILE).size;
+console.log(
+  `worker: ${(workerSize / 1024 / 1024).toFixed(2)} MiB at dist-cli/worker.js, ready to upload.`,
+);

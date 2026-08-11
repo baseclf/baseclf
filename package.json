@@ -19,7 +19,7 @@
     "guard": "node scripts/guard-commit.mjs --all",
     "build:theme": "node scripts/build-theme.mjs",
     "check:design": "node scripts/check-design-tokens.mjs",
-    "check": "npm run typecheck && npm run lint && npm run test && npm run check:design && npm run build:cli",
+    "check": "npm run typecheck && npm run lint && npm run test && npm run check:design && npm run build:cli && npm run check:package",
     "measure:bundle": "node scripts/measure-bundle.mjs",
     "mutate:jwks-brake": "node scripts/mutate-jwks-brake.mjs",
     "mutate:diagnose-cors": "node scripts/mutate-diagnose-cors.mjs",
@@ -36,10 +36,13 @@
     "mutate": "npm run mutate:jwks-brake && npm run mutate:diagnose-cors && npm run mutate:storage-policy && npm run mutate:storage-router && npm run mutate:storage-wiring && npm run mutate:storage-objects && npm run mutate:storage-reconcile && npm run mutate:cli && npm run mutate:provision && npm run mutate:secret && npm run mutate:bootstrap && npm run mutate:auth-bootstrap && npm run mutate:create && npm run mutate:deploy && npm run mutate:wrangler-credential",
     "demo:v1": "node scripts/demo-v1.mjs",
     "demo:v2": "node scripts/demo-v2.mjs",
-    "build:cli": "node scripts/build-cli.mjs",
+    "build:cli": "npm run build && node scripts/build-cli.mjs",
     "mutate:cli": "node scripts/mutate-cli.mjs",
     "mutate:provision": "node scripts/mutate-provision.mjs",
-    "mutate:wrangler-credential": "node scripts/mutate-wrangler-credential.mjs"
+    "mutate:wrangler-credential": "node scripts/mutate-wrangler-credential.mjs",
+    "check:package": "node scripts/check-package.mjs",
+    "prepack": "npm run build:cli",
+    "prepublishOnly": "npm run guard && npm run check"
   },
   "dependencies": {
     "better-auth": "1.6.26",
@@ -57,5 +60,18 @@
   },
   "bin": {
     "baseclf": "./dist-cli/baseclf.mjs"
+  },
+  "files": [
+    "dist-cli/baseclf.mjs",
+    "dist-cli/worker.js",
+    "LICENSING.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/baseclf/baseclf.git"
+  },
+  "homepage": "https://github.com/baseclf/baseclf",
+  "bugs": {
+    "url": "https://github.com/baseclf/baseclf/issues"
   }
 }
