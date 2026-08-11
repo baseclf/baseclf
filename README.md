@@ -6,9 +6,9 @@
 > **Status: pre-alpha.** Reads and writes both work: policies compile into the
 > query, and a write cannot move a row out of the caller's own reach. Sign-in with
 > Google or GitHub works, tokens are ES256, and file uploads land in R2 under a key
-> the server builds rather than one the caller sends. There is no admin UI, no
-> client SDK and no migration tooling yet, so policies are rows you write by hand.
-> Nothing here is usable in production. See the roadmap below.
+> the server builds rather than one the caller sends. A policy is a JSON document
+> you store with one command. There is no admin UI, no client SDK and no migration
+> tooling yet. Nothing here is usable in production. See the roadmap below.
 
 ---
 
@@ -81,6 +81,55 @@ deployment is finished and answering before that comes up.
 Safe, and it is the way to update a deployment. The database, the bucket and the
 signing secret are kept. The secret is never regenerated, because a new one would
 invalidate every session and every token already issued.
+
+### Then expose a table
+
+A deployment on its own exposes nothing. That is the point: a table absent from the
+policy tables is a table nobody can reach, so there is no state where you forgot to
+turn security on.
+
+Write what may be read, and by whom:
+
+```json
+{
+  "table": "posts",
+  "enabled": true,
+  "policies": [
+    {
+      "name": "read_own",
+      "for": "select",
+      "to": ["authenticated"],
+      "using": { "author_id": { "_eq": "$auth.uid" } },
+      "columns": ["id", "title", "body", "author_id"]
+    }
+  ]
+}
+```
+
+```bash
+npx baseclf policy apply posts.json
+```
+
+It refuses the document before it stores anything if the policy breaks a rule: a
+reference to `user_metadata`, which the end user can write, or a column that does not
+exist in your schema. Both are checked by the same code the engine runs, not by a
+second copy of it.
+
+To see what is exposed, and what is exposed but has no rules and therefore refuses
+every request:
+
+```bash
+npx baseclf policy list
+```
+
+Applying is safe to repeat and is how you change a policy. It replaces every rule on
+that table. While it runs the table is not exposed at all, so an interrupted run
+leaves it closed rather than half open.
+
+**A change is not instant.** A deployment that has already loaded its policies
+keeps them until that instance recycles, and nothing today forces it sooner. If you
+are **narrowing** a policy, treat the old one as still live for a while. This is the
+honest version of a thing the CLI used to imply it had solved.
 
 ### When something looks wrong
 
@@ -230,6 +279,16 @@ These were measured against a real D1 database, not read from documentation.
 - **Double-quoted string literals are enabled.** A misspelled column returns the
   string instead of raising, so every identifier is matched against the live
   catalogue before a query is built.
+- **A policy change is not instant, and nothing bounds the delay.** Each Worker
+  instance reads the policies once and keeps them until it recycles. Storing a new
+  policy does not reach an instance that has already started, so an instance can go
+  on answering under the previous rules. Widening is harmless; **narrowing is the
+  case to be careful with**, because the old, wider rule is the one still being
+  served. A fleet-wide invalidation is on the roadmap and is not built.
+- **Two people applying a policy to the same table at the same time can leave the
+  union of both.** Permissive policies are combined with OR, so the result is wider
+  than either person wrote. The second one to finish is told its write failed, which
+  is the only signal. Applying again replaces whatever is there.
 
 ## Roadmap
 
