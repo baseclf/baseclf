@@ -25,6 +25,7 @@ import { getRegistry } from './policy/index.js';
 import type { WriteOperation } from './policy/write.js';
 import { operationForMethod, readTable, tableFromPath, writeTable } from './rest/index.js';
 import type { StorageOperation } from './storage/policy.js';
+import { describeSweep, reconcileStorage, sweepFoundDrift } from './storage/reconcile.js';
 import { getStorageRegistry } from './storage/registry.js';
 import { deleteObject, downloadObject, uploadObject } from './storage/router.js';
 import { BaseclfError } from './utils/errors.js';
@@ -721,17 +722,76 @@ export default {
   },
 
   /**
-   * Sweep counter rows whose window closed long ago.
+   * The two jobs that have no request to hang off.
    *
-   * On a cron rather than on the request path. The alternative, deleting
-   * opportunistically while counting, would put a scan on every request to save
-   * a table that a scheduled statement clears in one.
+   * Both are on a cron rather than on the request path, and for the same reason
+   * in both cases: doing the work opportunistically would put a scan, or a
+   * database write, on a path a caller controls.
    *
-   * The retention is far longer than any window in use. Deleting a row that is
-   * still being counted against would hand its caller a fresh allowance, which
-   * is the one way a cleanup job can become a bypass.
+   * The rate limit sweep goes first and its retention is far longer than any
+   * window in use. Deleting a row that is still being counted against would hand
+   * its caller a fresh allowance, which is the one way a cleanup job can become a
+   * bypass.
+   *
+   * The storage sweep follows, and it is the reconciliation R2 and D1 need
+   * because no transaction spans them. It repairs one direction and only reports
+   * the other; `src/storage/reconcile.ts` explains at length why deleting bytes
+   * is not on the table at any setting. It is given its own session pinned to the
+   * primary, because it decides to delete rows on the strength of what it reads
+   * and a replica that has not caught up is a reader with an out-of-date opinion.
+   *
+   * They are awaited in sequence rather than together. Each is a handful of
+   * statements against a database that is single threaded per tenant (`rules/01`
+   * §D), so overlapping them buys nothing and makes a failure in one harder to
+   * attribute.
+   *
+   * ⚠️ And each one's failure is caught separately, which is the other half of
+   * that sentence. Letting the first throw would skip the second and put a single
+   * unattributed exception in the log, so an hour where the storage sweep failed
+   * would look exactly like an hour where rate limit rows stopped being cleared.
+   * Nobody is watching a cron, and the line written here is the only record.
+   *
+   * What is not swallowed is the outcome. The platform's own view of this cron is
+   * whether this handler resolved, so a run with a failed job still throws. A
+   * sweep that has quietly stopped running is drift nobody sees, and that applies
+   * to the handler as much as to the bucket.
    */
   async scheduled(_controller: ScheduledController, env: Env): Promise<void> {
-    await cleanupRateLimits(env.DB, RATE_LIMIT_RETENTION_SECONDS);
+    const failed: string[] = [];
+
+    // `unknown` rather than `void`, so a job that returns something (the rate
+    // limit sweep returns how many rows it cleared) does not have to be wrapped
+    // in a lambda that throws the value away just to satisfy a signature.
+    const attempt = async (job: string, work: () => Promise<unknown>): Promise<void> => {
+      try {
+        await work();
+      } catch (error) {
+        failed.push(job);
+        // The message, not the error object. `jose` and D1 both put decoded
+        // payloads on a `cause`, and an error serialised whole is how a token's
+        // claims reach a log (debt 22).
+        const detail = error instanceof Error ? error.message : 'a non-error was thrown';
+        logError({ event: 'error', code: 'CRON_JOB_FAILED', detail: `${job}: ${detail}` });
+      }
+    };
+
+    await attempt('rate limit sweep', () =>
+      cleanupRateLimits(env.DB, RATE_LIMIT_RETENTION_SECONDS),
+    );
+
+    await attempt('storage sweep', async () => {
+      const report = await reconcileStorage(env.BUCKET, env.DB.withSession('first-primary'));
+
+      // Only when something is wrong. An hourly line saying nothing happened is a
+      // line nobody reads. No key appears in it: a key holds a uid, so it names a
+      // person, which is the same argument `log.ts` makes about uploads.
+      if (sweepFoundDrift(report)) {
+        logError({ event: 'error', code: 'STORAGE_DRIFT', detail: describeSweep(report) });
+      }
+    });
+
+    if (failed.length > 0) {
+      throw new Error(`Scheduled jobs failed: ${failed.join(', ')}.`);
+    }
   },
 } satisfies ExportedHandler<Env>;

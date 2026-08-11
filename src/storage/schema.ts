@@ -14,6 +14,31 @@
  * the convention.
  */
 
+/**
+ * Where the reconciliation pass left off.
+ *
+ * One row, because there is one walk. It holds a KEY rather than R2's own list
+ * cursor, and that is measured rather than stylistic: `startAfter` was probed to
+ * be exclusive and to resume a listing exactly (`r2-list-behaviour.test.ts`),
+ * while a cursor is an opaque token with no documented lifetime. This value has to
+ * survive an hour between cron invocations, so it has to be something whose
+ * meaning does not expire.
+ *
+ * `passes` counts completed walks, and it is the difference between "no drift was
+ * found" and "nothing has been looked at yet". Without it a report of zero drift
+ * on a bucket the sweep has never reached the end of reads as good news.
+ *
+ * Declared here so provisioning creates it with the rest. `reconcile.ts` also
+ * issues it idempotently before it runs, for the same reason the rate limiter
+ * does: that is the floor, not the plan.
+ */
+export const STORAGE_SWEEP_DDL = `CREATE TABLE IF NOT EXISTS _storage_sweep (
+     id         TEXT    PRIMARY KEY NOT NULL,
+     after_key  TEXT    NOT NULL,
+     passes     INTEGER NOT NULL,
+     updated_at INTEGER NOT NULL
+   ) STRICT`;
+
 export const STORAGE_SCHEMA: readonly string[] = Object.freeze([
   `CREATE TABLE IF NOT EXISTS _storage_buckets (
      bucket  TEXT PRIMARY KEY NOT NULL,
@@ -68,4 +93,6 @@ export const STORAGE_SCHEMA: readonly string[] = Object.freeze([
   // without one is a full scan charged on every request that makes it.
   'CREATE INDEX IF NOT EXISTS _storage_objects_owner ON _storage_objects (owner)',
   'CREATE INDEX IF NOT EXISTS _storage_objects_bucket ON _storage_objects (bucket)',
+
+  STORAGE_SWEEP_DDL,
 ]);
