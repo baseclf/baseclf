@@ -291,8 +291,19 @@ export function writeStatements(document: PolicyDocument, nextVersion: number): 
  * the change taking effect. That happens as isolates recycle, and nothing bounds how
  * long that takes.
  *
- * It still goes up on every write, because the day the mechanism arrives it will need
- * a version that never repeated.
+ * It still goes up on every write, so that a person reading `policy list` can see that
+ * something changed.
+ *
+ * 🔴 **What it is not is a version that never repeats, and an earlier draft of this
+ * comment claimed it was.** Measured on 2026-08-12 against a live database: a table at
+ * version 2, removed with `policy rm` and applied again, comes back at version **1**.
+ * `rm` deletes the row `storedVersion` reads, so the count starts over.
+ *
+ * That is free today, because nothing reads the number. It is a trap for whoever adds
+ * the V7 invalidation, and the trap fails **open**: an isolate holding `posts` at
+ * version 3 that compares against a stored version of 1 concludes it is ahead and
+ * keeps serving the policy that was deleted. Anything keyed on this needs a counter
+ * that outlives the row, or a value that is not a counter at all.
  */
 export function nextVersion(current: number | null): number {
   return (current ?? 0) + 1;

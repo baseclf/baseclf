@@ -230,8 +230,9 @@ describe('the order the write happens in', () => {
   });
 
   it('bumps the version past whatever was stored', async () => {
-    // The registry caches compiled SQL against the version. Reusing one would leave
-    // the deployment serving the previous policy with nothing anywhere saying so.
+    // ⚠️ Not because anything reads it. Nothing does, which is debt F2 and is measured
+    // in `src/policy/registry-cache.test.ts`. It goes up so that somebody reading
+    // `policy list` can see the row changed.
     const h = harness({
       file: policyDocument(),
       exposed: [{ table_name: 'posts', enabled: 1, version: 4 }],
@@ -244,6 +245,27 @@ describe('the order the write happens in', () => {
     );
 
     expect(expose?.params).toContain(5);
+  });
+
+  it('starts the version over after the table has been removed', async () => {
+    // 🔴 Measured against a live database on 2026-08-12: a table at version 2, removed
+    // and applied again, comes back at version 1. `rm` deletes the row the version is
+    // read from, so the count starts over and a version can repeat with different
+    // policies behind it.
+    //
+    // Free today because nothing reads the number. Written down as a test rather than
+    // a comment because the V7 invalidation will read it, and the trap fails open: an
+    // isolate holding version 3 that sees a stored 1 concludes it is ahead and keeps
+    // serving the policy that was deleted.
+    const h = harness({ file: policyDocument(), exposed: [] });
+
+    await runPolicy(['apply', 'p.json'], h.write, PLAIN, h.host);
+
+    const expose = h.sent.find(
+      (entry) => entry.sql.includes('INSERT') && entry.sql.includes('_exposed_tables'),
+    );
+
+    expect(expose?.params).toContain(1);
   });
 
   it('names the table in the command it hands back', async () => {
