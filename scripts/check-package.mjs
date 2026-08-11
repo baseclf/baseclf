@@ -39,6 +39,10 @@ const REQUIRED = [
   // The Worker itself. Absent for the entire life of the package before this check.
   'dist-cli/worker.js',
   'package.json',
+  // npm adds this on its own, so losing it takes deleting the file. Listed anyway:
+  // `package.json` claims Apache-2.0, and a package that says so while shipping no
+  // licence text is the kind of thing nobody notices until somebody's legal team does.
+  'LICENSE',
 ];
 
 /**
