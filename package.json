@@ -33,12 +33,13 @@
     "mutate:auth-bootstrap": "node scripts/mutate-auth-bootstrap.mjs",
     "mutate:create": "node scripts/mutate-create.mjs",
     "mutate:deploy": "node scripts/mutate-deploy.mjs",
-    "mutate": "npm run mutate:jwks-brake && npm run mutate:diagnose-cors && npm run mutate:storage-policy && npm run mutate:storage-router && npm run mutate:storage-wiring && npm run mutate:storage-objects && npm run mutate:storage-reconcile && npm run mutate:cli && npm run mutate:provision && npm run mutate:secret && npm run mutate:bootstrap && npm run mutate:auth-bootstrap && npm run mutate:create && npm run mutate:deploy",
+    "mutate": "npm run mutate:jwks-brake && npm run mutate:diagnose-cors && npm run mutate:storage-policy && npm run mutate:storage-router && npm run mutate:storage-wiring && npm run mutate:storage-objects && npm run mutate:storage-reconcile && npm run mutate:cli && npm run mutate:provision && npm run mutate:secret && npm run mutate:bootstrap && npm run mutate:auth-bootstrap && npm run mutate:create && npm run mutate:deploy && npm run mutate:wrangler-credential",
     "demo:v1": "node scripts/demo-v1.mjs",
     "demo:v2": "node scripts/demo-v2.mjs",
     "build:cli": "node scripts/build-cli.mjs",
     "mutate:cli": "node scripts/mutate-cli.mjs",
-    "mutate:provision": "node scripts/mutate-provision.mjs"
+    "mutate:provision": "node scripts/mutate-provision.mjs",
+    "mutate:wrangler-credential": "node scripts/mutate-wrangler-credential.mjs"
   },
   "dependencies": {
     "better-auth": "1.6.26",
