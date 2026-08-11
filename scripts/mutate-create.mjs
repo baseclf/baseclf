@@ -36,11 +36,40 @@ const MUTATIONS = [
   {
     // Without the inherit, a redeploy drops a secret that was already set, and the
     // deployment refuses every request afterwards for a reason nothing states.
-    name: 'the signing secret not inherited, so a redeploy drops it',
+    name: 'the signing secret never inherited, so a redeploy drops it',
     file: CREATE,
-    expect: 'the inherits-the-signing-secret test',
-    find: / {4}\{ kind: 'inherit', name: 'BETTER_AUTH_SECRET' \},/,
-    replace: '',
+    expect: 'the inherits-it-on-a-redeploy test',
+    find: / {4}\.\.\.\(inheritSecret/,
+    replace: '    ...(false',
+  },
+  {
+    // 🔴 The bug that shipped in f99013a and would have broken every first
+    // deployment. `bindings_inherit=strict` turns an inherit that resolves to
+    // nothing into an error, and a first run has nothing to resolve it to.
+    name: 'the secret inherited unconditionally, which fails every first deploy',
+    file: CREATE,
+    expect: 'the does-NOT-inherit-on-a-first-deploy test',
+    find: / {4}\.\.\.\(inheritSecret/,
+    replace: '    ...(true',
+  },
+  {
+    // 🔴 Also from f99013a. A secret belongs to a script, so there is nothing to
+    // set one on until the script exists (`rules/02` section C, steps 5 then 7).
+    name: 'the secret step moved back ahead of the upload',
+    file: CREATE,
+    expect: 'the sets-the-secret-AFTER-uploading test',
+    edits: [
+      {
+        find: / {2}\{ title: 'Set the signing secret', consequence: 'the engine refuses every request' \},\n/,
+        replace: '',
+      },
+      {
+        find: / {2}\{ title: 'Upload the Worker', consequence: 'nothing is deployed' \},/,
+        replace:
+          "  { title: 'Set the signing secret', consequence: 'the engine refuses every request' },\n" +
+          "  { title: 'Upload the Worker', consequence: 'nothing is deployed' },",
+      },
+    ],
   },
   {
     // `URL.origin` drops the path silently, so the reader configures something they

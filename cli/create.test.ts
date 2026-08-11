@@ -21,6 +21,7 @@ import {
   deriveResourceNames,
   generateSecret,
   REQUIRED_BINDING_NAMES,
+  SIGNING_SECRET_NAME,
   SECRET_BYTES,
   varsFor,
 } from './create.js';
@@ -100,7 +101,7 @@ describe('resource names, derived rather than asked for', () => {
 
 describe('⭐ bindings, where a wrong name deploys and then answers undefined', () => {
   const names = deriveResourceNames('shop');
-  const bindings = bindingsFor(names, 'd1_uuid', 'kv_id', { A_VAR: 'v' });
+  const bindings = bindingsFor(names, 'd1_uuid', 'kv_id', { A_VAR: 'v' }, false);
 
   it('names the bindings what src/ reads, not what the project is called', () => {
     // The trap from the other side. `src/` reads env.DB, env.CACHE and env.BUCKET
@@ -129,11 +130,18 @@ describe('⭐ bindings, where a wrong name deploys and then answers undefined', 
     });
   });
 
-  it('inherits the signing secret rather than carrying it in the upload body', () => {
-    // Secrets go in on their own endpoint. Naming it here is what stops the deploy
-    // dropping one that is already set, and `bindings_inherit=strict` turns a
-    // missing one into an error instead of a silent absence.
-    expect(bindings).toContainEqual({ kind: 'inherit', name: 'BETTER_AUTH_SECRET' });
+  it('🔴 does NOT inherit a secret on a first deploy, which has none to inherit', () => {
+    // The bug this replaces. `uploadScript` always sends `bindings_inherit=strict`,
+    // which turns an inherit that resolves to nothing into an error rather than a
+    // silent drop. An unconditional inherit therefore fails on a script that does
+    // not exist yet, and that is every first run: the one every new reader does.
+    expect(bindings.filter((binding) => binding.kind === 'inherit')).toEqual([]);
+  });
+
+  it('inherits it on a redeploy, so an upload cannot drop one already set', () => {
+    const redeploy = bindingsFor(names, 'd1_uuid', 'kv_id', {}, true);
+
+    expect(redeploy).toContainEqual({ kind: 'inherit', name: SIGNING_SECRET_NAME });
   });
 
   it('never puts a secret value into a binding', () => {
@@ -192,10 +200,13 @@ describe('the plan, whose order is the design', () => {
     expect(at('subdomain')).toBeLessThan(at('Upload'));
   });
 
-  it('sets the secret before uploading, since the upload inherits it', () => {
-    // `bindings_inherit=strict` makes an unresolvable inherit an error rather than
-    // a silent drop. Loud was the point; failing was not.
-    expect(at('secret')).toBeLessThan(at('Upload'));
+  it('🔴 sets the secret AFTER uploading, since a secret belongs to a script', () => {
+    // The order the documented chain uses (rules/02 section C, steps 5 then 7), and
+    // the only one that can work: there is nothing to set a secret on until the
+    // script exists. This assertion used to read the other way round, on the
+    // reasoning that the upload inherits the secret so the secret must come first.
+    // That is right about a redeploy and impossible on a first run.
+    expect(at('Upload')).toBeLessThan(at('secret'));
   });
 
   it('waits for the address last, rather than declaring success at a 404', () => {

@@ -181,6 +181,22 @@ export function bindingsFor(
   databaseId: string,
   namespaceId: string,
   vars: Readonly<Record<string, string>>,
+  /**
+   * Whether the deployment already has a signing secret to carry forward.
+   *
+   * 🔴 Conditional, and getting this wrong breaks the first deployment anybody
+   * makes. `uploadScript` always sends `bindings_inherit=strict`, which turns an
+   * inherit that resolves to nothing into an **error** rather than a silent drop.
+   * That is the behaviour that was wanted, and it means an unconditional inherit
+   * fails on a script that does not exist yet, which is every first run.
+   *
+   * On a redeploy it is the opposite: the bindings array is what the deployment
+   * ends up with, so a secret that is already set has to be named or it may not
+   * survive. Whether an upload really drops one has not been measured; naming it
+   * when it exists is correct either way, which is why the design does not depend
+   * on knowing.
+   */
+  inheritSecret: boolean,
 ): readonly ScriptBinding[] {
   return [
     { kind: 'resource', type: 'd1', name: 'DB', id: databaseId },
@@ -189,11 +205,14 @@ export function bindingsFor(
     ...Object.entries(vars).map(
       ([name, value]): ScriptBinding => ({ kind: 'text', name, value }),
     ),
-    // The signing secret is set through the secrets endpoint rather than carried in
-    // the upload body, so it has to be named here or the deploy would drop it.
-    { kind: 'inherit', name: 'BETTER_AUTH_SECRET' },
+    ...(inheritSecret
+      ? [{ kind: 'inherit', name: SIGNING_SECRET_NAME } as const satisfies ScriptBinding]
+      : []),
   ];
 }
+
+/** The one secret a deployment cannot start without. */
+export const SIGNING_SECRET_NAME = 'BETTER_AUTH_SECRET';
 
 /** The binding names `src/` reads. Exported so a test can hold them to the code. */
 export const REQUIRED_BINDING_NAMES: readonly string[] = Object.freeze([
@@ -255,10 +274,14 @@ export interface CreatePlanStep {
  *
  *   - The **subdomain comes before the upload**, because `BETTER_AUTH_URL` is a var
  *     in the upload body and it is not knowable until the subdomain exists.
- *   - The **secret is set before the upload**, because the upload carries an
- *     `inherit` binding for it and `bindings_inherit=strict` makes an unresolvable
- *     one an error rather than a silent drop. Loud is what was wanted; failing is
- *     not, so the secret goes first.
+ *   - 🔴 The **secret is set after the upload**, which is the order the documented
+ *     chain uses (`rules/02` section C, steps 5 then 7) and the only order that can
+ *     work: a secret belongs to a script, so there is nothing to set one on until
+ *     the script exists. An earlier version of this file had it the other way
+ *     round, reasoning that the upload inherits the secret so the secret must come
+ *     first. That reasoning is right about a redeploy and impossible on a first run,
+ *     and a first run is the one every new reader does. `bindingsFor` takes whether
+ *     to inherit rather than always doing it, which is what makes both orders work.
  *   - **Waiting comes last and is a step rather than a detail.** A new workers.dev
  *     URL answers 404, then 500, then 200, over about thirty seconds (`rules/02`
  *     section C2). Printing the URL and declaring success sends the reader to a 404
@@ -270,8 +293,8 @@ export const CREATE_PLAN: readonly CreatePlanStep[] = Object.freeze([
   { title: 'Create the cache namespace', consequence: 'signing keys are fetched every request' },
   { title: 'Create the bucket', consequence: 'uploads have nowhere to go' },
   { title: 'Claim the workers.dev subdomain', consequence: 'the deployment has no address' },
-  { title: 'Set the signing secret', consequence: 'the engine refuses every request' },
   { title: 'Upload the Worker', consequence: 'nothing is deployed' },
+  { title: 'Set the signing secret', consequence: 'the engine refuses every request' },
   { title: 'Turn on the workers.dev route', consequence: 'the address answers nothing' },
   { title: 'Wait for the address to answer', consequence: 'the first visit lands on a 404' },
 ]);
