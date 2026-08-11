@@ -32,7 +32,7 @@
  * None of the four writes anything anywhere.
  */
 
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execSync, spawnSync } from 'node:child_process';
 import { readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -46,6 +46,21 @@ import type { Platform } from './wrangler-credential.js';
 
 const colour = process.stdout.isTTY === true && process.env.NO_COLOR === undefined;
 const interactive = process.stdin.isTTY === true;
+
+/**
+ * The two wrangler commands, as whole strings rather than a file plus arguments.
+ *
+ * ⚠️ Not a style choice. `npx` on Windows is a `.cmd`, which Node will not start
+ * without a shell, and an argument array combined with `shell: true` is what Node
+ * deprecated in DEP0190: with a shell the arguments are concatenated rather than
+ * escaped, so the form reads as safe and is not. Measured on 2026-08-12: it also
+ * prints a deprecation warning into the terminal of every Windows reader, in the
+ * middle of onboarding.
+ *
+ * Both strings are fixed and nothing from outside is interpolated into either.
+ */
+const WRANGLER_WHOAMI = 'npx wrangler whoami';
+const WRANGLER_LOGIN = 'npx wrangler login';
 
 /** Everything on stdin, for `... | baseclf secret set KEY`. */
 async function readPipedInput(): Promise<string> {
@@ -185,9 +200,8 @@ async function readWorkerBundle(): Promise<string> {
  */
 async function refreshLogin(): Promise<string | null> {
   try {
-    return execFileSync('npx', ['wrangler', 'whoami'], {
+    return execSync(WRANGLER_WHOAMI, {
       encoding: 'utf8',
-      shell: process.platform === 'win32',
       stdio: ['ignore', 'pipe', 'pipe'],
       timeout: 120_000,
     });
@@ -204,9 +218,9 @@ async function refreshLogin(): Promise<string | null> {
  * of those is a command that looks like it has hung.
  */
 function runWranglerLogin(): boolean {
-  const result = spawnSync('npx', ['wrangler', 'login'], {
+  const result = spawnSync(WRANGLER_LOGIN, {
     stdio: 'inherit',
-    shell: process.platform === 'win32',
+    shell: true,
     timeout: 300_000,
   });
 
