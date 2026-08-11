@@ -83,7 +83,8 @@ const SECRET_PATTERNS = [
  * already used in `wrangler.jsonc`.
  */
 const FAKE_ID_PREFIX = /^0{8}/;
-const CLOUDFLARE_ID = /\b[0-9a-f]{32}\b|\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/g;
+const CLOUDFLARE_ID =
+  /\b[0-9a-f]{32}\b|\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/g;
 
 /** Latin letters carrying Vietnamese diacritics. Rule 04 section A. */
 const VIETNAMESE = /[àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ]/i;
