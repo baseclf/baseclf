@@ -217,9 +217,7 @@ export function bindingsFor(
   return [
     { kind: 'resource', type: 'd1', name: 'DB', id: databaseId },
     { kind: 'resource', type: 'r2_bucket', name: 'BUCKET', id: names.bucket },
-    ...Object.entries(vars).map(
-      ([name, value]): ScriptBinding => ({ kind: 'text', name, value }),
-    ),
+    ...Object.entries(vars).map(([name, value]): ScriptBinding => ({ kind: 'text', name, value })),
     ...(inheritSecret
       ? [{ kind: 'inherit', name: SIGNING_SECRET_NAME } as const satisfies ScriptBinding]
       : []),
@@ -425,6 +423,30 @@ export const CREATE_PLAN: readonly CreatePlanStep[] = Object.freeze([
   { title: 'Upload the Worker', consequence: 'nothing is deployed' },
   { title: 'Set the signing secret', consequence: 'the engine refuses every request' },
   { title: 'Turn on the workers.dev route', consequence: 'the address answers nothing' },
+  // Easy to leave out, because a deployment without it looks completely healthy: every
+  // request is answered correctly and the scheduled work simply never runs. Here that
+  // is the rate limit sweep and the storage reconciliation, so the symptom arrives
+  // months later as a table that grew without bound, with nothing pointing back at the
+  // step that was skipped.
+  { title: 'Set the scheduled work', consequence: 'nothing is ever swept or reconciled' },
   { title: 'Wait for the address to answer', consequence: 'the first visit lands on a 404' },
 ]);
 
+/**
+ * The schedule the Worker's `scheduled` handler expects, matching `wrangler.jsonc`.
+ *
+ * Seventeen past the hour rather than on the hour: everything on the platform that
+ * runs hourly runs at zero, and a sweep that competes with that queue for a
+ * single-threaded database is a sweep that takes longer for no reason.
+ */
+export const CREATE_CRONS: readonly string[] = Object.freeze(['17 * * * *']);
+
+/**
+ * The compatibility date the Worker bundle was built against.
+ *
+ * ⚠️ Not a default and not today's date. `rules/02` section B records that an upload
+ * without one is dated **2021-11-02**, and every API the engine depends on behaves
+ * differently there. It has to match what the bundle was compiled with, so
+ * `scripts/build-cli.mjs` fails the build when this and `wrangler.jsonc` disagree.
+ */
+export const CREATE_COMPATIBILITY_DATE = '2026-07-28';

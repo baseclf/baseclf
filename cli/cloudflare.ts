@@ -477,6 +477,94 @@ export async function verifyToken(fetcher: Fetcher, credentials: Credentials): P
   await call<unknown>(fetcher, credentials, `/accounts/${credentials.accountId}`);
 }
 
+export interface Account {
+  readonly id: string;
+  readonly name: string;
+}
+
+/**
+ * The accounts a credential can act on.
+ *
+ * Needed because nothing else knows the account id. The OAuth file `wrangler login`
+ * writes holds a token, a refresh token, an expiry and a scope list, and no account
+ * anywhere in it, so a run that takes its credential from there has to ask.
+ *
+ * ⚠️ Returns all of them rather than picking. Somebody with a personal account and a
+ * work account would otherwise have a deployment appear in whichever one happened to
+ * be first in the response, and Cloudflare does not promise an order. The caller
+ * refuses and asks rather than guessing, which is the only answer that cannot put
+ * somebody's database on their employer's bill.
+ */
+export async function listAccounts(fetcher: Fetcher, token: string): Promise<readonly Account[]> {
+  // The one path that is not under an account, so there is no id to put in it.
+  const result = await call<readonly Account[]>(fetcher, { accountId: '', token }, '/accounts');
+  return result ?? [];
+}
+
+/**
+ * The names of the secrets a script has, or `null` when there is no such script.
+ *
+ * ⭐ Names only. Cloudflare does not return the values and this does not want them.
+ *
+ * The three-way answer is what makes a second run safe, and each state needs
+ * different handling:
+ *
+ *   - `null`, no script yet. First run. Generate a secret, upload without an
+ *     `inherit` binding, then set it.
+ *   - `[]` or a list without the signing secret. A run that was interrupted between
+ *     the upload and the secret. Same handling as the first case, and an unconditional
+ *     `inherit` would fail here too, because `bindings_inherit=strict` turns an
+ *     inherit that resolves to nothing into an error.
+ *   - a list containing it. A redeploy. Inherit it, and **do not generate a new one**:
+ *     the signing secret is what every existing session and token was signed with, so
+ *     replacing it silently signs everybody out.
+ *
+ * Measured on 2026-08-12: a missing script answers 404 with code 10007.
+ */
+export async function scriptSecretNames(
+  fetcher: Fetcher,
+  credentials: Credentials,
+  script: string,
+): Promise<readonly string[] | null> {
+  try {
+    const result = await call<readonly { readonly name?: string }[]>(
+      fetcher,
+      credentials,
+      `/accounts/${credentials.accountId}/workers/scripts/${encodeURIComponent(script)}/secrets`,
+    );
+    return (result ?? []).map((secret) => secret.name ?? '').filter((name) => name !== '');
+  } catch (error) {
+    if (error instanceof CloudflareError && error.status === 404) return null;
+    throw error;
+  }
+}
+
+/**
+ * Set the cron triggers on a script.
+ *
+ * A separate call from the upload, and easy to leave out because nothing complains
+ * when it is missing: the deployment answers every request correctly and simply never
+ * runs its scheduled work. For this Worker that is the rate limit sweep and the
+ * storage reconciliation, so the symptom is a table that grows without bound and a
+ * drift check that never checks, months later and with nothing pointing back here.
+ *
+ * Measured on 2026-08-12: `PUT` takes a bare array of `{ cron }` and answers 200, and
+ * `GET` returns them under a `schedules` key.
+ */
+export async function putSchedules(
+  fetcher: Fetcher,
+  credentials: Credentials,
+  script: string,
+  crons: readonly string[],
+): Promise<void> {
+  await call<unknown>(
+    fetcher,
+    credentials,
+    `/accounts/${credentials.accountId}/workers/scripts/${encodeURIComponent(script)}/schedules`,
+    { method: 'PUT', body: JSON.stringify(crons.map((cron) => ({ cron }))) },
+  );
+}
+
 /**
  * A module in the uploaded script.
  *
@@ -549,7 +637,8 @@ export class ScriptUploadError extends Error {
  */
 export function toApiBinding(binding: ScriptBinding): Record<string, string> {
   if (binding.kind === 'inherit') return { type: 'inherit', name: binding.name };
-  if (binding.kind === 'text') return { type: 'plain_text', name: binding.name, text: binding.value };
+  if (binding.kind === 'text')
+    return { type: 'plain_text', name: binding.name, text: binding.value };
 
   return {
     type: binding.type,

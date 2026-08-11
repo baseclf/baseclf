@@ -112,6 +112,36 @@ if (!/export\s*\{[^}]*as default|export default/.test(worker)) {
   process.exit(1);
 }
 
+// The compatibility date the CLI uploads with has to be the one the bundle was
+// compiled against, and they live in two files that nothing else connects. Getting
+// them out of step is not loud: `rules/02` section B records that an upload without a
+// date is dated 2021-11-02, and a date that is merely wrong behaves like a different
+// runtime with no error anywhere. So the two are compared here rather than trusted.
+const configured = readFileSync(join(ROOT, 'wrangler.jsonc'), 'utf8').match(
+  /"compatibility_date"\s*:\s*"([0-9]{4}-[0-9]{2}-[0-9]{2})"/,
+)?.[1];
+
+const declared = readFileSync(join(ROOT, 'cli/create.ts'), 'utf8').match(
+  /CREATE_COMPATIBILITY_DATE = '([0-9]{4}-[0-9]{2}-[0-9]{2})'/,
+)?.[1];
+
+if (configured === undefined || declared === undefined) {
+  console.error(
+    'build-cli: could not read compatibility_date from wrangler.jsonc or ' +
+      'CREATE_COMPATIBILITY_DATE from cli/create.ts. One of them was renamed.',
+  );
+  process.exit(1);
+}
+
+if (configured !== declared) {
+  console.error(
+    `build-cli: wrangler.jsonc builds against ${configured} and the CLI uploads with ` +
+      `${declared}. A deployment would run on a different runtime than the one this ` +
+      'was tested on.',
+  );
+  process.exit(1);
+}
+
 copyFileSync(WORKER_SOURCE, WORKER_FILE);
 
 const workerSize = statSync(WORKER_FILE).size;

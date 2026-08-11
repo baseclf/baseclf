@@ -28,10 +28,15 @@
  * there into a request body.
  */
 
-import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { readFileSync, statSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
 import process from 'node:process';
+import { fileURLToPath } from 'node:url';
 
 import { main } from './main.js';
+import type { Platform } from './wrangler-credential.js';
 
 const colour = process.stdout.isTTY === true && process.env.NO_COLOR === undefined;
 const interactive = process.stdin.isTTY === true;
@@ -118,6 +123,89 @@ function readEnvFile(): string | undefined {
   }
 }
 
+/**
+ * One line typed by a person, echoed.
+ *
+ * Separate from `readTypedLine` and the difference is the echo. A project name is not
+ * a secret and hiding it as it is typed makes the prompt look broken. Reusing the
+ * silent reader for both would be one function and the wrong behaviour for one of
+ * them, which is the kind of tidiness that costs a reader their confidence at the
+ * first prompt of the product.
+ */
+function readEchoedLine(prompt: string): Promise<string> {
+  process.stdout.write(prompt);
+
+  return new Promise((resolve) => {
+    process.stdin.setEncoding('utf8');
+    process.stdin.resume();
+
+    let value = '';
+    const onData = (chunk: string): void => {
+      value += chunk;
+      const newline = value.indexOf('\n');
+      if (newline === -1) return;
+
+      process.stdin.off('data', onData);
+      process.stdin.pause();
+      resolve(value.slice(0, newline).replace(/\r$/, ''));
+    };
+
+    process.stdin.on('data', onData);
+  });
+}
+
+/**
+ * The Worker bundle, from beside this file.
+ *
+ * `scripts/build-cli.mjs` puts it there and refuses to finish without it, so a package
+ * that installed at all has one. Reading it lazily rather than at startup keeps
+ * `baseclf doctor` from paying for two megabytes it never looks at.
+ */
+async function readWorkerBundle(): Promise<string> {
+  // `fileURLToPath` on the string rather than through a `URL` object: this project
+  // has workerd's DOM lib in scope everywhere, and its `URL` is not structurally the
+  // same type as Node's, so building one here is a type error for a reason that has
+  // nothing to do with what the code does.
+  return readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'worker.js'), 'utf8');
+}
+
+/**
+ * Run `wrangler whoami`, which refreshes the OAuth token as a side effect.
+ *
+ * Through `npx` rather than as a dependency: wrangler is tens of megabytes, and
+ * anybody with a Cloudflare login already has it, because logging in is how they got
+ * one. Returns null when it cannot be run at all, which the caller turns into the
+ * instruction to log in.
+ */
+async function refreshLogin(): Promise<string | null> {
+  try {
+    return execFileSync('npx', ['wrangler', 'whoami'], {
+      encoding: 'utf8',
+      shell: process.platform === 'win32',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: 120_000,
+    });
+  } catch {
+    return null;
+  }
+}
+
+function readTextFile(path: string): string | undefined {
+  try {
+    return readFileSync(path, 'utf8');
+  } catch {
+    return undefined;
+  }
+}
+
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 process.exitCode = await main(
   process.argv.slice(2),
   (text) => process.stdout.write(`${text}\n`),
@@ -127,5 +215,24 @@ process.exitCode = await main(
     envFile: readEnvFile(),
     interactive,
     readSecret: interactive ? readTypedLine : readPipedInput,
+  },
+  {
+    fetcher: fetch,
+    readWorkerBundle,
+    refreshLogin,
+    readAuthFile: readTextFile,
+    paths: {
+      // `process.platform` is wider than the three this cares about. Anything else
+      // gets the POSIX answer, which is what every other platform Node runs on uses.
+      platform: (process.platform === 'win32' || process.platform === 'darwin'
+        ? process.platform
+        : 'linux') satisfies Platform,
+      home: homedir(),
+      env: process.env,
+      isDirectory,
+    },
+    envFile: readEnvFile(),
+    now: () => new Date(),
+    ask: readEchoedLine,
   },
 );

@@ -15,16 +15,18 @@
 import { runDoctor } from './doctor.js';
 import { findVoiceViolations, type Style } from './output.js';
 import { renderReport } from './report.js';
+import { CREATE_FIXED_TEXT, type CreateHost, runCreate } from './run-create.js';
 import {
   type Host,
   NO_HOST,
   runSecretSet,
   SECRET_FIXED_TEXT,
-  type SecretOutcome,
   SECRET_USAGE,
+  type SecretOutcome,
 } from './secret.js';
 
 export type Writer = (text: string) => void;
+export type { CreateHost } from './run-create.js';
 export type { Host } from './secret.js';
 
 /** Exit codes, named so a script can be written against them. */
@@ -53,6 +55,7 @@ const USAGE = [
   'baseclf: row-level security for Cloudflare D1',
   '',
   'Commands:',
+  '  create             Create the resources and deploy the engine to your account',
   '  doctor <url>       Ask a deployment what is wrong with it, and what to do about it',
   '  secret set <KEY>   Set one secret on a deployed Worker, reading the value from stdin',
   '',
@@ -71,6 +74,7 @@ export async function main(
   write: Writer,
   style: Style,
   host: Host = NO_HOST,
+  createHost?: CreateHost,
 ): Promise<number> {
   const [command, ...rest] = argv;
 
@@ -80,6 +84,16 @@ export async function main(
     // command with nothing is, because a script that did that by accident should
     // fail rather than look like it succeeded.
     return command === undefined ? EXIT.usage : EXIT.ok;
+  }
+
+  if (command === 'create') {
+    if (createHost === undefined) {
+      // Nothing to run it with means nothing was provisioned, and saying so beats a
+      // crash on the first call into an undefined seam.
+      write('baseclf create needs a runtime that can reach the network and read files.');
+      return EXIT.usage;
+    }
+    return OUTCOME_EXIT[await runCreate(rest, write, style, createHost)];
   }
 
   if (command === 'secret') {
@@ -131,7 +145,11 @@ export async function main(
  * means adding it here, and the check keeps covering everything. A checker that only
  * covers what somebody remembered to list is a checker that drifts.
  */
-export const FIXED_TEXT: readonly string[] = Object.freeze([USAGE, ...SECRET_FIXED_TEXT]);
+export const FIXED_TEXT: readonly string[] = Object.freeze([
+  USAGE,
+  ...SECRET_FIXED_TEXT,
+  ...CREATE_FIXED_TEXT,
+]);
 
 /** The voice rules, over everything in `FIXED_TEXT`. Used by the tests. */
 export function fixedTextViolations(): readonly string[] {
