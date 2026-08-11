@@ -15,9 +15,12 @@
  *   2. **It leaves a closed state when it fails.** There is no transaction to be had
  *      here (see `policy-document.ts`), so the ordering carries it: the table stops
  *      being exposed at the first statement and starts again at the last.
- *   3. **It bumps the version.** A deployment caches compiled SQL against it, so a
- *      write that did not bump it would leave the old policy serving with nothing
- *      anywhere saying so.
+ *   3. 🔴 **It does not take effect immediately, and it says so.** An earlier version
+ *      of this comment claimed the version bump invalidated a cache. It does not:
+ *      measured in `src/policy/registry-cache.test.ts`, the registry is a bare
+ *      per-isolate memo and nothing reads the version at all. A change lands as
+ *      isolates recycle, with no bound on how long that takes, so an operator who
+ *      **narrows** a policy is the one who needs telling.
  *
  * ⚠️ Everything here goes over the D1 REST API, which `rules/01` section E is explicit
  * is not a data plane. That is correct for this and only this: one administrator, on
@@ -243,10 +246,20 @@ async function apply(
     try {
       await runSql(endpoint, statement.sql, statement.params);
     } catch (cause) {
+      // ⚠️ This used to end with "Nothing is left half applied", and that sentence
+      // is not always true. Measured in `src/policy/registry-cache.test.ts`: if two
+      // runs touch the same table at once, the one that loses the race fails here
+      // with its rules already written and the other run's row exposing the table,
+      // so the effective policy is the union of two documents nobody wrote.
+      //
+      // A reassurance that is usually right is worse than none, because the one time
+      // it is wrong is the time somebody needed to look.
       write(styledResultLine('deny', `Stopped partway through, at step ${index + 1}.`, style));
       write(note(cause instanceof Error ? cause.message : String(cause)));
-      write(note(`"${table}" is not exposed right now, which is the safe half of this.`));
-      write(note('Fix the cause and run it again. Nothing is left half applied.'));
+      write(note(`Run "baseclf policy list" before anything else, and check "${table}".`));
+      write(note('If it is not exposed, the table is closed and running this again is safe.'));
+      write(note('If it is exposed, something else wrote it while this ran. Apply again to'));
+      write(note('replace whatever is there.'));
       return 'failed';
     }
   }
@@ -263,6 +276,16 @@ async function apply(
   if (!document.definition.enabled) {
     write(note('The document says enabled is false, so nothing can reach it yet.'));
   }
+
+  // 🔴 Said on every apply, not only when a policy is narrowed, because the command
+  // cannot tell the difference: it does not read the policy it is replacing.
+  //
+  // Measured in `src/policy/registry-cache.test.ts`. A deployment that has already
+  // loaded its registry keeps the old one until that isolate recycles, and nothing
+  // reads the version to know better. Somebody who has just taken a column out of a
+  // grant and been told it worked would otherwise stop watching.
+  write(note('This reaches the deployment as its instances recycle, not instantly.'));
+  write(note('Until then, requests may still be answered under the previous rules.'));
 
   return 'ok';
 }

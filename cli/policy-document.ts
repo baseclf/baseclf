@@ -280,10 +280,19 @@ export function writeStatements(document: PolicyDocument, nextVersion: number): 
 /**
  * The version to write, given what is already stored.
  *
- * It has to go up on every write and never repeat. The registry caches compiled SQL
- * against `(table, operation, role, version)`, so a version that stayed the same
- * would leave a deployment serving the policy it had before this command ran, with
- * nothing anywhere saying so.
+ * ⚠️ **This does not invalidate anything today, and an earlier version of this comment
+ * said it did.** Measured in `src/policy/registry-cache.test.ts`: `getRegistry` is a
+ * bare per-isolate memo, nothing anywhere reads `_exposed_tables.version`, and a
+ * fleet-wide invalidation keyed on it is a V7 concern that the registry's own comment
+ * is honest about.
+ *
+ * So what a bump buys right now is a record that the row changed, for a mechanism that
+ * does not exist yet and for a person reading `policy list`. What it does not buy is
+ * the change taking effect. That happens as isolates recycle, and nothing bounds how
+ * long that takes.
+ *
+ * It still goes up on every write, because the day the mechanism arrives it will need
+ * a version that never repeated.
  */
 export function nextVersion(current: number | null): number {
   return (current ?? 0) + 1;

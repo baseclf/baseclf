@@ -32,6 +32,8 @@
  * rather than relying on a transaction that is not available.
  */
 
+import { assertExecutable } from '../src/db/guards.js';
+
 export interface D1Credentials {
   readonly accountId: string;
   readonly token: string;
@@ -146,6 +148,16 @@ export async function runSql(
   sql: string,
   params: readonly unknown[] = [],
 ): Promise<readonly QueryResult[]> {
+  // The same guard every path to D1 inside the Worker runs. `src/db/introspect.ts`
+  // calls it even where it passes trivially, and says why: "every path to D1 is
+  // guarded" is a stronger claim than "every path except this one". This transport
+  // was the exception, which an audit found. It passes today because every statement
+  // here is a fixed literal, and it is here for the edit that changes that.
+  //
+  // It checks three things worth having: one statement per call, no more than a
+  // hundred parameters, and a placeholder count that matches the parameters given.
+  assertExecutable({ sql, parameters: [...params] });
+
   const { accountId, token } = endpoint.credentials;
 
   const response = await endpoint.fetcher(
