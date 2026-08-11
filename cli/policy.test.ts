@@ -285,6 +285,33 @@ describe('removing a table', () => {
     expect(h.sql().filter((sql) => sql.includes('DELETE'))).toHaveLength(0);
   });
 
+  it('refuses an unconfirmed rm before it asks the network for anything', async () => {
+    // The same ordering the document parse gets, and it was not here at first. Found
+    // by running the command rather than by a test: the refusal arrived after two
+    // round trips, so a reader who forgot the flag and whose login had expired was
+    // told to log in, for a command that would not have deleted anything either way.
+    //
+    // Requests rather than statements. The lookup carries no SQL, so counting
+    // statements passes whether or not the check comes first, which is exactly how
+    // the sibling assertion above passed while this was still wrong.
+    const h = harness();
+
+    expect(await runPolicy(['rm', 'posts'], h.write, PLAIN, h.host)).toBe('usage');
+    expect(h.requests()).toBe(0);
+  });
+
+  it('says the removal is not in force yet', async () => {
+    // 🔴 `rm` is the largest narrowing the product has, and it was the one command
+    // that did not say this. Measured against a real deployment on 2026-08-12: one
+    // run was still serving the removed table 393 seconds after it reported success,
+    // another stopped after 57, with nothing changed between them.
+    const h = harness();
+
+    expect(await runPolicy(['rm', 'posts', '--confirm'], h.write, PLAIN, h.host)).toBe('ok');
+    expect(h.text()).toContain('recycle');
+    expect(h.text()).toContain('rules just deleted');
+  });
+
   it('unexposes before it deletes the rules', async () => {
     // Same reasoning as a write. The table stops being reachable before its rules
     // go, never after.

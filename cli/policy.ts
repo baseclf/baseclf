@@ -176,6 +176,19 @@ async function storedVersion(endpoint: D1Endpoint, table: string): Promise<numbe
 }
 
 /**
+ * What a change to the stored policies has not done yet.
+ *
+ * Both `apply` and `rm` say this, and it is one function so that the two cannot drift
+ * into disagreeing about how the product behaves. The second sentence differs because
+ * the rules still in force differ: an apply leaves the previous document running, and
+ * an rm leaves the document it deleted running.
+ */
+function writeNotImmediate(write: Write, stillInForce: string): void {
+  write(note('This reaches the deployment as its instances recycle, not instantly.'));
+  write(note(stillInForce));
+}
+
+/**
  * Read and parse the document, before anything asks the network for anything.
  *
  * 🔴 Called before the credential is resolved and before the database is looked up,
@@ -284,8 +297,7 @@ async function apply(
   // loaded its registry keeps the old one until that isolate recycles, and nothing
   // reads the version to know better. Somebody who has just taken a column out of a
   // grant and been told it worked would otherwise stop watching.
-  write(note('This reaches the deployment as its instances recycle, not instantly.'));
-  write(note('Until then, requests may still be answered under the previous rules.'));
+  writeNotImmediate(write, 'Until then, requests may still be answered under the previous rules.');
 
   return 'ok';
 }
@@ -345,20 +357,32 @@ async function list(endpoint: D1Endpoint, write: Write, style: Style): Promise<P
   return 'ok';
 }
 
+/**
+ * The refusal for an `rm` that was not confirmed.
+ *
+ * ⚠️ The gate is in `runPolicy` and nowhere else, and a version of this had it in both
+ * places. Two gates read as defence in depth and are not, because the inner one is
+ * unreachable while the outer one holds: no test can tell whether it is still there,
+ * so removing it breaks nothing that anybody would notice. That is the shape of debt
+ * D3 in this project, where a second layer hid a bug in the first rather than
+ * catching it.
+ *
+ * So `remove` no longer takes a `confirmed` argument. It cannot be handed one it
+ * ignores, and the single gate is the one the tests and the mutations both point at.
+ */
+function refuseUnconfirmed(table: string, write: Write, style: Style): PolicyOutcome {
+  write(styledResultLine('attention', `This deletes every rule on "${table}".`, style));
+  write(note('The rules are not stored anywhere else. Keep the document that made'));
+  write(note('them, then run the same command again with --confirm.'));
+  return 'usage';
+}
+
 async function remove(
   endpoint: D1Endpoint,
   table: string,
-  confirmed: boolean,
   write: Write,
   style: Style,
 ): Promise<PolicyOutcome> {
-  if (!confirmed) {
-    write(styledResultLine('attention', `This deletes every rule on "${table}".`, style));
-    write(note('The rules are not stored anywhere else. Keep the document that made'));
-    write(note('them, then run the same command again with --confirm.'));
-    return 'usage';
-  }
-
   // Same order as a write, and for the same reason: the table stops being reachable
   // before its rules go, never after.
   for (const sql of [
@@ -370,6 +394,25 @@ async function remove(
   }
 
   write(styledResultLine('allow', `"${table}" is no longer exposed.`, style));
+
+  // 🔴 Said here for the same reason `apply` says it, and this is the command that
+  // needed it most. `apply` warns on every run because it cannot tell whether the new
+  // document is narrower than the one it replaced. `rm` always is: it takes a table
+  // from exposed to not exposed, which is the largest narrowing available.
+  //
+  // Measured against a real deployment on 2026-08-12, twice, and the spread is the
+  // result rather than either number. One run was still serving the removed table to
+  // anonymous callers 393 seconds after this line reported success; another stopped
+  // after 57. Nothing in the product moved between them. It is however long the
+  // isolate holding the old registry happens to live, and nothing reads the version to
+  // know better (`src/policy/registry-cache.test.ts`). So the text below gives no
+  // figure: a reader told "about a minute" would treat the six-minute case as broken,
+  // when it is the same behaviour.
+  //
+  // Left out of the first version of this command, which is how somebody revoking
+  // access in a hurry would have been told it was done.
+  writeNotImmediate(write, 'Until then, the table may still answer under the rules just deleted.');
+
   return 'ok';
 }
 
@@ -416,6 +459,13 @@ export async function runPolicy(
   const document = verb === 'apply' ? loadDocument(host, target ?? '', write, style) : null;
   if (verb === 'apply' && document === null) return 'usage';
 
+  // The same rule, applied to the other branch, and it was not here at first.
+  // Whether `--confirm` was passed is knowable with no network at all, so asking for a
+  // credential first meant a reader who forgot the flag and whose login had expired
+  // was told to log in, for a command that was never going to delete anything. The
+  // first thing that is wrong should be the thing that gets reported.
+  if (verb === 'rm' && !parsed.confirm) return refuseUnconfirmed(target ?? '', write, style);
+
   const resolved = await host.credentials();
   if (resolved === null) return 'failed';
   for (const warning of resolved.warnings) write(note(warning));
@@ -425,7 +475,7 @@ export async function runPolicy(
 
   try {
     if (verb === 'list') return await list(endpoint, write, style);
-    if (verb === 'rm') return await remove(endpoint, target ?? '', parsed.confirm, write, style);
+    if (verb === 'rm') return await remove(endpoint, target ?? '', write, style);
 
     if (document === null) return 'usage';
     const outcome = await apply(endpoint, document, write, style);

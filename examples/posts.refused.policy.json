@@ -1,0 +1,17 @@
+{
+  "table": "posts",
+  "enabled": true,
+  "binds": {
+    "isPublished": { "status": { "_eq": "published" } },
+    "isTrusted": { "author_id": { "_eq": "$auth.user.id" } }
+  },
+  "policies": [
+    {
+      "name": "read_published",
+      "for": "select",
+      "to": ["anon"],
+      "using": { "$bind": "isPublished" },
+      "columns": ["id", "title", "status"]
+    }
+  ]
+}

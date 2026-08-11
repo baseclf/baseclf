@@ -1,0 +1,32 @@
+{
+  "table": "posts",
+  "enabled": true,
+  "binds": {
+    "isPublished": { "status": { "_eq": "published" } },
+    "isAuthor": { "author_id": { "_eq": "$auth.uid" } }
+  },
+  "policies": [
+    {
+      "name": "read_published",
+      "for": "select",
+      "to": ["anon"],
+      "using": { "$bind": "isPublished" },
+      "columns": ["id", "title", "body", "status", "author_id", "created_at"]
+    },
+    {
+      "name": "read_own_or_published",
+      "for": "select",
+      "to": ["authenticated"],
+      "using": { "_or": [{ "$bind": "isPublished" }, { "$bind": "isAuthor" }] },
+      "columns": ["id", "title", "body", "status", "author_id", "created_at"]
+    },
+    {
+      "name": "update_own",
+      "for": "update",
+      "to": ["authenticated"],
+      "using": { "$bind": "isAuthor" },
+      "check": { "$bind": "isAuthor" },
+      "columns": ["title", "body", "status"]
+    }
+  ]
+}

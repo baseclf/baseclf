@@ -71,11 +71,52 @@ const MUTATIONS = [
   {
     // Deleting every rule on a table with no confirmation, from a command somebody
     // may have autocompleted.
+    //
+    // ⚠️ There is one gate, not two, and that is deliberate. A second copy inside
+    // `remove` could not be mutated independently: the outer one would refuse first
+    // and every test would stay green, which is debt D3 rather than defence in depth.
     name: 'rm proceeding without --confirm',
     file: POLICY,
     expect: 'the does-nothing-without-confirm test',
-    find: / {2}if \(!confirmed\) \{/,
-    replace: '  if (false) {',
+    find: / {2}if \(verb === 'rm' && !parsed\.confirm\) return refuseUnconfirmed\(/,
+    replace: "  if (false && verb === 'rm' && !parsed.confirm) return refuseUnconfirmed(",
+  },
+  {
+    // The gate moved in front of the network for the same reason the document parse
+    // did. This puts it back after the lookup, where it still refuses and still writes
+    // nothing, so the outcome and the SQL are both unchanged. The only difference is
+    // two requests made on behalf of a command that was never going to run, which is
+    // why the test counts requests rather than statements.
+    //
+    // ⚠️ A move, written as a delete of one line and an insert of another (debt B3).
+    // Reversing the pair would reassemble the original and mutate nothing.
+    name: 'the confirmation checked only after the database is found',
+    expect: 'the refuses-an-unconfirmed-rm-before-the-network test',
+    edits: [
+      {
+        file: POLICY,
+        find: / {2}if \(verb === 'rm' && !parsed\.confirm\) return refuseUnconfirmed\(target \?\? '', write, style\);\n/,
+        replace: '',
+      },
+      {
+        file: POLICY,
+        find: / {4}if \(verb === 'list'\) return await list\(endpoint, write, style\);/,
+        replace:
+          "    if (verb === 'rm' && !parsed.confirm) return refuseUnconfirmed(target ?? '', write, style);\n" +
+          "    if (verb === 'list') return await list(endpoint, write, style);",
+      },
+    ],
+  },
+  {
+    // 🔴 `rm` is the largest narrowing the product has, and it reports success long
+    // before the deployment stops serving what it removed. Measured against a real
+    // deployment: still serving after seventy-two seconds. Dropping this line leaves
+    // somebody revoking access believing it is done.
+    name: 'rm reporting success without saying it is not in force yet',
+    file: POLICY,
+    expect: 'the says-the-removal-is-not-in-force-yet test',
+    find: / {2}writeNotImmediate\(write, 'Until then, the table may still answer under the rules just deleted\.'\);/,
+    replace: '  void writeNotImmediate;',
   },
   {
     // A prefix match writes policies into `blog-staging` when asked for `blog`, and
