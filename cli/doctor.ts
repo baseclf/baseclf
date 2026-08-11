@@ -133,11 +133,27 @@ function originOf(value: string): string | null {
  */
 function checkReachable(result: Awaited<ReturnType<typeof probe>>): Check {
   if ('error' in result) {
+    // 🔴 Not a fault on its own, and calling it one is what this said before.
+    //
+    // Measured on 2026-08-12, on the first `workers.dev` subdomain ever claimed on an
+    // account: the first twenty five seconds are not 404 then 500 then 200. They are
+    // a TLS handshake failure, because the certificate for the hostname does not
+    // exist yet, and that happens below HTTP where there is no status to read. So
+    // `doctor` run straight after `create` reported four hard failures on a
+    // deployment that was completely fine and twenty seconds old.
+    //
+    // `waitForDeployment` already treats a failed request as propagation for exactly
+    // this reason. The two commands share `isPropagating` for the status case and had
+    // drifted apart on this one, which is the shape of debts 31 and 35 again.
     return {
       name: 'reachable',
-      verdict: 'deny',
-      detail: `The deployment did not answer: ${result.error}`,
-      action: 'Check the URL, and that `wrangler deploy` finished without an error.',
+      verdict: 'attention',
+      detail:
+        `The deployment did not answer: ${result.error}. A brand new address does this ` +
+        'for about half a minute, while its certificate is issued. It also looks like ' +
+        'this if the address is wrong.',
+      action: `Wait up to ${PROPAGATION_GRACE_SECONDS} seconds and run this again. If it ` +
+        'does not change, check the URL and that the deploy finished.',
     };
   }
 

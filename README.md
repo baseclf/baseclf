@@ -4,9 +4,94 @@
 `supabase-js` works unchanged. Runs in your own Cloudflare account.
 
 > **Status: pre-alpha.** Reads and writes both work: policies compile into the
-> query, and a write cannot move a row out of the caller's own reach.
-> Authentication does not exist yet, so every request currently runs as the
-> anonymous role. Nothing here is usable in production. See the roadmap below.
+> query, and a write cannot move a row out of the caller's own reach. Sign-in with
+> Google or GitHub works, tokens are ES256, and file uploads land in R2 under a key
+> the server builds rather than one the caller sends. There is no admin UI, no
+> client SDK and no migration tooling yet, so policies are rows you write by hand.
+> Nothing here is usable in production. See the roadmap below.
+
+---
+
+## Getting started
+
+One command, against your own Cloudflare account. It creates a database, a bucket
+and a Worker, deploys the engine onto them, and waits until the address answers
+before telling you it is done.
+
+```bash
+npx create-baseclf
+```
+
+### Two things to do first
+
+Both are one-time and both are free. The second one is where people get stuck,
+because nothing mentions it until a bucket fails to create.
+
+**1. Log in to Cloudflare.**
+
+```bash
+npx wrangler login
+```
+
+This runs Cloudflare's own OAuth flow. The credential stays on your machine.
+BaseCLF has no OAuth app of its own and never sees your account.
+
+If you have `CLOUDFLARE_API_TOKEN` set in your shell or in a `.env` beside you, that
+token wins over the login and the login has no effect. `npx baseclf login` refuses to
+start rather than let that happen quietly, and tells you how to clear it.
+
+**2. Switch on R2.**
+
+R2 is off on a new Cloudflare account. Until it is switched on, the API refuses to
+create a bucket and refuses even to list them, so provisioning stops at that step.
+
+In the Cloudflare dashboard: left sidebar, **R2 Object Storage**, then the button to
+enable it. The free tier covers ten gigabytes. It is a one-time thing, and the button
+does not appear again afterwards.
+
+If you skip this, `create-baseclf` stops with the same instruction and keeps
+everything it has already made, so you can enable R2 and run it again.
+
+### What it asks
+
+Two questions, both with a default you can accept by pressing enter.
+
+| Question | Why it is asked |
+|---|---|
+| Project name | It names the database, the bucket and the Worker on your account. A name that collides takes over an existing deployment on the next run rather than making a second one. |
+| Frontend origin | Where your app runs. Without it a browser on any other origin cannot call the API at all, and the error it shows says nothing about this setting. |
+
+The signing secret is generated, not asked for. Which OAuth provider you want is
+deliberately not asked either: setting one up means leaving the terminal, and the
+deployment is finished and answering before that comes up.
+
+### What it creates
+
+| On your account | Named |
+|---|---|
+| D1 database | your project name |
+| R2 bucket | your project name, with `-objects` on the end |
+| Worker | your project name |
+| A `workers.dev` address | `<project>.<subdomain>.workers.dev` |
+| A signing secret | generated, set once, never regenerated |
+| An hourly cron trigger | sweeps the rate limit table and reconciles storage |
+
+### Running it again
+
+Safe, and it is the way to update a deployment. The database, the bucket and the
+signing secret are kept. The secret is never regenerated, because a new one would
+invalidate every session and every token already issued.
+
+### When something looks wrong
+
+```bash
+npx baseclf doctor https://your-worker.workers.dev
+```
+
+It checks that the address answers, that the engine's tables exist, that the key set
+is present and reports ES256, and what the deployment thinks its CORS and provider
+configuration is. A brand new address takes about half a minute before it answers,
+while its certificate is issued, and `doctor` says so rather than calling it broken.
 
 ---
 

@@ -229,11 +229,31 @@ describe('input and infrastructure that is simply absent', () => {
     expect(report.checks[0]?.action).toContain('https://');
   });
 
-  it('reports an unreachable host rather than throwing', async () => {
-    const report = await runDoctor(BASE_URL, () => Promise.reject(new Error('getaddrinfo ENOTFOUND')));
+  it('reports an unreachable host rather than throwing, and does not call it broken', async () => {
+    // ⚠️ This used to assert every check was `deny`, and a real run showed why that is
+    // wrong. Measured on 2026-08-12 against the first workers.dev subdomain claimed on
+    // an account: the first twenty five seconds are a TLS handshake failure, not a 404
+    // then a 500, because the certificate does not exist yet. That is below HTTP,
+    // where there is no status to read, so a request that fails outright is what a
+    // perfectly good deployment looks like when it is twenty seconds old.
+    //
+    // Still not `ok`, because something is genuinely unanswered. But `attention`
+    // rather than `deny`, because waiting may be the whole fix.
+    const report = await runDoctor(BASE_URL, () =>
+      Promise.reject(new Error('getaddrinfo ENOTFOUND')),
+    );
 
     expect(report.ok).toBe(false);
-    expect(report.checks.every((check) => check.verdict === 'deny')).toBe(true);
+
+    const reachable = report.checks.find((check) => check.name === 'reachable');
+    expect(reachable?.verdict).toBe('attention');
+    expect(reachable?.action).toMatch(/wait/i);
+
+    // Everything downstream still fails hard: those endpoints really did not answer,
+    // and reporting them as merely young would hide a deployment that is broken.
+    expect(
+      report.checks.filter((check) => check.name !== 'reachable').every((c) => c.verdict === 'deny'),
+    ).toBe(true);
   });
 
   it('runs every check even when the first one fails', async () => {

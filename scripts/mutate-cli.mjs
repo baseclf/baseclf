@@ -70,11 +70,27 @@ const MUTATIONS = [
     replace: "  attention: '!',",
   },
   {
+    // ⚠️ This pattern was stale before it was next run. `isPropagating` was extracted
+    // into a shared function in 327150d and this still matched the inline comparison
+    // it replaced, so the mutation had quietly stopped applying. The runner aborts
+    // rather than reporting it as a survivor, which is what it is for, and that only
+    // helps when somebody runs it. Worth remembering when adding a mutation: it is
+    // coupled to the shape of the code, not only to its behaviour.
     name: 'a fresh deployment answering 404 reported as broken',
     file: DOCTOR,
     expect: 'the propagation tests',
-    find: / {2}if \(result\.status === 404 \|\| result\.status >= 500\) \{/,
+    find: / {2}if \(isPropagating\(result\.status\)\) \{/,
     replace: '  if (false) {',
+  },
+  {
+    // 🔴 The first twenty five seconds of a new subdomain are a TLS handshake failure,
+    // below HTTP, where there is no status to read. Calling that broken tells somebody
+    // their deployment failed at the exact moment it is coming up.
+    name: 'a request that failed outright reported as a broken deployment',
+    file: DOCTOR,
+    expect: 'the unreachable-host test',
+    find: / {6}verdict: 'attention',\n {6}detail:\n {8}`The deployment did not answer/,
+    replace: "      verdict: 'deny',\n      detail:\n        `The deployment did not answer",
   },
   {
     name: 'a missing key set reported as something to look at rather than a fault',
