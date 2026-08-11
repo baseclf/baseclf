@@ -1,6 +1,6 @@
 {
   "name": "create-baseclf",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "description": "Auto-REST and real row-level security for Cloudflare D1",
   "license": "Apache-2.0",
@@ -77,5 +77,17 @@
   "homepage": "https://github.com/baseclf/baseclf",
   "bugs": {
     "url": "https://github.com/baseclf/baseclf/issues"
-  }
+  },
+  "keywords": [
+    "cloudflare",
+    "d1",
+    "workers",
+    "row-level-security",
+    "rls",
+    "postgrest",
+    "supabase",
+    "baas",
+    "r2",
+    "policy"
+  ]
 }
