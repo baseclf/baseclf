@@ -44,7 +44,8 @@
     "prepack": "npm run build:cli",
     "prepublishOnly": "npm run guard && npm run check",
     "mutate:run-create": "node scripts/mutate-run-create.mjs",
-    "mutate:login": "node scripts/mutate-login.mjs"
+    "mutate:login": "node scripts/mutate-login.mjs",
+    "stage:alias": "node scripts/stage-alias-package.mjs"
   },
   "dependencies": {
     "better-auth": "1.6.26",

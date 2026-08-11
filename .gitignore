@@ -50,6 +50,8 @@ codegraph.json
 node_modules/
 dist/
 dist-cli/
+# The second package, generated from the first by scripts/stage-alias-package.mjs.
+dist-publish/
 build/
 .wrangler/
 *.tgz
