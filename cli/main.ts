@@ -15,8 +15,17 @@
 import { runDoctor } from './doctor.js';
 import { findVoiceViolations, type Style } from './output.js';
 import { renderReport } from './report.js';
+import {
+  type Host,
+  NO_HOST,
+  runSecretSet,
+  SECRET_FIXED_TEXT,
+  type SecretOutcome,
+  SECRET_USAGE,
+} from './secret.js';
 
 export type Writer = (text: string) => void;
+export type { Host } from './secret.js';
 
 /** Exit codes, named so a script can be written against them. */
 export const EXIT = Object.freeze({
@@ -27,11 +36,25 @@ export const EXIT = Object.freeze({
   usage: 2,
 });
 
+/**
+ * What each outcome of a subcommand costs at the shell.
+ *
+ * Written as a map rather than decided at each return, because the distinction it
+ * encodes is the interface: `usage` means retrying the identical command will not
+ * help, and `problems` means the work was attempted and did not finish.
+ */
+const OUTCOME_EXIT: Readonly<Record<SecretOutcome, number>> = Object.freeze({
+  ok: EXIT.ok,
+  usage: EXIT.usage,
+  failed: EXIT.problems,
+});
+
 const USAGE = [
   'baseclf: row-level security for Cloudflare D1',
   '',
   'Commands:',
-  '  doctor <url>   Ask a deployment what is wrong with it, and what to do about it',
+  '  doctor <url>       Ask a deployment what is wrong with it, and what to do about it',
+  '  secret set <KEY>   Set one secret on a deployed Worker, reading the value from stdin',
   '',
   'BaseCLF enforces policies on requests that go through your Worker. It does not',
   'enforce anything on `wrangler d1 execute`, which writes straight to the database.',
@@ -43,7 +66,12 @@ const USAGE = [
  * Returns an exit code instead of setting one, so the whole thing is a function of
  * its arguments.
  */
-export async function main(argv: readonly string[], write: Writer, style: Style): Promise<number> {
+export async function main(
+  argv: readonly string[],
+  write: Writer,
+  style: Style,
+  host: Host = NO_HOST,
+): Promise<number> {
   const [command, ...rest] = argv;
 
   if (command === undefined || command === '--help' || command === '-h') {
@@ -52,6 +80,24 @@ export async function main(argv: readonly string[], write: Writer, style: Style)
     // command with nothing is, because a script that did that by accident should
     // fail rather than look like it succeeded.
     return command === undefined ? EXIT.usage : EXIT.ok;
+  }
+
+  if (command === 'secret') {
+    const [verb, ...arguments_] = rest;
+
+    // `set` is the only verb, and it is still required. A `secret` group that did
+    // something when called with nothing would eventually do it when a script meant
+    // to say `delete`, and there is no undo for either.
+    if (verb !== 'set') {
+      write(
+        verb === undefined
+          ? `baseclf secret needs a verb. The only one is "set".\n\n${SECRET_USAGE}`
+          : `baseclf secret: there is no "${verb}" verb.\n\n${SECRET_USAGE}`,
+      );
+      return EXIT.usage;
+    }
+
+    return OUTCOME_EXIT[await runSecretSet(arguments_, write, style, host)];
   }
 
   if (command !== 'doctor') {
@@ -85,7 +131,7 @@ export async function main(argv: readonly string[], write: Writer, style: Style)
  * means adding it here, and the check keeps covering everything. A checker that only
  * covers what somebody remembered to list is a checker that drifts.
  */
-export const FIXED_TEXT: readonly string[] = Object.freeze([USAGE]);
+export const FIXED_TEXT: readonly string[] = Object.freeze([USAGE, ...SECRET_FIXED_TEXT]);
 
 /** The voice rules, over everything in `FIXED_TEXT`. Used by the tests. */
 export function fixedTextViolations(): readonly string[] {
