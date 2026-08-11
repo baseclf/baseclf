@@ -131,6 +131,20 @@ async function writeBounded(
 ): Promise<R2Object> {
   const bounded = new FixedLengthStream(length);
 
+  // `pipeTo` rather than a hand-rolled pump, and that was measured rather than
+  // assumed. A length mismatch produces four unobserved promise rejections per
+  // request in workerd, logged as `uncaught exception ... internal error`. They are
+  // harmless: the failure still surfaces as a 400 and nothing is stored, proven by
+  // the tests either way.
+  //
+  // Replacing this line with a manual reader/writer loop that observes every promise
+  // it creates was tried, and it took the count from eight to six across the two
+  // suites that provoke it. So six of the eight come from inside R2's own handling of
+  // a cancelled readable, which no arrangement here reaches, and the twenty lines
+  // bought a quarter of the noise. Reverted.
+  //
+  // ⚠️ The cost is real and belongs in the record: on a deployment these appear in
+  // the platform's exception log for what is an ordinary bad request.
   const piping = body.pipeTo(bounded.writable);
   const storing = bucket.put(key, bounded.readable, {
     ...(contentType === null ? {} : { httpMetadata: { contentType } }),

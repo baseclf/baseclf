@@ -49,6 +49,7 @@ _design_system/*.md
 codegraph.json
 node_modules/
 dist/
+dist-cli/
 build/
 .wrangler/
 *.tgz

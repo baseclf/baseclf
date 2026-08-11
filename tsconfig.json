@@ -29,6 +29,15 @@
     "forceConsistentCasingInFileNames": true,
     "noEmit": true
   },
-  "include": ["src/**/*.ts", "scripts/**/*.mjs", "worker-configuration.d.ts", "vitest.config.ts"],
+  // `cli/` is Node code, not Worker code, so it lives outside `src/`: nothing in it
+  // may end up in the Worker bundle. Its core is written without `node:` imports so
+  // it runs in the same test runner as everything else.
+  "include": [
+    "src/**/*.ts",
+    "cli/**/*.ts",
+    "scripts/**/*.mjs",
+    "worker-configuration.d.ts",
+    "vitest.config.ts"
+  ],
   "exclude": ["node_modules", "dist", "probe"]
 }
