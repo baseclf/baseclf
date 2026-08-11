@@ -24,6 +24,37 @@ const INDEX = 'src/index.ts';
 
 const MUTATIONS = [
   {
+    // 🔴 The state the real deployment was in on 2026-08-11, undetected. The
+    // config it was built from had no `r2_buckets` entry, so the Worker shipped
+    // without `env.BUCKET`. The deploy reported success, /health answered 200, and
+    // /storage/v1 returned the same 404 it returns when everything is fine.
+    name: 'a missing binding reported as a fact but never warned about',
+    file: DIAGNOSE,
+    expect: 'the forgot-a-binding tests',
+    find: / {2}checkBindings\(input\.bindings, warnings\);/,
+    replace: '  void input.bindings;',
+  },
+  {
+    // The type declares both as required and non-optional, so nothing upstream
+    // catches this. Reading the live `env` is the only way to know.
+    name: 'the binding presence assumed rather than read off the live env',
+    file: INDEX,
+    expect: 'the forgot-a-binding tests, through the worker',
+    edits: [
+      {
+        find: /\{ name: 'BUCKET', present: env\.BUCKET !== undefined \},/,
+        replace: "{ name: 'BUCKET', present: true },",
+      },
+    ],
+    knownSurvivor:
+      'no test drives the worker with a binding actually absent. Removing one from ' +
+      'the test env means removing it from `wrangler.jsonc`, which every storage ' +
+      'suite in the project depends on. The check itself is covered directly in ' +
+      '`diagnose.test.ts`; what this would prove is that `index.ts` reads the real ' +
+      'value, and the honest way to prove that is a second deployment rather than a ' +
+      'test. If this ever gets killed, somebody found a way and this note is stale.',
+  },
+  {
     name: 'the drift restored: diagnose forms its own opinion, by raw string',
     file: DIAGNOSE,
     expect: 'the trailing slash agreement test',

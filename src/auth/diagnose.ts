@@ -90,6 +90,28 @@ export interface DiagnoseInput {
   /** Whether `BETTER_AUTH_SECRET` is set. Never anything about its value. */
   readonly secretConfigured: boolean;
   readonly cors: CorsFacts;
+  /**
+   * Which of the engine's bindings are actually present on this deployment.
+   *
+   * ⚠️ Added after this went wrong on the real deployment on 2026-08-11. The
+   * config used to deploy had no `r2_buckets` entry, so the Worker shipped with no
+   * `env.BUCKET`. Nothing said so: `wrangler deploy` reported success and listed
+   * the bindings it did have, `/health` answered 200, this diagnostic answered
+   * without mentioning bindings at all, and `/storage/v1` returned the same 404 it
+   * returns when everything is fine, because the storage registry fails closed on
+   * an empty bucket table long before it reaches the binding.
+   *
+   * The type says `BUCKET: R2Bucket` and is not optional, so nothing in the type
+   * system was going to catch it either. A binding is a runtime fact, and this is
+   * the only place that can report one.
+   */
+  readonly bindings: readonly BindingPresence[];
+}
+
+export interface BindingPresence {
+  /** The name `src/` reads, for example `DB`. Never the resource it points at. */
+  readonly name: string;
+  readonly present: boolean;
 }
 
 export interface ProviderReport {
@@ -137,6 +159,14 @@ export interface DiagnoseReport {
   readonly trusted_origins: readonly string[];
   readonly cors: CorsReport;
   readonly providers: { readonly [K in ProviderId]?: ProviderReport };
+  /**
+   * Which of the engine's bindings the deployment actually has.
+   *
+   * Reported even when they are all present, because "the binding is there" is a
+   * fact somebody debugging storage needs, and a field that only appears on
+   * failure is one nobody knows to look for.
+   */
+  readonly bindings: readonly BindingPresence[];
   /** Each one names what to do about it. */
   readonly warnings: readonly string[];
 }
@@ -419,6 +449,29 @@ function corsReport(cors: CorsFacts): CorsReport {
  * mismatched one makes the redirect URIs unusable however carefully they were
  * pasted.
  */
+/**
+ * Report a binding the deployment was built without.
+ *
+ * Named one per line rather than counted, because the name is what the reader has
+ * to put back into their config, and because a count says nothing about which one.
+ *
+ * This is a warning rather than a refusal. A deployment missing `BUCKET` serves
+ * every REST request correctly and only fails on storage, so refusing to answer
+ * would take out the working half to complain about the broken one. `doctor` turns
+ * it into a non-zero exit, which is where a script should learn about it.
+ */
+function checkBindings(bindings: readonly BindingPresence[], warnings: string[]): void {
+  for (const binding of bindings) {
+    if (binding.present) continue;
+
+    warnings.push(
+      `env.${binding.name} is not bound on this deployment. The config it was deployed ` +
+        'with is missing that binding, so anything that reads it fails at runtime. ' +
+        'Nothing else reports this: the deploy succeeds and the type says it is there.',
+    );
+  }
+}
+
 export function diagnose(input: DiagnoseInput): DiagnoseReport {
   const warnings: string[] = [];
   const actual = originOf(input.requestUrl);
@@ -431,6 +484,7 @@ export function diagnose(input: DiagnoseInput): DiagnoseReport {
   checkProviders(input.providers, warnings);
   checkTrustedOrigins(input.trustedOrigins, input.requestOrigin, actual, input.cors, warnings);
   checkTrustedOriginsAreOrigins(input.trustedOrigins, warnings);
+  checkBindings(input.bindings, warnings);
 
   const providers: { -readonly [K in ProviderId]?: ProviderReport } = {};
   for (const status of input.providers) {
@@ -451,6 +505,7 @@ export function diagnose(input: DiagnoseInput): DiagnoseReport {
     trusted_origins: input.trustedOrigins,
     cors: corsReport(input.cors),
     providers: Object.freeze(providers),
+    bindings: Object.freeze(input.bindings.map((binding) => Object.freeze({ ...binding }))),
     warnings: Object.freeze(warnings),
   });
 }

@@ -470,6 +470,14 @@ function describeDeployment(request: Request, env: Env): Response {
       trustedOrigins: config.trustedOrigins,
       providers: providerStatuses(env, config.baseURL),
       secretConfigured: config.secretConfigured,
+      // Read off the live `env`, which is the only thing that knows. The type
+      // declares both as required and non-optional, so a deployment built from a
+      // config missing one of them typechecks, deploys, reports success, and is
+      // undefined here. Measured on the real deployment on 2026-08-11.
+      bindings: [
+        { name: 'DB', present: env.DB !== undefined },
+        { name: 'BUCKET', present: env.BUCKET !== undefined },
+      ],
       cors: {
         // Decided by the very function `fetch` uses, on this very request, rather
         // than described to the diagnostic in words. Anything else is a second

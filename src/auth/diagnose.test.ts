@@ -12,7 +12,13 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { type CorsFacts, type DiagnoseInput, type DiagnoseReport, diagnose } from './diagnose.js';
+import {
+  type BindingPresence,
+  type CorsFacts,
+  type DiagnoseInput,
+  type DiagnoseReport,
+  diagnose,
+} from './diagnose.js';
 import { type ProviderEnv, providerStatuses } from './providers.js';
 
 const CONFIGURED_URL = 'https://baseclf-abc123.example.workers.dev';
@@ -37,6 +43,17 @@ const CREDENTIALS: ProviderEnv = {
  * not something this file can prove, so it is proved where both are real, in
  * `src/cors.test.ts`.
  */
+/**
+ * Every binding present, which is the state a deployment is supposed to be in.
+ *
+ * A default rather than a required argument in every case, so a test about CORS
+ * does not have to say anything about bindings. The tests that care set it.
+ */
+const ALL_BOUND: readonly BindingPresence[] = [
+  { name: 'DB', present: true },
+  { name: 'BUCKET', present: true },
+];
+
 const NO_ORIGIN_ALLOWED: CorsFacts = {
   allowedOriginForCaller: null,
   allowedRequestHeaders: ['authorization', 'content-type'],
@@ -54,6 +71,7 @@ function report(overrides: Partial<DiagnoseInput> = {}): DiagnoseReport {
     providers: providerStatuses(CREDENTIALS, baseUrlConfig),
     secretConfigured: true,
     cors: NO_ORIGIN_ALLOWED,
+    bindings: ALL_BOUND,
     ...overrides,
     baseUrlConfig,
   });
@@ -234,6 +252,7 @@ describe('the redirect URI an operator has to paste', () => {
       ),
       secretConfigured: true,
       cors: NO_ORIGIN_ALLOWED,
+      bindings: ALL_BOUND,
     });
 
     expect(result.providers.google?.redirect_uri).toBe(
@@ -379,5 +398,51 @@ describe('a base URL that cannot work', () => {
     });
 
     expect(result.warnings).toEqual([]);
+  });
+});
+
+describe('⭐ a deployment built from a config that forgot a binding', () => {
+  it('says which one, since nothing else on the deployment will', () => {
+    // Happened on the real deployment on 2026-08-11. The config used to deploy had
+    // no `r2_buckets` entry, so the Worker shipped with no `env.BUCKET`. Nothing
+    // said so: the deploy reported success and listed the bindings it did have,
+    // /health answered 200, this diagnostic did not mention bindings at all, and
+    // /storage/v1 returned the same 404 it returns when everything is fine, because
+    // the storage registry fails closed long before it reaches the binding.
+    const result = report({
+      bindings: [
+        { name: 'DB', present: true },
+        { name: 'BUCKET', present: false },
+      ],
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.warnings.join(' ')).toContain('env.BUCKET');
+  });
+
+  it('does not warn when they are all there', () => {
+    expect(report().warnings.join(' ')).not.toContain('not bound');
+  });
+
+  it('reports the bindings even when nothing is wrong', () => {
+    // A field that only appears on failure is one nobody knows to look for, and
+    // "the binding is there" is a fact somebody debugging storage needs.
+    expect(report().bindings).toEqual([
+      { name: 'DB', present: true },
+      { name: 'BUCKET', present: true },
+    ]);
+  });
+
+  it('names the binding rather than counting how many are missing', () => {
+    // A count says nothing about which one to put back in the config.
+    const result = report({
+      bindings: [
+        { name: 'DB', present: false },
+        { name: 'BUCKET', present: false },
+      ],
+    });
+
+    expect(result.warnings.filter((line) => line.includes('env.DB'))).toHaveLength(1);
+    expect(result.warnings.filter((line) => line.includes('env.BUCKET'))).toHaveLength(1);
   });
 });
