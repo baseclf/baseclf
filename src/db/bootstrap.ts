@@ -3,11 +3,23 @@
  *
  * Until this existed, nothing outside the tests applied `POLICY_SCHEMA` or
  * `STORAGE_SCHEMA`. Both are declared, both are imported by fixtures, and neither
- * reached a real database unless somebody ran the statements by hand. So every
- * deployment answered `/rest/v1` with a D1 error naming a table its owner had
- * never heard of, and `/storage/v1` the same, while `/health` and `/api/auth/*`
- * looked fine. That is the failure shape this project keeps meeting: the
- * diagnostic is healthy and the product is not.
+ * reached a real database unless somebody ran the statements by hand.
+ *
+ * ⚠️ Measured against the live deployment on 2026-08-11, before this shipped. The
+ * two paths did not fail the same way, and the difference is worth keeping:
+ *
+ *   GET /health                      200
+ *   GET /rest/v1/posts               500  {"code":"INTERNAL"}
+ *   GET /storage/v1/avatars/x.png    404  {"code":"NOT_FOUND"}
+ *
+ * REST answered 500 because the query reached D1 and D1 named a table the owner
+ * had never heard of. Storage answered 404 because its registry loader treats an
+ * unreadable bucket list as no buckets, which is fail-closed and correct, and
+ * which also means storage was silently unusable rather than visibly broken.
+ *
+ * That is the failure shape this project keeps meeting from both sides at once:
+ * the diagnostic is healthy, one path is loudly wrong, and the other is quietly
+ * wrong.
  *
  * ## Why this is here and not only in the CLI
  *
