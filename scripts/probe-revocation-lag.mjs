@@ -57,16 +57,54 @@ console.log('2. remove');
 cli('rm', 'posts', '--confirm');
 const removedAt = Date.now();
 
+/**
+ * 🔴 Polls until the refusals have been *sustained*, not until the first one.
+ *
+ * The first version stopped at the first 404 and reported that time as the answer. It
+ * is not the answer, and four runs in a row said 5 to 11 seconds before a longer poll
+ * showed the truth: a deployment answers from several isolates, each holding its own
+ * registry loaded at its own moment, and a request lands on whichever one takes it. So
+ * one 404 means one isolate has expired. It says nothing about the others.
+ *
+ * Measured on 2026-08-12 against a live deployment, polling every two seconds:
+ *
+ *   t+0s 404 · t+3s 404 · t+5s 404 · **t+7s 200** · t+9s 404 · ... 404 to t+68s
+ *
+ * A run that stopped at the first refusal would have reported this as zero seconds,
+ * while the removed table was still being served seven seconds later.
+ *
+ * So the answer is the time of the **last** 200, and it is only trustworthy once
+ * nothing has served for longer than the window itself.
+ */
+const QUIET_MS = 45_000;
+
 console.log('3. poll');
-let last = 200;
-while (last === 200) {
+let lastServedAt = removedAt;
+let lastServedElapsed = 0;
+let everServed = false;
+
+while (Date.now() - lastServedAt < QUIET_MS) {
   if (Date.now() - removedAt > GIVE_UP_MS) {
     console.log(`   still serving after ${Math.round(GIVE_UP_MS / 1000)}s, gave up`);
     process.exit(1);
   }
+
   await sleep(INTERVAL_MS);
-  last = await status();
+  const code = await status();
   const elapsed = Math.round((Date.now() - removedAt) / 1000);
-  if (last === 200) console.log(`   t+${elapsed}s still serving the removed table`);
-  else console.log(`   t+${elapsed}s refused with ${last}`);
+
+  if (code === 200) {
+    lastServedAt = Date.now();
+    lastServedElapsed = elapsed;
+    everServed = true;
+    console.log(`   t+${elapsed}s still serving the removed table`);
+  } else {
+    console.log(`   t+${elapsed}s refused with ${code}`);
+  }
 }
+
+console.log(
+  everServed
+    ? `   last served at t+${lastServedElapsed}s, then quiet for ${QUIET_MS / 1000}s`
+    : `   never served after the removal, and quiet for ${QUIET_MS / 1000}s`,
+);
