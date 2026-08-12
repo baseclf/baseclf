@@ -16,7 +16,7 @@ import type { D1Executor } from '../db/dialect.js';
 import { assertExecutable } from '../db/guards.js';
 import { PolicyError } from '../utils/errors.js';
 import { logEvent } from '../utils/log.js';
-import { isolateMemo } from '../utils/memo.js';
+import { isolateMemo, MAX_REGISTRY_AGE_MS } from '../utils/memo.js';
 import {
   type StorageBucketDefinition,
   type StorageOperation,
@@ -177,20 +177,36 @@ export async function loadStorageRegistry(executor: D1Executor): Promise<Storage
  * Not at module scope: the startup CPU budget is one second and global work
  * counts against it (rules/02 §A).
  *
- * ⚠️ Same debt as the policy registry, deliberately and not by accident. The memo
- * is per isolate, so a policy change takes effect as isolates recycle rather than
- * at once across the fleet. `_storage_buckets.version` exists for a fleet-wide
- * invalidation and nothing reads it yet. Copying the shape means copying the debt,
- * so it is written down in both places rather than looking solved in one.
+ * ⚠️ This shape was copied from the policy registry deliberately, and it copied two
+ * debts with it. Both are now the same fix rather than the same problem written down
+ * twice, which is what the note here used to be.
  *
- * 🔴 And it copied a second debt nobody had written down, which is the cost of the
- * paragraph above being about only one of them. `cached ??= loadStorageRegistry(...)`
- * keeps a **rejected** promise, so an isolate that saw one bad row refused every
- * storage request for as long as it lived, repaired data or not. That was reported
- * as F4 against the policy registry alone. It was here too, and in `getCatalogue`.
- * See `utils/memo.ts`.
+ * F4: `cached ??= loadStorageRegistry(...)` kept a **rejected** promise, so an isolate
+ * that saw one bad row refused every storage request for as long as it lived, repaired
+ * data or not. Reported against the policy registry alone. It was here too, and in
+ * `getCatalogue`.
+ *
+ * F2: a change landed only when the isolate recycled, with no bound on that. There is
+ * a bound now, and it is `MAX_REGISTRY_AGE_MS`. `_storage_buckets.version` is still
+ * read by nothing, and a fleet-wide invalidation keyed on it is still the better
+ * answer; this is the one that does not need a control plane to exist first.
  */
-const memo = isolateMemo<StorageRegistry>();
+/** The clock the memo reads. See `setRegistryClock` in the policy registry. */
+let storageClock: () => number = () => Date.now();
+
+/** Test seam. Pass nothing to put the real clock back. */
+export function setStorageRegistryClock(clock?: () => number): void {
+  storageClock = clock ?? ((): number => Date.now());
+}
+
+const memo = isolateMemo<StorageRegistry>({
+  // The same window as the policy registry, from the same constant rather than the
+  // same number written twice. A deployment where revoking a table takes thirty
+  // seconds and revoking a bucket takes something else would be a deployment nobody
+  // can describe in one sentence.
+  maxAgeMs: MAX_REGISTRY_AGE_MS,
+  now: () => storageClock(),
+});
 
 export function getStorageRegistry(executor: D1Executor): Promise<StorageRegistry> {
   return memo.get(() => loadStorageRegistry(executor));

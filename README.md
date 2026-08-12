@@ -136,18 +136,26 @@ The rules are not stored anywhere else, so keep the document that made them. Wit
 `--confirm` the command prints what it would delete and stops, before it asks your
 account for anything.
 
-**A change is not instant, and there is no bound on how long it takes.** A deployment
-that has already loaded its policies keeps them until that instance recycles, and
-nothing today forces it sooner. Measured against a live deployment twice on the same
-day, with nothing changed between the runs: once a removed table was still answering
-anonymous requests 393 seconds after the command reported success, and once it stopped
-after 57.
+**A change is not instant. It lands within about thirty seconds.** A deployment that
+has already loaded its policies answers from what it loaded, and it re-reads once that
+is half a minute old. So a change may take effect sooner, and it will not take longer.
 
-The spread is the point. It is however long that instance happens to live, so no
-figure here would be a limit you could plan against. If you are **narrowing** a policy,
-including removing one, treat the old rules as still live and verify from outside
-before you rely on it. A quiet deployment is the slowest, because an instance with
-little traffic has little reason to be recycled.
+That bound is new, and it is worth knowing what it replaced. Before it, a deployment
+kept its policies until the instance happened to recycle, and nothing forced it sooner.
+Measured against a live deployment twice on the same day, with nothing changed between
+the runs: once a removed table was still answering anonymous requests 393 seconds after
+the command reported success, and once it stopped after 57. A quiet deployment was the
+slowest, because an instance with little traffic has little reason to be recycled.
+
+Two things the bound does not give you:
+
+- It is not fleet-wide invalidation. Every instance re-reads on its own schedule, so
+  during the window some may have the change and others may not.
+- It is a property of the **deployed engine**, not of the CLI. A deployment created by
+  an older version of `create-baseclf` does not have it. Redeploy to get it.
+
+If you are **narrowing** a policy, including removing one, verify from outside before
+you rely on it rather than trusting the window.
 
 ### When something looks wrong
 

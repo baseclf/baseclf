@@ -19,7 +19,8 @@
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { D1Executor } from '../db/dialect.js';
-import { getRegistry, resetRegistry } from './registry.js';
+import { MAX_REGISTRY_AGE_MS } from '../utils/memo.js';
+import { getRegistry, resetRegistry, setRegistryClock } from './registry.js';
 import { POLICY_SCHEMA } from './schema.js';
 
 const APPLICATION = [
@@ -60,11 +61,13 @@ describe('F2: what a version bump actually invalidates', () => {
   it('does not invalidate anything, so a narrowed policy keeps serving the wide one', async () => {
     // 🔴 An operator who removes a column from a grant is told the write succeeded,
     // at a new version, while every isolate that had already loaded keeps serving
-    // the wider policy until it recycles. There is no bound on that window.
+    // the wider policy. Nothing reads the version, and the CLI shipped three comments
+    // claiming it was the mechanism.
     //
-    // The registry's own comment is honest about this and calls fleet-wide
-    // invalidation a V7 concern. The CLI shipped three comments claiming the
-    // version was the mechanism. It is not; nothing reads it.
+    // ⚠️ Still true, and no longer unbounded: the sibling test below shows the window
+    // closing on its own after `MAX_REGISTRY_AGE_MS`. This one runs inside that
+    // window, which is why it still sees the old registry. Both are the behaviour;
+    // reading either on its own gives the wrong picture.
     await env.DB.prepare(INSERT_POLICY)
       .bind(...policyRow('read', ['id', 'title', 'author_id']))
       .run();
@@ -108,6 +111,49 @@ describe('F2: what a version bump actually invalidates', () => {
     resetRegistry();
     const reloaded = await getRegistry(env.DB);
     expect(reloaded.candidates('posts', 'select', 'authenticated')[0]?.columns).toEqual(['id']);
+  });
+
+  it('picks the narrowed policy up on its own once the window closes', async () => {
+    // ⭐ The bound F2 did not have. Nothing here calls `resetRegistry`, which is the
+    // point: an isolate that never hears about the change still stops serving the old
+    // policy, and it does so within a time somebody can be told.
+    //
+    // Measured against a live deployment before this existed: 393 seconds in one run
+    // and 57 in another, with nothing changed between them. The spread was the reason
+    // no figure could be given to an operator. Now there is one.
+    let now = 5_000_000;
+    setRegistryClock(() => now);
+
+    try {
+      await env.DB.prepare(INSERT_POLICY)
+        .bind(...policyRow('read', ['id', 'title', 'author_id']))
+        .run();
+      await env.DB.prepare(
+        'INSERT INTO _exposed_tables (table_name, enabled, version) VALUES (?, 1, 1)',
+      )
+        .bind('posts')
+        .run();
+
+      const before = await getRegistry(env.DB);
+      expect(before.candidates('posts', 'select', 'authenticated')[0]?.columns).toHaveLength(3);
+
+      await env.DB.prepare('DELETE FROM _policies WHERE table_name = ?').bind('posts').run();
+      await env.DB.prepare(INSERT_POLICY)
+        .bind(...policyRow('read', ['id']))
+        .run();
+
+      // One millisecond short. Still the old grant, and the same object.
+      now += MAX_REGISTRY_AGE_MS - 1;
+      expect(await getRegistry(env.DB)).toBe(before);
+
+      // Over the line, with nobody having told it anything.
+      now += 1;
+      const after = await getRegistry(env.DB);
+      expect(after).not.toBe(before);
+      expect(after.candidates('posts', 'select', 'authenticated')[0]?.columns).toEqual(['id']);
+    } finally {
+      setRegistryClock();
+    }
   });
 });
 

@@ -11,8 +11,14 @@ import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { BaseclfError } from '../utils/errors.js';
+import { MAX_REGISTRY_AGE_MS } from '../utils/memo.js';
 import { authorizeStorage } from './policy.js';
-import { getStorageRegistry, loadStorageRegistry, resetStorageRegistry } from './registry.js';
+import {
+  getStorageRegistry,
+  loadStorageRegistry,
+  resetStorageRegistry,
+  setStorageRegistryClock,
+} from './registry.js';
 import { STORAGE_SCHEMA } from './schema.js';
 
 const ANN = { role: 'authenticated', uid: 'u_ann', email: null, app: {} };
@@ -291,5 +297,32 @@ describe('the memo behind getStorageRegistry', () => {
 
     // And it is a memo again rather than a reload every time.
     expect(await getStorageRegistry(env.DB)).toBe(registry);
+  });
+
+  it('drops a bucket on its own once the window closes', async () => {
+    // ⭐ The storage half of debt F2, which the file's own comment said it had copied
+    // from the policy registry on purpose. Nothing here resets anything: an isolate
+    // nobody told still stops serving a bucket that was removed.
+    let now = 7_000_000;
+    setStorageRegistryClock(() => now);
+
+    try {
+      resetStorageRegistry();
+      await addBucket('avatars', 1);
+      await addPolicy('avatars');
+
+      expect((await getStorageRegistry(env.DB)).buckets.has('avatars')).toBe(true);
+
+      await env.DB.prepare('DELETE FROM _storage_policies WHERE bucket = ?').bind('avatars').run();
+      await env.DB.prepare('DELETE FROM _storage_buckets WHERE bucket = ?').bind('avatars').run();
+
+      now += MAX_REGISTRY_AGE_MS - 1;
+      expect((await getStorageRegistry(env.DB)).buckets.has('avatars')).toBe(true);
+
+      now += 1;
+      expect((await getStorageRegistry(env.DB)).buckets.has('avatars')).toBe(false);
+    } finally {
+      setStorageRegistryClock();
+    }
   });
 });

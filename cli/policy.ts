@@ -17,10 +17,12 @@
  *      being exposed at the first statement and starts again at the last.
  *   3. 🔴 **It does not take effect immediately, and it says so.** An earlier version
  *      of this comment claimed the version bump invalidated a cache. It does not:
- *      measured in `src/policy/registry-cache.test.ts`, the registry is a bare
- *      per-isolate memo and nothing reads the version at all. A change lands as
- *      isolates recycle, with no bound on how long that takes, so an operator who
- *      **narrows** a policy is the one who needs telling.
+ *      measured in `src/policy/registry-cache.test.ts`, nothing reads the version at
+ *      all. What the engine has now is an expiry, `MAX_REGISTRY_AGE_MS`, so a change
+ *      lands within about half a minute rather than whenever an isolate recycles.
+ *      That bound belongs to the **deployed** engine, and this command cannot see
+ *      which version answers, so it says both. An operator who **narrows** a policy
+ *      is the one who needs telling.
  *
  * ⚠️ Everything here goes over the D1 REST API, which `rules/01` section E is explicit
  * is not a data plane. That is correct for this and only this: one administrator, on
@@ -29,6 +31,7 @@
 
 import type { Catalogue } from '../src/db/introspect.js';
 import { introspect } from '../src/db/introspect.js';
+import { MAX_REGISTRY_AGE_MS } from '../src/utils/memo.js';
 import {
   type D1Credentials,
   type D1Endpoint,
@@ -179,12 +182,28 @@ async function storedVersion(endpoint: D1Endpoint, table: string): Promise<numbe
  * What a change to the stored policies has not done yet.
  *
  * Both `apply` and `rm` say this, and it is one function so that the two cannot drift
- * into disagreeing about how the product behaves. The second sentence differs because
+ * into disagreeing about how the product behaves. The last sentence differs because
  * the rules still in force differ: an apply leaves the previous document running, and
  * an rm leaves the document it deleted running.
+ *
+ * ⚠️ Two sentences rather than one, and the second is the awkward one that has to be
+ * there. The window is a property of the **deployed engine**, not of this command, and
+ * this command cannot see which version is deployed. Saying only "thirty seconds"
+ * would be a promise on behalf of a deployment that may predate the bound existing,
+ * made to somebody who is revoking access.
+ *
+ * The number comes from the engine's own constant rather than from prose here, so the
+ * two cannot say different things.
  */
 function writeNotImmediate(write: Write, stillInForce: string): void {
-  write(note('This reaches the deployment as its instances recycle, not instantly.'));
+  const seconds = Math.round(MAX_REGISTRY_AGE_MS / 1000);
+
+  // ⚠️ The line break is placed rather than left to fall where it lands. The first
+  // draft split between the number and its unit, so the terminal showed "about 30" at
+  // the end of one line and "seconds" at the start of the next. Found by running the
+  // command and reading it, which is the only thing that finds this.
+  write(note('Not instant. A deployment on this version re-reads its policies within'));
+  write(note(`about ${seconds} seconds. An older one waits to recycle instead, with no bound.`));
   write(note(stillInForce));
 }
 
@@ -294,9 +313,9 @@ async function apply(
   // cannot tell the difference: it does not read the policy it is replacing.
   //
   // Measured in `src/policy/registry-cache.test.ts`. A deployment that has already
-  // loaded its registry keeps the old one until that isolate recycles, and nothing
-  // reads the version to know better. Somebody who has just taken a column out of a
-  // grant and been told it worked would otherwise stop watching.
+  // loaded its registry answers from that until it expires, and nothing reads the
+  // version to know better. Somebody who has just taken a column out of a grant and
+  // been told it worked would otherwise stop watching.
   writeNotImmediate(write, 'Until then, requests may still be answered under the previous rules.');
 
   return 'ok';
@@ -400,14 +419,16 @@ async function remove(
   // document is narrower than the one it replaced. `rm` always is: it takes a table
   // from exposed to not exposed, which is the largest narrowing available.
   //
-  // Measured against a real deployment on 2026-08-12, twice, and the spread is the
+  // Measured against a real deployment on 2026-08-12, twice, and the spread was the
   // result rather than either number. One run was still serving the removed table to
   // anonymous callers 393 seconds after this line reported success; another stopped
-  // after 57. Nothing in the product moved between them. It is however long the
-  // isolate holding the old registry happens to live, and nothing reads the version to
-  // know better (`src/policy/registry-cache.test.ts`). So the text below gives no
-  // figure: a reader told "about a minute" would treat the six-minute case as broken,
-  // when it is the same behaviour.
+  // after 57. Nothing in the product moved between them: it was however long the
+  // isolate holding the old registry happened to live.
+  //
+  // That measurement is why `MAX_REGISTRY_AGE_MS` exists, and it is also why the text
+  // below still names the older behaviour. The bound is in the engine, this command
+  // talks to whichever engine is deployed, and the deployment those numbers came from
+  // is one of the ones without it.
   //
   // Left out of the first version of this command, which is how somebody revoking
   // access in a hurry would have been told it was done.

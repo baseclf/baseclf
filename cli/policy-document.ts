@@ -288,8 +288,9 @@ export function writeStatements(document: PolicyDocument, nextVersion: number): 
  *
  * So what a bump buys right now is a record that the row changed, for a mechanism that
  * does not exist yet and for a person reading `policy list`. What it does not buy is
- * the change taking effect. That happens as isolates recycle, and nothing bounds how
- * long that takes.
+ * the change taking effect. That happens when a deployment re-reads, which the engine
+ * now bounds with `MAX_REGISTRY_AGE_MS` rather than leaving to whenever an isolate
+ * recycles. The bound does not read the version either; it just expires.
  *
  * It still goes up on every write, so that a person reading `policy list` can see that
  * something changed.

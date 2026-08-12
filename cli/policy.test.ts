@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { MAX_REGISTRY_AGE_MS } from '../src/utils/memo.js';
 import { findVoiceViolations, markFor, PLAIN } from './output.js';
 import { POLICY_FIXED_TEXT, type PolicyHost, parseOptions, runPolicy } from './policy.js';
 
@@ -330,8 +331,19 @@ describe('removing a table', () => {
     const h = harness();
 
     expect(await runPolicy(['rm', 'posts', '--confirm'], h.write, PLAIN, h.host)).toBe('ok');
-    expect(h.text()).toContain('recycle');
     expect(h.text()).toContain('rules just deleted');
+
+    // ⚠️ Both halves, because either alone is a message that misleads. The window is
+    // the engine's, and this command talks to whichever engine is deployed: naming
+    // only the bound promises it on behalf of a deployment that may predate it, and
+    // naming only the recycling hides that current deployments have an answer.
+    expect(h.text()).toContain(`${Math.round(MAX_REGISTRY_AGE_MS / 1000)} seconds`);
+    expect(h.text()).toContain('recycle');
+
+    // The number and its unit on one line. A break between them reads as a truncated
+    // sentence in a terminal, which is how the first version of it shipped.
+    const line = h.lines.find((each) => each.includes('seconds'));
+    expect(line).toMatch(/\d+ seconds/);
   });
 
   it('unexposes before it deletes the rules', async () => {

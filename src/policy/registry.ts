@@ -20,7 +20,7 @@ import { assertExecutable } from '../db/guards.js';
 import { type Catalogue, getCatalogue, SYSTEM_TABLE_PREFIX } from '../db/introspect.js';
 import { PolicyError } from '../utils/errors.js';
 import { logEvent } from '../utils/log.js';
-import { isolateMemo } from '../utils/memo.js';
+import { isolateMemo, MAX_REGISTRY_AGE_MS } from '../utils/memo.js';
 import { parseTableDefinition } from './parse.js';
 import type { Operation, PolicyDef, TableDefinition } from './types.js';
 import { validateTableDefinition } from './validate.js';
@@ -312,19 +312,45 @@ function buildRegistry(
  * Not at module scope: the Workers startup CPU budget is one second and global
  * work counts against it (rules/02 section A).
  *
- * The cache is per isolate, so a policy change takes effect as isolates recycle
- * rather than instantly across the fleet. Call `resetRegistry` on the isolate
- * that made the change; a fleet-wide invalidation keyed on
- * `_exposed_tables.version` is a V7 concern, when policies become editable
- * through the Studio.
+ * The cache is per isolate, so a change still does not land across the fleet at
+ * once. What it does now is expire: `MAX_REGISTRY_AGE_MS` bounds how long an
+ * isolate may go on answering from a registry it has not re-read. Call
+ * `resetRegistry` on the isolate that made the change to skip the wait. A
+ * fleet-wide invalidation keyed on `_exposed_tables.version` is still the better
+ * answer and still a V7 concern, when policies become editable through the Studio.
  */
 /**
- * 🔴 A failure is not kept, and it used to be. `cached ??= loadRegistry(executor)`
- * memoised a rejected promise, so one malformed row broke the isolate for as long as
- * it lived and repairing the data did not help. Reported as debt F4, measured in
- * `registry-cache.test.ts`, and it was never only here: see `utils/memo.ts`.
+ * The clock the memo reads.
+ *
+ * Behind a variable so the suite can watch the window close without waiting for it.
+ * `setRegistryClock` is the only writer and only a test calls it; the default is the
+ * one the deployment uses.
  */
-const memo = isolateMemo<Registry>();
+let registryClock: () => number = () => Date.now();
+
+/** Test seam. Pass nothing to put the real clock back. */
+export function setRegistryClock(clock?: () => number): void {
+  registryClock = clock ?? ((): number => Date.now());
+}
+
+/**
+ * 🔴 Two debts, one line.
+ *
+ * F4: a failure is not kept, and it used to be. `cached ??= loadRegistry(executor)`
+ * memoised a rejected promise, so one malformed row broke the isolate for as long as
+ * it lived and repairing the data did not help.
+ *
+ * F2: a success does not last for ever either, and it used to. Nothing reads
+ * `_exposed_tables.version`, so a narrowed policy took effect whenever the isolate
+ * happened to recycle. Measured against a live deployment: still serving a removed
+ * table after 393 seconds in one run, 57 in another. `MAX_REGISTRY_AGE_MS` is the
+ * bound that was missing. It is not the fleet-wide invalidation a control plane would
+ * give, and it is the difference between a window and no window.
+ */
+const memo = isolateMemo<Registry>({
+  maxAgeMs: MAX_REGISTRY_AGE_MS,
+  now: () => registryClock(),
+});
 
 export function getRegistry(executor: D1Executor): Promise<Registry> {
   return memo.get(() => loadRegistry(executor));
