@@ -232,12 +232,77 @@ function policyRow(
 }
 
 /**
+ * How long a lock is honoured before somebody else may take it.
+ *
+ * ⚠️ A trade between two failures, neither of which is corruption. Too short and a
+ * writer that is merely slow gets overtaken and has to be told its run did nothing.
+ * Too long and a writer that crashed blocks the table for that long.
+ *
+ * Two minutes, against an apply that is six REST calls and normally takes seconds.
+ * The reason it can be this short is that being overtaken is **safe**: the expose is
+ * guarded on still holding the lock, so an overtaken writer exposes nothing rather
+ * than exposing half of itself. The expiry decides who wins, never whether the result
+ * is coherent.
+ */
+export const POLICY_LOCK_SECONDS = 120;
+
+/**
+ * Take the lock for one table, or find out that somebody else has it.
+ *
+ * One statement, so there is no window between reading who holds it and taking it.
+ * `RETURNING` gives back a row only when the insert or the update actually happened,
+ * which is what makes "did I get it" answerable at all: a conflicting row whose
+ * `acquired_at` is too recent fails the `WHERE`, updates nothing, and returns nothing.
+ *
+ * The same `ON CONFLICT DO UPDATE ... RETURNING` shape as the rate limiter, and for
+ * the same reason: `rules/01` section G7 measured it on real D1, including that
+ * `unixepoch()` agrees with itself within one statement.
+ *
+ * Positional `?` rather than `?NNN` with the holder reused. Ordinal reuse works and is
+ * measured, but it makes the parameter count and the placeholder count differ, and
+ * `assertExecutable` compares them on every path to D1. Passing the holder twice costs
+ * one parameter out of a hundred and keeps that check trivial to read.
+ */
+export function acquireLockStatement(table: string, holder: string): Statement {
+  return {
+    sql: `INSERT INTO "_policy_lock" ("table_name", "holder", "acquired_at")
+VALUES (?, ?, unixepoch())
+ON CONFLICT("table_name") DO UPDATE SET
+  "holder" = ?, "acquired_at" = unixepoch()
+WHERE "_policy_lock"."acquired_at" <= unixepoch() - ?
+RETURNING "holder"`,
+    params: [table, holder, holder, POLICY_LOCK_SECONDS],
+  };
+}
+
+/**
+ * Give the lock back, but only if it is still ours.
+ *
+ * ⚠️ The `holder` clause is the point. A writer that was overtaken must not delete the
+ * row belonging to the writer that overtook it, which would hand the table to a third
+ * one while the second is still working.
+ */
+export function releaseLockStatement(table: string, holder: string): Statement {
+  return {
+    sql: 'DELETE FROM "_policy_lock" WHERE "table_name" = ? AND "holder" = ?',
+    params: [table, holder],
+  };
+}
+
+/**
  * Everything it takes to store the document, in the order it has to happen.
  *
  * The order is the safety mechanism here, so it is built in one place rather than
  * being the order somebody happened to write the calls in. See the note at the top.
+ *
+ * `holder` is the lock this run took. It only appears in the last statement, which is
+ * the one that makes the table reachable. See the note there.
  */
-export function writeStatements(document: PolicyDocument, nextVersion: number): Statement[] {
+export function writeStatements(
+  document: PolicyDocument,
+  nextVersion: number,
+  holder: string,
+): Statement[] {
   const { definition, binds } = document;
   const table = definition.table;
 
@@ -269,9 +334,23 @@ export function writeStatements(document: PolicyDocument, nextVersion: number): 
 
   // The switch. Nothing before this makes the table reachable, and this is one
   // statement, so there is no state where it is half reachable.
+  //
+  // 🔴 Guarded on still holding the lock, and that guard is what actually closes debt
+  // F3. The lock on its own only makes the race rarer: a writer can be delayed past
+  // its own expiry, another can take the lock and finish, and the first would then
+  // expose a table whose rules the second has already replaced.
+  //
+  // With the guard, an overtaken writer inserts nothing. `INSERT ... SELECT ... WHERE`
+  // is the idiom `rules/01` section G6 measured for exactly this: a false guard writes
+  // no row rather than writing one and reconsidering, and `RETURNING` comes back empty
+  // so the caller can tell which happened.
   statements.push({
-    sql: 'INSERT INTO "_exposed_tables" ("table_name", "enabled", "version") VALUES (?, ?, ?)',
-    params: [table, definition.enabled ? 1 : 0, nextVersion],
+    sql: `INSERT INTO "_exposed_tables" ("table_name", "enabled", "version")
+SELECT ?, ?, ? WHERE EXISTS (
+  SELECT 1 FROM "_policy_lock" WHERE "table_name" = ? AND "holder" = ?
+)
+RETURNING "table_name"`,
+    params: [table, definition.enabled ? 1 : 0, nextVersion, table, holder],
   });
 
   return statements;

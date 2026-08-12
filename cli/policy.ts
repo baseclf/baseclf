@@ -33,6 +33,7 @@ import type { Catalogue } from '../src/db/introspect.js';
 import { introspect } from '../src/db/introspect.js';
 import { type LintFinding, lintTable } from '../src/policy/lint.js';
 import { loadRegistry } from '../src/policy/registry.js';
+import { POLICY_LOCK_TABLE_DDL } from '../src/policy/schema.js';
 import type { TableDefinition } from '../src/policy/types.js';
 import { MAX_REGISTRY_AGE_MS } from '../src/utils/memo.js';
 import {
@@ -45,9 +46,12 @@ import {
 } from './d1-api.js';
 import { copyable, nextAction, note, type Style, styledResultLine } from './output.js';
 import {
+  acquireLockStatement,
   checkAgainstSchema,
   nextVersion,
+  POLICY_LOCK_SECONDS,
   readPolicyDocument,
+  releaseLockStatement,
   writeStatements,
 } from './policy-document.js';
 
@@ -59,6 +63,15 @@ export interface PolicyHost {
   readonly fetcher: Fetcher;
   /** The document, read at the edge. Undefined when there is no such file. */
   readonly readFile: (path: string) => string | undefined;
+  /**
+   * A value no other run of this command will produce.
+   *
+   * It names the holder of the write lock, so it has to be unique across machines and
+   * across runs on one machine. Supplied by the host rather than generated here so a
+   * test can say what it will be, which is what lets an assertion look at the guard on
+   * the statement that exposes the table.
+   */
+  readonly newId: () => string;
   /** Resolved the same way every other command resolves it. */
   readonly credentials: () => Promise<{
     credentials: D1Credentials;
@@ -284,9 +297,28 @@ function loadDocument(
   }
 }
 
+/**
+ * Give the lock back, and never fail the run over it.
+ *
+ * ⚠️ Swallowed on purpose, which is the opposite of how everything else here treats a
+ * database error. A release that fails leaves a row that expires on its own within
+ * `POLICY_LOCK_SECONDS`, so the cost is a wait. Turning that into a failure would
+ * report a successful apply as a failed one, and the reader would apply again over a
+ * result that was already correct.
+ */
+async function releaseLock(endpoint: D1Endpoint, table: string, holder: string): Promise<void> {
+  const release = releaseLockStatement(table, holder);
+  try {
+    await runSql(endpoint, release.sql, release.params);
+  } catch {
+    // Expires by itself. See above.
+  }
+}
+
 async function apply(
   endpoint: D1Endpoint,
   document: ReturnType<typeof readPolicyDocument>,
+  host: PolicyHost,
   write: Write,
   style: Style,
 ): Promise<PolicyOutcome> {
@@ -311,32 +343,66 @@ async function apply(
     return 'usage';
   }
 
+  // The lock table, before the lock. `applyEngineSchema` creates it when the Worker
+  // serves its first request, and a deployment can be applied to before it has served
+  // one. The DDL comes from the engine's own constant rather than being written again
+  // here, so there is one definition of the table.
+  await runSql(endpoint, POLICY_LOCK_TABLE_DDL);
+
+  const holder = host.newId();
+  const lock = acquireLockStatement(table, holder);
+  const [taken] = await runSql(endpoint, lock.sql, lock.params);
+
+  if ((taken?.rows.length ?? 0) === 0) {
+    // 🔴 Debt F3. Refused before anything is deleted, so a run that loses here has
+    // changed nothing at all rather than leaving its rules beside somebody else's.
+    write(styledResultLine('deny', `Another apply is working on "${table}".`, style));
+    // The number stays early in the line so a longer one cannot be orphaned from its
+    // unit at the wrap, which is a mistake this file has already made once.
+    write(note(`A lock is held for ${POLICY_LOCK_SECONDS} seconds at most. If the run that`));
+    write(note('took it has stopped, this clears on its own and running this again'));
+    write(note('after that is safe. Nothing here has been changed.'));
+    return 'failed';
+  }
+
   const version = nextVersion(await storedVersion(endpoint, table));
-  const statements = writeStatements(document, version);
+  const statements = writeStatements(document, version, holder);
 
   // One statement per request, because the endpoint refuses parameters otherwise.
   // The first one closes the table and the last one opens it, so an interruption
   // anywhere in between leaves it closed.
+  let exposed = false;
   for (const [index, statement] of statements.entries()) {
     try {
-      await runSql(endpoint, statement.sql, statement.params);
+      const [result] = await runSql(endpoint, statement.sql, statement.params);
+      // The last statement is guarded on still holding the lock and returns the table
+      // name when it wrote. Every other one returns nothing and is not asked.
+      if (index === statements.length - 1) exposed = (result?.rows.length ?? 0) > 0;
     } catch (cause) {
-      // ⚠️ This used to end with "Nothing is left half applied", and that sentence
-      // is not always true. Measured in `src/policy/registry-cache.test.ts`: if two
-      // runs touch the same table at once, the one that loses the race fails here
-      // with its rules already written and the other run's row exposing the table,
-      // so the effective policy is the union of two documents nobody wrote.
-      //
-      // A reassurance that is usually right is worse than none, because the one time
-      // it is wrong is the time somebody needed to look.
+      // ⚠️ This used to end with "Nothing is left half applied", which was not always
+      // true, and then with an explanation of the union it could leave behind. Neither
+      // applies now: the lock means nothing else is writing this table, so a failure
+      // here leaves the table closed with this run's rules half written, and running
+      // it again replaces them.
       write(styledResultLine('deny', `Stopped partway through, at step ${index + 1}.`, style));
       write(note(cause instanceof Error ? cause.message : String(cause)));
-      write(note(`Run "baseclf policy list" before anything else, and check "${table}".`));
-      write(note('If it is not exposed, the table is closed and running this again is safe.'));
-      write(note('If it is exposed, something else wrote it while this ran. Apply again to'));
-      write(note('replace whatever is there.'));
+      write(note(`"${table}" is not exposed, which is the safe half of this. Run this`));
+      write(note('again once the cause is fixed.'));
+      await releaseLock(endpoint, table, holder);
       return 'failed';
     }
+  }
+
+  await releaseLock(endpoint, table, holder);
+
+  if (!exposed) {
+    // The guard on the last statement refused. Somebody took the lock while this run
+    // was working, finished, and this run's rules were replaced by theirs on the way
+    // past. Nothing here is half applied: their document is what is exposed.
+    write(styledResultLine('deny', `Another apply overtook this one on "${table}".`, style));
+    write(note('Nothing from this document is exposed. Run "baseclf policy list" to see'));
+    write(note('what is, then apply again if it is not what you want.'));
+    return 'failed';
   }
 
   const rules = document.definition.policies.length;
@@ -598,7 +664,7 @@ export async function runPolicy(
     if (verb === 'rm') return await remove(endpoint, target ?? '', write, style);
 
     if (document === null) return 'usage';
-    const outcome = await apply(endpoint, document, write, style);
+    const outcome = await apply(endpoint, document, host, write, style);
 
     if (outcome === 'ok') {
       // ⚠️ The table comes from the document, not from the arguments. An earlier

@@ -6,6 +6,9 @@ import { POLICY_FIXED_TEXT, type PolicyHost, parseOptions, runPolicy } from './p
 
 const ACCOUNT = '00000000b4a5968778695a4b3c2d1e0f';
 
+/** What `newId` returns in these tests, so assertions can look for it in the SQL. */
+const HOLDER = 'holder-under-test';
+
 /** Meta in the shape the endpoint really returns, which the transport validates. */
 const META = {
   duration: 0.5,
@@ -69,6 +72,12 @@ interface Options {
   readonly counts?: readonly { table_name: string; n: number }[];
   /** Rows `loadRegistry` reads back, for the lint verb. Shaped like `_policies`. */
   readonly storedPolicies?: readonly Record<string, unknown>[];
+  /** Somebody else holds the write lock, so acquiring it returns no row. */
+  readonly lockHeld?: boolean;
+  /** The lock was taken away mid-run, so the guarded expose writes nothing. */
+  readonly overtaken?: boolean;
+  /** The database refuses any statement starting with this, for the failure paths. */
+  readonly failOn?: string;
   readonly credentials?: null;
 }
 
@@ -121,6 +130,27 @@ function harness(options: Options = {}): Harness {
     }
     if (sql.startsWith('PRAGMA')) return ok([]);
 
+    if (options.failOn !== undefined && sql.startsWith(options.failOn)) {
+      return new Response(
+        JSON.stringify({ success: false, errors: [{ code: 7500, message: 'refused on purpose' }] }),
+        { status: 500 },
+      );
+    }
+
+    // ⚠️ Before the `_policy_lock` branch, because the statement that exposes a table
+    // names the lock table inside its guard. Matching on the lock first would answer
+    // the expose with a lock row and every apply would report being overtaken.
+    if (sql.startsWith('INSERT INTO "_exposed_tables"')) {
+      return ok(options.overtaken === true ? [] : [{ table_name: 'posts' }]);
+    }
+
+    if (sql.includes('_policy_lock')) {
+      // Creating the table and giving the lock back both answer with nothing, and
+      // neither is a question this harness has an opinion about.
+      if (sql.startsWith('CREATE') || sql.startsWith('DELETE')) return ok([]);
+      return ok(options.lockHeld === true ? [] : [{ holder: HOLDER }]);
+    }
+
     if (sql.includes('COUNT(*)')) return ok([...(options.counts ?? [])]);
     if (sql.includes('SELECT') && sql.includes('_exposed_tables')) {
       return ok([...(options.exposed ?? [])]);
@@ -137,6 +167,7 @@ function harness(options: Options = {}): Harness {
   const host: PolicyHost = {
     fetcher: fetcher as PolicyHost['fetcher'],
     readFile: () => options.file,
+    newId: () => HOLDER,
     credentials: async () =>
       options.credentials === null
         ? null
@@ -221,6 +252,89 @@ describe('refusing before anything is written', () => {
   });
 });
 
+describe('two writers on one table', () => {
+  // 🔴 Debt F3. There is no transaction on D1, so a policy write is a sequence of
+  // single statements. Interleave two and the second writer's deletes land between the
+  // first writer's deletes and its re-expose, leaving `_policies` holding both sets.
+  // Permissive policies OR together, so the effective grant is the union of two
+  // documents nobody wrote, which is wider than either author intended.
+
+  it('refuses before deleting anything when somebody else holds the lock', async () => {
+    // The important half is what it does *not* do. A run that loses here has changed
+    // nothing, so there is no half of it to be found beside somebody else's rules.
+    const h = harness({ file: policyDocument(), lockHeld: true });
+
+    expect(await runPolicy(['apply', 'p.json'], h.write, PLAIN, h.host)).toBe('failed');
+    expect(h.text()).toContain('Another apply is working');
+
+    expect(h.sql().filter((sql) => sql.startsWith('DELETE FROM "_exposed_tables"'))).toHaveLength(
+      0,
+    );
+    expect(h.sql().filter((sql) => sql.includes('INSERT INTO "_policies"'))).toHaveLength(0);
+  });
+
+  it('takes the lock before the first delete, not after it', async () => {
+    // Ordering is the whole mechanism. Acquiring after the deletes would leave the
+    // table closed by a run that then discovers it may not continue.
+    const h = harness({ file: policyDocument() });
+
+    await runPolicy(['apply', 'p.json'], h.write, PLAIN, h.host);
+
+    const acquired = h.sql().findIndex((sql) => sql.startsWith('INSERT INTO "_policy_lock"'));
+    const firstDelete = h.sql().findIndex((sql) => sql.startsWith('DELETE FROM "_exposed_tables"'));
+
+    expect(acquired).toBeGreaterThanOrEqual(0);
+    expect(acquired).toBeLessThan(firstDelete);
+  });
+
+  it('guards the expose on still holding the lock', async () => {
+    // ⚠️ The lock alone does not close F3, and a version of this had only the lock.
+    // A holder can be delayed past its own expiry, another writer can take it and
+    // finish, and the first would then expose a table whose rules the second replaced.
+    const h = harness({ file: policyDocument() });
+
+    await runPolicy(['apply', 'p.json'], h.write, PLAIN, h.host);
+
+    const expose = h.sent.find((entry) => entry.sql.startsWith('INSERT INTO "_exposed_tables"'));
+
+    expect(expose?.sql).toContain('_policy_lock');
+    expect(expose?.params).toContain(HOLDER);
+  });
+
+  it('reports a run that was overtaken, and exposes nothing of its own', async () => {
+    // The guard refusing is not an error from D1: the insert simply writes no row.
+    // So the outcome has to come from reading what came back, which is why the last
+    // statement returns the table name at all.
+    const h = harness({ file: policyDocument(), overtaken: true });
+
+    expect(await runPolicy(['apply', 'p.json'], h.write, PLAIN, h.host)).toBe('failed');
+    expect(h.text()).toContain('overtook');
+    expect(h.text()).not.toContain('is exposed with');
+  });
+
+  it('gives the lock back, and only its own', async () => {
+    // The holder clause matters: a writer that was overtaken must not delete the row
+    // belonging to the one that overtook it, which would hand the table to a third.
+    const h = harness({ file: policyDocument() });
+
+    await runPolicy(['apply', 'p.json'], h.write, PLAIN, h.host);
+
+    const release = h.sent.find((entry) => entry.sql.startsWith('DELETE FROM "_policy_lock"'));
+
+    expect(release?.sql).toContain('"holder" = ?');
+    expect(release?.params).toEqual(['posts', HOLDER]);
+  });
+
+  it('gives the lock back even when the write failed partway', async () => {
+    // Otherwise one failed run blocks the table until the lock expires, and the
+    // obvious next thing somebody does is run it again.
+    const h = harness({ file: policyDocument(), failOn: 'INSERT INTO "_policies"' });
+
+    expect(await runPolicy(['apply', 'p.json'], h.write, PLAIN, h.host)).toBe('failed');
+    expect(h.sql().some((sql) => sql.startsWith('DELETE FROM "_policy_lock"'))).toBe(true);
+  });
+});
+
 describe('the order the write happens in', () => {
   it('closes the table first and opens it last', async () => {
     // 🔴 There is no transaction available, so the order is the safety. Every state
@@ -229,9 +343,13 @@ describe('the order the write happens in', () => {
 
     expect(await runPolicy(['apply', 'p.json'], h.write, PLAIN, h.host)).toBe('ok');
 
+    // ⚠️ Filtered by the verb the statement starts with rather than by whether it
+    // mentions SELECT. The statement that exposes the table is now an
+    // `INSERT ... SELECT ... WHERE EXISTS`, so the older filter dropped the very
+    // statement this test is about and then found no INSERT to assert on.
     const writes = h
       .sql()
-      .filter((sql) => sql.includes('_exposed_tables') && !sql.includes('SELECT'));
+      .filter((sql) => sql.includes('_exposed_tables') && !sql.startsWith('SELECT'));
 
     expect(writes[0]).toContain('DELETE');
     expect(writes[writes.length - 1]).toContain('INSERT');

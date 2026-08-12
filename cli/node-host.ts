@@ -312,6 +312,8 @@ export const runtime = {
   policyHost: {
     fetcher: fetch,
     readFile: readTextFile,
+    // Names the holder of the write lock. Unique per run, across machines.
+    newId: () => crypto.randomUUID(),
     // ⚠️ The same resolution `create` uses, called rather than reimplemented. It
     // decides which Cloudflare account the policies land on, and two implementations
     // of that decision is how they come to disagree.

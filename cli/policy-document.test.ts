@@ -8,6 +8,9 @@ import {
   writeStatements,
 } from './policy-document.js';
 
+/** The lock this pretend run holds. Real ones are a UUID from the host. */
+const HOLDER = 'holder-under-test';
+
 /** A document shaped the way `skills/policy-engine` section 3 writes them. */
 function document(overrides: Record<string, unknown> = {}): string {
   return JSON.stringify({
@@ -114,7 +117,7 @@ describe('refusing a document the engine would refuse', () => {
 });
 
 describe('the order the write happens in', () => {
-  const statements = () => writeStatements(readPolicyDocument(document()), 2);
+  const statements = () => writeStatements(readPolicyDocument(document()), 2, HOLDER);
 
   it('removes the table from _exposed_tables before touching anything else', () => {
     // 🔴 This ordering is the safety mechanism, because there is no transaction to
@@ -184,7 +187,7 @@ describe('the order the write happens in', () => {
       }),
     );
 
-    const insert = writeStatements(parsed, 1).find(
+    const insert = writeStatements(parsed, 1, HOLDER).find(
       (s) => s.sql.includes('_policies') && s.sql.includes('INSERT'),
     );
 
@@ -212,7 +215,7 @@ describe('the order the write happens in', () => {
       }),
     );
 
-    const bind = writeStatements(parsed, 1).find(
+    const bind = writeStatements(parsed, 1, HOLDER).find(
       (s) => s.sql.includes('_policy_binds') && s.sql.includes('INSERT'),
     );
 
@@ -232,7 +235,7 @@ describe('the version', () => {
   });
 
   it('is the version that gets written', () => {
-    const written = writeStatements(readPolicyDocument(document()), 7);
+    const written = writeStatements(readPolicyDocument(document()), 7, HOLDER);
     const expose = written[written.length - 1];
 
     expect(expose?.params).toContain(7);

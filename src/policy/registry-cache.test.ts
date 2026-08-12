@@ -270,10 +270,19 @@ describe('F4: what happens to an isolate that saw a broken registry', () => {
 
 describe('F3: two writers on one table', () => {
   it('can leave the union of both policy sets exposed, which is wider than either', async () => {
-    // 🔴 The ordering argument in `cli/policy-document.ts` assumes one writer. With
-    // two, the second run's deletes land between the first run's deletes and its
-    // re-expose, and permissive policies OR together, so the effective grant is the
-    // union of two documents that nobody wrote.
+    // 🔴 What the registry does when both sets are present, which is OR them, so the
+    // effective grant is wider than either author wrote.
+    //
+    // ⚠️ **This is still exactly true, and `baseclf policy apply` can no longer reach
+    // it.** The command takes a per-table lock before its first delete and guards the
+    // statement that exposes the table on still holding it, so a second run either
+    // refuses before writing anything or is told it was overtaken. See
+    // `cli/policy-document.ts`.
+    //
+    // The test stays because the registry has not changed and neither has the reason
+    // it matters: this state is still reachable by writing the rows directly, which
+    // the README is explicit bypasses the engine. What the registry does with rows it
+    // finds is worth pinning whatever put them there.
     //
     // Interleaved: A deletes, B deletes, B writes and exposes, A writes and exposes.
     const del = async (table: string): Promise<void> => {
