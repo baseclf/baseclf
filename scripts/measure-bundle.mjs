@@ -79,6 +79,64 @@ const entries = {
       return Response.json({ sql: q.compile().sql, tables: cat.tables.size });
     }};
   `,
+  // V6. Measured before the dependency is committed to `package.json`, because the
+  // answer is what decides whether it should be. Installed with `--no-save` for the
+  // run: the manifest stays clean until the number is acceptable.
+  //
+  // ⚠️ Three packages, not two. `@modelcontextprotocol/server` v2 takes Zod schemas,
+  // and Zod is not already a dependency, so it is part of the price.
+  '+ MCP server (agents, mcp/server, zod)': `
+    import { McpServer } from '@modelcontextprotocol/server';
+    import { createMcpHandler } from 'agents/mcp/server';
+    import { z } from 'zod';
+    export default { fetch: async (r, env) => {
+      const server = new McpServer({ name: 'baseclf', version: '0.1.0' });
+      server.registerTool('schema_list', {
+        title: 'List tables',
+        inputSchema: z.object({ limit: z.number().int().max(1000).default(100) }),
+        outputSchema: z.object({ tables: z.array(z.string()) }),
+        annotations: { readOnlyHint: true, destructiveHint: false,
+                       idempotentHint: true, openWorldHint: false },
+      }, async () => ({ structuredContent: { tables: [] } }));
+      return createMcpHandler(() => server, { route: '/mcp' }).fetch(r, env);
+    }};
+  `,
+
+  // The one that decides it. Everything shipping today plus MCP, measured together
+  // rather than added, for the same reason the V3 row exists: shared dependencies
+  // are counted twice by addition.
+  'everything V6 would ship': `
+    import { getCatalogue } from ${JSON.stringify(join(process.cwd(), 'src/db/introspect.ts'))};
+    import { createDb, batch } from ${JSON.stringify(join(process.cwd(), 'src/db/dialect.ts'))};
+    import { betterAuth } from 'better-auth';
+    import { bearer, jwt } from 'better-auth/plugins';
+    import { McpServer } from '@modelcontextprotocol/server';
+    import { createMcpHandler } from 'agents/mcp/server';
+    import { z } from 'zod';
+    export default { fetch: async (r, env) => {
+      const auth = betterAuth({
+        database: env.DB, secret: env.SECRET, baseURL: env.URL,
+        plugins: [bearer(), jwt({ jwks: { keyPairConfig: { alg: 'ES256' } } })],
+      });
+      if (r.url.includes('/api/auth')) return auth.handler(r);
+      if (r.url.includes('/mcp')) {
+        const server = new McpServer({ name: 'baseclf', version: '0.1.0' });
+        server.registerTool('schema_list', {
+          title: 'List tables',
+          inputSchema: z.object({ limit: z.number().int().max(1000).default(100) }),
+          outputSchema: z.object({ tables: z.array(z.string()) }),
+          annotations: { readOnlyHint: true, destructiveHint: false,
+                         idempotentHint: true, openWorldHint: false },
+        }, async () => ({ structuredContent: { tables: [] } }));
+        return createMcpHandler(() => server, { route: '/mcp' }).fetch(r, env);
+      }
+      const db = createDb(env.DB);
+      const q = db.selectFrom('posts').select(['id','title']).where('status','=','published');
+      await batch(env.DB, [q.compile()]);
+      const cat = await getCatalogue(env.DB);
+      return Response.json({ sql: q.compile().sql, tables: cat.tables.size });
+    }};
+  `,
 };
 
 const results = [];
@@ -165,6 +223,24 @@ if (both !== null && kysely !== null && auth !== null) {
   console.log(
     `  Adding the deltas would say   ${kb(naive)}, so sharing Kysely saves ` +
       `${kb(naive - both)}. Measure, do not add.`,
+  );
+}
+
+const mcp = gzipOf('+ MCP server (agents, mcp/server, zod)');
+const v6 = gzipOf('everything V6 would ship');
+
+if (base !== null && mcp !== null) {
+  console.log(`\n  MCP on its own adds           ${kb(mcp - base)} gzipped.`);
+}
+if (both !== null && v6 !== null) {
+  console.log(
+    `  V6 over what ships today      ${kb(v6 - both)} gzipped, taking the ` +
+      `synthetic bundle to ${((v6 / FREE_LIMIT_BYTES) * 100).toFixed(1)}% of Free.`,
+  );
+  console.log(
+    '  ⚠️ Relative only. `rules/01` §G0: wrangler measured 67% higher than this ' +
+      'script,\n     because this builds a synthetic entry rather than all of src/. ' +
+      'For the real\n     number run `npm run build`.',
   );
 }
 console.log('\n  Workers script limit: 3 MB gzip on Free, 10 MB on Paid.\n');

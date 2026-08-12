@@ -22,6 +22,7 @@ import { providerStatuses } from './auth/providers.js';
 import { authenticate } from './auth/verify.js';
 import { applyEngineSchema } from './db/bootstrap.js';
 import { getCatalogue } from './db/index.js';
+import { handleMcp, MCP_ROUTE, metadataResponse } from './mcp/server.js';
 import type { AuthCtx } from './policy/index.js';
 import { getRegistry } from './policy/index.js';
 import type { WriteOperation } from './policy/write.js';
@@ -43,6 +44,13 @@ import {
 export interface Env extends AuthEnv {
   readonly DB: D1Database;
   readonly BUCKET: R2Bucket;
+  /**
+   * The shared secret for `/mcp`. Absent means the endpoint refuses everybody.
+   *
+   * Invariant I1 on a new surface: an endpoint nobody configured is not an endpoint
+   * without a lock. See `src/mcp/auth.ts`.
+   */
+  readonly MCP_TOKEN?: string;
 }
 
 /**
@@ -310,6 +318,12 @@ const CREDENTIAL_PATHS =
 function rateLimitFor(pathname: string): { bucket: string; rule: RateLimitRule } | null {
   if (pathname === JWKS_PATH || pathname.startsWith(`${JWKS_PATH}/`)) return null;
   if (pathname === DIAGNOSE_PATH) return null;
+
+  // 🔴 The MCP endpoint is guarded by a shared secret, so guessing it is exactly the
+  // threat the credential budget exists for. Its own bucket rather than the auth one,
+  // so a run of guesses against `/mcp` cannot lock the operator out of signing in, and
+  // so the log says which surface was being hammered.
+  if (pathname === MCP_ROUTE) return { bucket: 'mcp', rule: CREDENTIAL_LIMIT };
 
   return CREDENTIAL_PATHS.test(pathname)
     ? { bucket: 'auth_credential', rule: CREDENTIAL_LIMIT }
@@ -811,6 +825,22 @@ async function respond(request: Request, env: Env): Promise<Response> {
       await ensureAuthSchemaOnce(env);
 
       return await getAuth(env).handler(request);
+    }
+
+    // Before the table router, for the same reason the auth prefix is: a table called
+    // `mcp` must not be able to shadow it. The discovery document comes first because
+    // it is the one thing here that has to answer without a token, since a client
+    // reads it to find out how to get one.
+    const metadata = metadataResponse(request);
+    if (metadata !== undefined) return metadata;
+
+    if (url.pathname === MCP_ROUTE) {
+      // Before the handler, so a run of guesses at the shared secret costs the guesser
+      // rather than the deployment. Same ordering as the auth branch.
+      const limited = await enforceRateLimit(request, env, url.pathname);
+      if (limited !== null) return limited;
+
+      return await handleMcp(request, env);
     }
 
     const object = storageTargetFromPath(url.pathname);
