@@ -17,7 +17,7 @@
 
 import type { D1Executor } from '../db/dialect.js';
 import { assertExecutable } from '../db/guards.js';
-import { type Catalogue, getCatalogue, SYSTEM_TABLE_PREFIX } from '../db/introspect.js';
+import { type Catalogue, getCatalogue, isReservedTableName } from '../db/introspect.js';
 import { PolicyError } from '../utils/errors.js';
 import { logEvent } from '../utils/log.js';
 import { isolateMemo, MAX_REGISTRY_AGE_MS } from '../utils/memo.js';
@@ -183,7 +183,7 @@ export async function loadRegistry(executor: D1Executor): Promise<Registry> {
     // This is the first of the two independent places rule 00 invariant I8 asks
     // for. `resolve` performs the second, and the REST router a third, so no
     // single one of them has to be right.
-    if (row.table_name.startsWith(SYSTEM_TABLE_PREFIX)) {
+    if (isReservedTableName(row.table_name)) {
       logEvent({
         event: 'policy_refusal',
         code: 'TABLE_NOT_EXPOSED',
@@ -227,7 +227,7 @@ function buildRegistry(
       // Same refusals as resolve, in the same order. Written out rather than
       // shared through a helper that returns "no policies" as a value, because
       // a helper like that is one careless caller away from being fail-open.
-      if (table.startsWith(SYSTEM_TABLE_PREFIX) || catalogue.tables.get(table)?.isSystem === true) {
+      if (isReservedTableName(table) || catalogue.tables.get(table)?.isSystem === true) {
         throw notFound(`Table "${table}" belongs to the engine and is never exposed.`);
       }
 
@@ -253,7 +253,7 @@ function buildRegistry(
       // Invariant I8 again, on the lookup rather than the load. Checked by name
       // as well as through the catalogue, so a table the catalogue has never
       // heard of cannot slip past on the strength of being unknown.
-      if (table.startsWith(SYSTEM_TABLE_PREFIX) || catalogue.tables.get(table)?.isSystem === true) {
+      if (isReservedTableName(table) || catalogue.tables.get(table)?.isSystem === true) {
         throw notFound(`Table "${table}" belongs to the engine and is never exposed.`);
       }
 

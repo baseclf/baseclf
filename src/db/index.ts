@@ -20,12 +20,14 @@ export {
 } from './guards.js';
 
 export {
+  AUTH_TABLES,
   type Catalogue,
   type ColumnInfo,
   type ForeignKeyInfo,
   getCatalogue,
   type IndexInfo,
   introspect,
+  isReservedTableName,
   resetCatalogue,
   SYSTEM_TABLE_PREFIX,
   type TableInfo,

@@ -17,7 +17,7 @@
 import { ColumnNode, ReferenceNode, TableNode } from 'kysely';
 
 import type { Catalogue } from '../db/introspect.js';
-import { SYSTEM_TABLE_PREFIX } from '../db/introspect.js';
+import { isReservedTableName } from '../db/introspect.js';
 import { MAX_LIKE_PATTERN_BYTES } from '../policy/types.js';
 import { BaseclfError } from '../utils/errors.js';
 
@@ -130,13 +130,16 @@ function malformed(code: 'UNKNOWN_IDENTIFIER' | 'UNSUPPORTED_OPERATOR', message:
 /**
  * A table name the client may address at all.
  *
- * The underscore prefix check here is one of the independent places rule 00
+ * The reserved-name check here is one of the independent places rule 00
  * invariant I8 asks for; the registry performs the others. Any one of them
  * alone is enough to keep the engine's own tables off the API, which is the
  * point of having more than one.
+ *
+ * ⚠️ Reserved is wider than the underscore prefix: it covers the identity
+ * provider's tables, which are the engine's too and are not named that way.
  */
 export function resolveTable(catalogue: Catalogue, name: string): string {
-  if (name.startsWith(SYSTEM_TABLE_PREFIX)) {
+  if (isReservedTableName(name)) {
     notFound(`"${name}" is an engine table.`);
   }
   if (!catalogue.hasTable(name)) {

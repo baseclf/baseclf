@@ -22,7 +22,7 @@
 
 import type { D1Executor } from '../db/dialect.js';
 import type { Catalogue } from '../db/introspect.js';
-import { SYSTEM_TABLE_PREFIX } from '../db/introspect.js';
+import { isReservedTableName } from '../db/introspect.js';
 import { applyPolicy } from '../policy/plugin.js';
 import type { Registry } from '../policy/registry.js';
 import type { AuthCtx } from '../policy/types.js';
@@ -58,7 +58,7 @@ export interface WriteRequestInput extends ReadRequest {
  * the three relies on the other two being right.
  */
 function assertRoutable(table: string): void {
-  if (table.startsWith(SYSTEM_TABLE_PREFIX)) {
+  if (isReservedTableName(table)) {
     throw new BaseclfError('TABLE_NOT_EXPOSED', 404, {
       message: 'Not found.',
       detail: `"${table}" is an engine table and is never routable.`,

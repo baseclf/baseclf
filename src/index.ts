@@ -21,7 +21,7 @@ import { type AuthEnv, authConfig, getAuth, isAuthPath, verifierConfig } from '.
 import { providerStatuses } from './auth/providers.js';
 import { authenticate } from './auth/verify.js';
 import { applyEngineSchema } from './db/bootstrap.js';
-import { getCatalogue } from './db/index.js';
+import { getCatalogue, isReservedTableName } from './db/index.js';
 import { handleMcp, MCP_ROUTE, metadataResponse } from './mcp/server.js';
 import type { AuthCtx } from './policy/index.js';
 import { getRegistry } from './policy/index.js';
@@ -585,12 +585,23 @@ async function identify(request: Request, env: Env): Promise<AuthCtx> {
  * reads per cold start rather than one per request. Building it lazily inside
  * `fetch` is deliberate: the Workers startup CPU budget is one second and
  * module scope work counts against it.
+ *
+ * 🔴 **Unauthenticated, and that is what makes the filter load-bearing.** This
+ * route answers before `identify`, so whatever survives the filter is public.
+ * Measured against the live deployment on 2026-08-12, before the filter below
+ * knew about the identity provider: it listed `user`, `session`, `account`,
+ * `verification`, `jwks` to anybody who asked.
+ *
+ * Both checks, not one. `isSystem` is decided when the catalogue is built and
+ * `isReservedTableName` is decided from the name here, which is the independence
+ * invariant I8 asks for. The version of this line that read `!table.isSystem`
+ * alone had a single point of failure and reached production.
  */
 async function describeSchema(env: Env): Promise<Response> {
   const catalogue = await getCatalogue(env.DB);
 
   const tables = [...catalogue.tables.values()]
-    .filter((table) => !table.isSystem)
+    .filter((table) => !table.isSystem && !isReservedTableName(table.name))
     .map((table) => ({
       name: table.name,
       columns: table.columns.size,

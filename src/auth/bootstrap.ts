@@ -40,6 +40,7 @@
  * warning, and `doctor` reports the symptom from outside.
  */
 
+import { AUTH_TABLES } from '../db/introspect.js';
 import { type AuthEnv, compileAuthMigrations, runAuthMigrations } from './index.js';
 
 /**
@@ -50,14 +51,13 @@ import { type AuthEnv, compileAuthMigrations, runAuthMigrations } from './index.
  * asserts it against what a real migration reports on a blank database, so a plugin
  * that brings a table turns this into a failing test rather than into a deployment
  * that skips its own migration.
+ *
+ * ⚠️ The list itself moved to `db/introspect.ts` and is re-exported here. It has a
+ * second job now: keeping these tables off the API, which every path decides through
+ * the catalogue. One list, so a plugin's new table cannot be migrated by one half of
+ * the engine and exposed by the other.
  */
-export const AUTH_TABLES: readonly string[] = Object.freeze([
-  'user',
-  'session',
-  'account',
-  'verification',
-  'jwks',
-]);
+export { AUTH_TABLES };
 
 export type AuthSchemaOutcome =
   /** Every table was already there. The common case, and the cheap one. */

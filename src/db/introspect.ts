@@ -22,6 +22,55 @@ import { assertExecutable } from './guards.js';
 /** Tables starting with `_` are ours and are never reachable through the API. */
 export const SYSTEM_TABLE_PREFIX = '_';
 
+/**
+ * Every table the identity provider owns.
+ *
+ * 🔴 These are engine tables that do not look like engine tables. Invariant I8
+ * protects the rest by naming convention, and Better Auth does not follow it, so
+ * for a while every one of them was reachable: measured on the live deployment
+ * on 2026-08-12, `GET /_schema` with no token answered `user`, `session`,
+ * `account`, `verification`, `jwks`. Nothing was hiding them because the only
+ * filter anywhere asked whether the name started with an underscore.
+ *
+ * What they hold is the argument for treating them as ours: `account` carries
+ * provider tokens and password hashes, `session` carries session tokens, and
+ * `jwks` carries the signing keys. A deployment that exposes one through a
+ * policy has handed out the credentials the rest of the engine is built on.
+ *
+ * ⚠️ Anyone who wants a public profile writes a `profiles` table of their own and
+ * joins to it. That is the same answer Supabase gives, and it keeps the identity
+ * provider's storage from being an API surface.
+ *
+ * This list lives here rather than beside the migration that creates it because
+ * the catalogue is the one thing every path already goes through. `src/auth`
+ * re-exports it, and `auth/bootstrap.test.ts` holds it against what a real
+ * migration reports on a blank database, so a plugin that brings a new table
+ * turns into a failing test rather than into a new hole of this shape.
+ */
+export const AUTH_TABLES: readonly string[] = Object.freeze([
+  'user',
+  'session',
+  'account',
+  'verification',
+  'jwks',
+]);
+
+const AUTH_TABLE_SET: ReadonlySet<string> = new Set(AUTH_TABLES);
+
+/**
+ * Whether a name belongs to the engine, decided from the name alone.
+ *
+ * ⭐ The point of taking a string rather than a `TableInfo` is that this answers
+ * without the catalogue. Invariant I8 asks for independent checks, and a second
+ * check that reads `isSystem` off the same catalogue entry is not independent of
+ * the first: one wrong flag and both fall together. Callers pair this with
+ * `isSystem` so a table the catalogue has never heard of cannot slip past on the
+ * strength of being unknown.
+ */
+export function isReservedTableName(name: string): boolean {
+  return name.startsWith(SYSTEM_TABLE_PREFIX) || AUTH_TABLE_SET.has(name);
+}
+
 /** Internal bookkeeping we never expose or introspect. */
 const INTERNAL_TABLE_PATTERN = /^(sqlite_|_cf_|d1_)/;
 
@@ -52,7 +101,13 @@ export interface TableInfo {
   readonly columns: ReadonlyMap<string, ColumnInfo>;
   readonly indexes: readonly IndexInfo[];
   readonly foreignKeys: readonly ForeignKeyInfo[];
-  /** True when the name starts with `_`. Such a table is never API-reachable. */
+  /**
+   * True for a table the engine owns, by `isReservedTableName`. Never
+   * API-reachable.
+   *
+   * ⚠️ Wider than "starts with `_`", which is what it used to mean: the identity
+   * provider's tables are ours too and are not named that way.
+   */
   readonly isSystem: boolean;
 }
 
@@ -171,7 +226,7 @@ export async function introspect(executor: D1Executor): Promise<Catalogue> {
         // A null `to` means the reference points at the target's primary key.
         referencesColumn: row.to ?? 'rowid',
       })),
-      isSystem: entry.name.startsWith(SYSTEM_TABLE_PREFIX),
+      isSystem: isReservedTableName(entry.name),
     });
   }
 
