@@ -126,6 +126,35 @@ Applying is safe to repeat and is how you change a policy. It replaces every rul
 that table. While it runs the table is not exposed at all, so an interrupted run
 leaves it closed rather than half open.
 
+### What the policy will cost to run
+
+D1 bills for rows **scanned**, not rows returned. A policy predicate runs on every
+request to that table, so a policy column with no index is not a latency problem that
+shows up under load. It is a line on a bill, every request, for as long as the policy
+exists.
+
+```bash
+npx baseclf policy lint
+```
+
+It names the policy, says which column has no index, and gives you the statement:
+
+```
+▲ posts.read_own: "author_id" has no index, so every request that runs this
+  policy scans "posts" in full. D1 bills for rows scanned.
+
+CREATE INDEX "posts_author_id_idx" ON "posts" ("author_id");
+```
+
+`apply` runs the same checks on the document it just stored, so you see this at the
+moment you write the policy rather than on a bill later. It also warns when `_neq` is
+used on a nullable column, where NULL rows are excluded rather than matched, and when
+a policy is wide enough to approach the expression limit D1 refuses at.
+
+None of it is a refusal. An index is a cost, not a permission, and the engine does not
+overrule you on it. What it cannot do is run the query planner, so a policy it is quiet
+about can still be slow.
+
 To stop exposing a table and delete its rules:
 
 ```bash

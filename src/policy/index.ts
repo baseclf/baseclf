@@ -13,6 +13,8 @@ export {
   narrowWith,
 } from './compile.js';
 
+export { type LintCode, type LintFinding, lintTable } from './lint.js';
+
 export { parseTableDefinition } from './parse.js';
 
 export { applyPolicy, createPolicyPlugin, type PolicyPluginOptions } from './plugin.js';

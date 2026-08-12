@@ -31,6 +31,9 @@
 
 import type { Catalogue } from '../src/db/introspect.js';
 import { introspect } from '../src/db/introspect.js';
+import { type LintFinding, lintTable } from '../src/policy/lint.js';
+import { loadRegistry } from '../src/policy/registry.js';
+import type { TableDefinition } from '../src/policy/types.js';
 import { MAX_REGISTRY_AGE_MS } from '../src/utils/memo.js';
 import {
   type D1Credentials,
@@ -40,7 +43,7 @@ import {
   restExecutor,
   runSql,
 } from './d1-api.js';
-import { nextAction, note, type Style, styledResultLine } from './output.js';
+import { copyable, nextAction, note, type Style, styledResultLine } from './output.js';
 import {
   checkAgainstSchema,
   nextVersion,
@@ -76,6 +79,7 @@ export const DEFAULT_PROJECT = 'baseclf';
 export const POLICY_USAGE = [
   'baseclf policy apply <file>     Store the policy document in this file',
   'baseclf policy list             Show which tables are exposed, and how many rules each has',
+  'baseclf policy lint             Report what the stored policies will cost to run',
   'baseclf policy rm <table>       Stop exposing a table, and delete its rules',
   '',
   'Options:',
@@ -176,6 +180,45 @@ async function storedVersion(endpoint: D1Endpoint, table: string): Promise<numbe
 
   const row = first?.rows[0] as { version?: number } | undefined;
   return row?.version ?? null;
+}
+
+/**
+ * Print what the linter found, or nothing at all when it found nothing.
+ *
+ * ⚠️ Warnings, never a refusal, and never an exit code. `src/policy/lint.ts` says why
+ * at length: these findings are about money and about surprise, not about who may read
+ * what, and refusing a policy that grants exactly what its author meant would be the
+ * engine overruling them on a question they are allowed to be wrong about.
+ *
+ * The remedy goes on its own line, unindented, because that is the line somebody
+ * double-clicks. A `CREATE INDEX` with two spaces in front of it does not copy
+ * cleanly, and the person who pastes the spaces gets a syntax error from D1 with
+ * nothing to explain it.
+ */
+function writeFindings(findings: readonly LintFinding[], write: Write, style: Style): void {
+  if (findings.length === 0) return;
+
+  // 🔴 One statement per distinct remedy, however many policies asked for it. Found
+  // by running the command rather than by a test: two policies on the same table both
+  // compared `author_id`, so the identical `CREATE INDEX` was printed twice, and the
+  // reader who runs both gets an error from D1 on the second saying the index already
+  // exists. Every test asserted that the statement appeared, and none counted them.
+  //
+  // The finding stays per policy, because which policies are paying for a missing
+  // index is worth knowing. It is the remedy that is per index.
+  const printed = new Set<string>();
+
+  write('');
+  for (const finding of findings) {
+    write(styledResultLine('attention', `${finding.policy}: ${finding.detail}`, style));
+
+    // `copyable` supplies the blank line on each side. Adding more here was the first
+    // version, and it doubled them.
+    if (finding.remedy !== undefined && !printed.has(finding.remedy)) {
+      printed.add(finding.remedy);
+      write(copyable(finding.remedy));
+    }
+  }
 }
 
 /**
@@ -305,6 +348,11 @@ async function apply(
     ),
   );
 
+  // After the write rather than before it, and that is the difference between a lint
+  // and a gate. The policy is stored either way; this is the moment the author is
+  // still looking, which is the only moment a warning about a bill gets read.
+  writeFindings(lintTable(catalogue, document.definition), write, style);
+
   if (!document.definition.enabled) {
     write(note('The document says enabled is false, so nothing can reach it yet.'));
   }
@@ -318,6 +366,56 @@ async function apply(
   // been told it worked would otherwise stop watching.
   writeNotImmediate(write, 'Until then, requests may still be answered under the previous rules.');
 
+  return 'ok';
+}
+
+/**
+ * Lint what is already stored, rather than what is being written.
+ *
+ * ⭐ Reads through `loadRegistry`, which is the engine's own loader, so it lints the
+ * definitions the deployment will actually run: binds already expanded, every stored
+ * row parsed by the same code that parses them at request time. A second reader here
+ * would be a second opinion about what a stored policy means, and the two would drift
+ * in the direction where this one is quieter.
+ *
+ * ⚠️ It reports nothing when a table is exposed with no rules. `policy list` is the
+ * command that says so, and it says it as `attention` rather than as a lint finding,
+ * because a table with no rules refuses every request rather than costing anything.
+ */
+async function lint(endpoint: D1Endpoint, write: Write, style: Style): Promise<PolicyOutcome> {
+  const executor = restExecutor(endpoint);
+
+  let catalogue: Catalogue;
+  let definitions: ReadonlyMap<string, TableDefinition>;
+  try {
+    [catalogue, { definitions }] = await Promise.all([
+      introspect(executor),
+      loadRegistry(executor),
+    ]);
+  } catch (cause) {
+    // `loadRegistry` refuses the whole registry when one row is unusable, so this is
+    // also how somebody finds out that a deployment is refusing every table.
+    write(styledResultLine('deny', 'Could not read the stored policies.', style));
+    write(note(cause instanceof Error ? cause.message : String(cause)));
+    return 'failed';
+  }
+
+  const findings = [...definitions.values()].flatMap((definition) =>
+    lintTable(catalogue, definition).map((finding) => ({
+      ...finding,
+      policy: `${definition.table}.${finding.policy}`,
+    })),
+  );
+
+  if (findings.length === 0) {
+    write(styledResultLine('allow', 'Nothing to report.', style));
+    write(note('Every policy column is indexed, and none of them is wide enough to'));
+    write(note('worry about. This does not run the query planner, so a policy it is'));
+    write(note('quiet about can still be slow.'));
+    return 'ok';
+  }
+
+  writeFindings(findings, write, style);
   return 'ok';
 }
 
@@ -462,7 +560,7 @@ export async function runPolicy(
 
   const [verb, target] = parsed.rest;
 
-  if (verb !== 'apply' && verb !== 'list' && verb !== 'rm') {
+  if (verb !== 'apply' && verb !== 'list' && verb !== 'lint' && verb !== 'rm') {
     write(
       verb === undefined
         ? `baseclf policy needs a verb.\n\n${POLICY_USAGE}`
@@ -471,7 +569,7 @@ export async function runPolicy(
     return 'usage';
   }
 
-  if (verb !== 'list' && target === undefined) {
+  if (verb !== 'list' && verb !== 'lint' && target === undefined) {
     write(`baseclf policy ${verb} needs ${verb === 'apply' ? 'a file' : 'a table name'}.`);
     return 'usage';
   }
@@ -496,6 +594,7 @@ export async function runPolicy(
 
   try {
     if (verb === 'list') return await list(endpoint, write, style);
+    if (verb === 'lint') return await lint(endpoint, write, style);
     if (verb === 'rm') return await remove(endpoint, target ?? '', write, style);
 
     if (document === null) return 'usage';

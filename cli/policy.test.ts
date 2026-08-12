@@ -67,6 +67,8 @@ interface Options {
   readonly columns?: readonly string[];
   readonly exposed?: readonly { table_name: string; enabled: number; version: number }[];
   readonly counts?: readonly { table_name: string; n: number }[];
+  /** Rows `loadRegistry` reads back, for the lint verb. Shaped like `_policies`. */
+  readonly storedPolicies?: readonly Record<string, unknown>[];
   readonly credentials?: null;
 }
 
@@ -122,6 +124,11 @@ function harness(options: Options = {}): Harness {
     if (sql.includes('COUNT(*)')) return ok([...(options.counts ?? [])]);
     if (sql.includes('SELECT') && sql.includes('_exposed_tables')) {
       return ok([...(options.exposed ?? [])]);
+    }
+    // After the COUNT branch on purpose: `list` groups over the same table and would
+    // otherwise be answered with policy rows it does not know how to read.
+    if (sql.includes('SELECT') && sql.includes('_policies')) {
+      return ok([...(options.storedPolicies ?? [])]);
     }
 
     return ok([]);
@@ -297,6 +304,150 @@ describe('the order the write happens in', () => {
       if (entry.sql.startsWith('PRAGMA')) continue;
       expect(entry.sql).not.toContain('read_own');
     }
+  });
+});
+
+describe('what a policy will cost to run', () => {
+  // 🔴 Debt 4. D1 bills for rows scanned rather than returned, so a policy column
+  // with no index is a line on a bill every request, and the author has nowhere else
+  // to see it. `rules/01` section D calls this a feature rather than a nice-to-have.
+  //
+  // The fake database reports no indexes, so `author_id` in the standard document is
+  // unindexed and `id` is the primary key.
+
+  it('warns on apply, with a statement that can be pasted as it is', async () => {
+    const h = harness({ file: policyDocument() });
+
+    expect(await runPolicy(['apply', 'p.json'], h.write, PLAIN, h.host)).toBe('ok');
+
+    // Split the rendered text, because `copyable` returns the blank lines around the
+    // value as part of one write. What a terminal shows is the line, not the write.
+    const remedy = h
+      .text()
+      .split('\n')
+      .find((line) => line.includes('CREATE INDEX'));
+
+    // Unindented, and that is not a formatting preference. A statement with two
+    // spaces in front of it does not double-click cleanly, and whoever pastes the
+    // spaces gets a syntax error from D1 with nothing to explain it.
+    expect(remedy).toBe('CREATE INDEX "posts_author_id_idx" ON "posts" ("author_id");');
+  });
+
+  it('still stores the policy, because a bill is not a refusal', async () => {
+    // ⚠️ The deliberate exception to how the rest of the engine behaves. Everywhere
+    // else a doubt is a refusal, because everywhere else the doubt is about who may
+    // read what. Refusing a policy that grants exactly what its author meant, over an
+    // index, would be the engine overruling them on a question they may be wrong
+    // about.
+    const h = harness({ file: policyDocument() });
+
+    await runPolicy(['apply', 'p.json'], h.write, PLAIN, h.host);
+
+    expect(
+      h.sql().filter((sql) => sql.includes('INSERT') && sql.includes('_policies')),
+    ).toHaveLength(1);
+  });
+
+  it('says nothing about a policy on the primary key', async () => {
+    const h = harness({
+      file: policyDocument({
+        policies: [
+          {
+            name: 'read_own',
+            for: 'select',
+            to: ['authenticated'],
+            using: { id: { _eq: '$auth.uid' } },
+            columns: ['id', 'title'],
+          },
+        ],
+      }),
+    });
+
+    await runPolicy(['apply', 'p.json'], h.write, PLAIN, h.host);
+    expect(h.text()).not.toContain('CREATE INDEX');
+  });
+
+  it('lints what is already stored, which is where most policies are', async () => {
+    // The verb exists because `apply` only ever sees the document in front of it, and
+    // every policy applied before this existed was never looked at.
+    const h = harness({
+      exposed: [{ table_name: 'posts', enabled: 1, version: 1 }],
+      storedPolicies: [
+        {
+          table_name: 'posts',
+          name: 'read_own',
+          operation: 'select',
+          roles: JSON.stringify(['authenticated']),
+          using_expr: JSON.stringify({ author_id: { _eq: '$auth.uid' } }),
+          check_expr: null,
+          columns: JSON.stringify(['id', 'title']),
+          set_expr: null,
+        },
+      ],
+    });
+
+    expect(await runPolicy(['lint'], h.write, PLAIN, h.host)).toBe('ok');
+    expect(h.text()).toContain('posts.read_own');
+    expect(
+      h
+        .text()
+        .split('\n')
+        .find((line) => line.includes('CREATE INDEX')),
+    ).toBe('CREATE INDEX "posts_author_id_idx" ON "posts" ("author_id");');
+  });
+
+  it('prints one statement per index, however many policies need it', async () => {
+    // 🔴 Found by running the command, not by a test. Two policies comparing the same
+    // column both asked for the same `CREATE INDEX`, and the reader who copies both
+    // gets an error from D1 on the second saying the index already exists.
+    //
+    // Every assertion here counted the statement rather than only looking for it,
+    // which is the difference that would have caught it the first time.
+    const h = harness({
+      file: policyDocument({
+        policies: [
+          {
+            name: 'read_own',
+            for: 'select',
+            to: ['authenticated'],
+            using: { author_id: { _eq: '$auth.uid' } },
+            columns: ['id', 'title'],
+          },
+          {
+            name: 'update_own',
+            for: 'update',
+            to: ['authenticated'],
+            using: { author_id: { _eq: '$auth.uid' } },
+            check: { author_id: { _eq: '$auth.uid' } },
+            columns: ['title'],
+          },
+        ],
+      }),
+    });
+
+    await runPolicy(['apply', 'p.json'], h.write, PLAIN, h.host);
+
+    const statements = h
+      .text()
+      .split('\n')
+      .filter((line) => line.includes('CREATE INDEX'));
+
+    expect(statements).toHaveLength(1);
+
+    // Both policies are still named, because which of them is paying for the missing
+    // index is the part worth knowing. It is the remedy that is per index.
+    expect(h.text()).toContain('read_own:');
+    expect(h.text()).toContain('update_own:');
+  });
+
+  it('says so plainly when there is nothing to report', async () => {
+    const h = harness({ exposed: [], storedPolicies: [] });
+
+    expect(await runPolicy(['lint'], h.write, PLAIN, h.host)).toBe('ok');
+    expect(h.text()).toContain('Nothing to report');
+
+    // ⚠️ And it does not promise more than it checked. No query planner runs here.
+    expect(h.text()).toContain('can still be slow');
   });
 });
 
