@@ -109,6 +109,71 @@ describe('the table cannot represent a broken row', () => {
   });
 });
 
+describe('counting against an identity rather than an address', () => {
+  it('gives two accounts behind one address a budget each', () => {
+    // 🔴 The reason this exists at all. Carrier NAT puts thousands of unrelated
+    // people behind one address, so on a path real users sit on, an address-keyed
+    // budget is a budget they take from each other.
+    const request = requestWithHeaders({ 'CF-Connecting-IP': CLIENT_IP });
+
+    const ann = deriveRateLimitKey(request, 'storage_write', 'u_ann');
+    const bob = deriveRateLimitKey(request, 'storage_write', 'u_bob');
+
+    expect(ann).not.toBe(bob);
+    expect(ann).not.toContain(CLIENT_IP);
+  });
+
+  it('gives one account the same budget from two addresses', () => {
+    // The other half, and the threat debt 70 named: somebody with a session
+    // calling an expensive endpoint in a loop. Counting their address would let
+    // one account spread across networks.
+    const first = deriveRateLimitKey(
+      requestWithHeaders({ 'CF-Connecting-IP': CLIENT_IP }),
+      'storage_write',
+      'u_ann',
+    );
+    const second = deriveRateLimitKey(
+      requestWithHeaders({ 'CF-Connecting-IP': '198.51.100.9' }),
+      'storage_write',
+      'u_ann',
+    );
+
+    expect(first).toBe(second);
+  });
+
+  it('falls back to the address when there is no identity', () => {
+    const anonymous = deriveRateLimitKey(
+      requestWithHeaders({ 'CF-Connecting-IP': CLIENT_IP }),
+      'storage_read',
+      null,
+    );
+
+    expect(anonymous).toBe(`storage_read|${CLIENT_IP}`);
+  });
+
+  it('cannot be made to collide with an address by an id shaped like one', () => {
+    // The marker earns its place here. Without it a caller whose id happened to
+    // read as an address would share a budget with everybody arriving from it.
+    const request = requestWithHeaders({ 'CF-Connecting-IP': CLIENT_IP });
+
+    expect(deriveRateLimitKey(request, 'storage_read', '203')).not.toBe(
+      deriveRateLimitKey(request, 'storage_read', null),
+    );
+  });
+
+  it('falls back to the address rather than throwing on an id it cannot use', () => {
+    // A claim from a token this deployment signed should always pass. A request
+    // path is the wrong place to find out otherwise, so an unusable one is
+    // limited by address instead of turning into a 500.
+    const request = requestWithHeaders({ 'CF-Connecting-IP': CLIENT_IP });
+    const byAddress = `storage_read|${CLIENT_IP}`;
+
+    for (const bad of ['has|separator', 'has space', 'x'.repeat(65), '']) {
+      expect(deriveRateLimitKey(request, 'storage_read', bad)).toBe(byAddress);
+    }
+  });
+});
+
 describe('key derivation refuses to trust the caller', () => {
   it('ignores X-Forwarded-For even when the client sends one', () => {
     // Cloudflare appends to X-Forwarded-For rather than replacing it, so its

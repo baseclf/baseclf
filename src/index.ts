@@ -422,6 +422,18 @@ export function resetAuthSchemaMemo(): void {
  * the sense the error handler means: it carries a Retry-After that a client is
  * meant to obey, and routing it through `BaseclfError` would lose the header.
  */
+function tooManyRequests(retryAfterSeconds: number): Response {
+  return Response.json(
+    { error: 'Too many requests.', code: 'RATE_LIMITED' },
+    {
+      status: 429,
+      // A client that respects this backs off on its own. One that does not
+      // keeps paying for a statement per attempt and never gets through.
+      headers: { 'retry-after': String(retryAfterSeconds) },
+    },
+  );
+}
+
 async function enforceRateLimit(
   request: Request,
   env: Env,
@@ -437,17 +449,62 @@ async function enforceRateLimit(
     ...applicable.rule,
   });
 
-  if (result.allowed) return null;
+  return result.allowed ? null : tooManyRequests(result.retryAfterSeconds);
+}
 
-  return Response.json(
-    { error: 'Too many requests.', code: 'RATE_LIMITED' },
-    {
-      status: 429,
-      // A client that respects this backs off on its own. One that does not
-      // keeps paying for a statement per attempt and never gets through.
-      headers: { 'retry-after': String(result.retryAfterSeconds) },
-    },
-  );
+/**
+ * What a storage call costs a caller.
+ *
+ * 🔴 Until this existed the storage path had no limit of any kind, which is the
+ * hole recorded as debt 70. Anybody holding a session could upload in a loop,
+ * and an upload is not like a read: it is an R2 write plus a row in D1, and the
+ * object it leaves behind goes on costing after the request is over.
+ *
+ * Two budgets rather than one, because the two costs are not alike. An upload
+ * or a delete mutates a bucket; a download is a class B operation and egress
+ * from R2 is free (`rules/01` section F), so the generous number is the one that
+ * belongs on reads.
+ *
+ * ⚠️ These numbers are chosen, not measured, exactly as the auth ones above are.
+ * They are set where a person doing the thing by hand will never see them and a
+ * loop will, which is the only property that can be reasoned about before there
+ * is a real deployment to measure.
+ */
+const STORAGE_WRITE_LIMIT: RateLimitRule = { limit: 60, windowSeconds: 60 };
+const STORAGE_READ_LIMIT: RateLimitRule = { limit: 600, windowSeconds: 60 };
+
+/**
+ * Count one storage call, against the caller's account when they have one.
+ *
+ * ⚠️ Called after `identify` and before the policy decides anything, and both
+ * halves of that are deliberate. After, because a budget per account is the one
+ * that means something here and the account is not known before. Before, so a
+ * caller probing for objects they may not have spends their own allowance doing
+ * it rather than probing for free behind a 404.
+ *
+ * ⚠️ **`/rest/v1` is deliberately not limited here, and that is a decision
+ * rather than the same hole left open.** A budget keyed per caller on the data
+ * plane is the one that hurts when it is wrong: the endpoint exists to be
+ * called often, and a number invented here would be a number every application
+ * built on this has to live inside. Volumetric protection for a data API is
+ * what Cloudflare's own rate limiting is for, in front of the Worker. Storage
+ * is different because an upload keeps costing after it returns.
+ */
+async function enforceStorageRateLimit(
+  request: Request,
+  env: Env,
+  operation: StorageOperation,
+  auth: AuthCtx,
+): Promise<Response | null> {
+  await ensureRateLimitTableOnce(env.DB);
+
+  const write = operation !== 'download';
+  const result = await checkRateLimit(env.DB, {
+    key: deriveRateLimitKey(request, write ? 'storage_write' : 'storage_read', auth.uid),
+    ...(write ? STORAGE_WRITE_LIMIT : STORAGE_READ_LIMIT),
+  });
+
+  return result.allowed ? null : tooManyRequests(result.retryAfterSeconds);
 }
 
 /**
@@ -605,6 +662,10 @@ async function handleStorage(request: Request, env: Env, target: StorageTarget):
   }
 
   const [auth, registry] = await Promise.all([identify(request, env), getStorageRegistry(env.DB)]);
+
+  // Debt 70. Before the policy, after the identity. See `enforceStorageRateLimit`.
+  const limited = await enforceStorageRateLimit(request, env, operation, auth);
+  if (limited !== null) return limited;
 
   const context = {
     bucket: env.BUCKET,

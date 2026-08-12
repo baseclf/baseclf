@@ -158,6 +158,24 @@ const UNKNOWN_BUCKET = 'unknown';
  */
 const UNKNOWN_ADDRESS = 'unknown';
 
+/**
+ * Marks the rest of a key as an identity rather than an address.
+ *
+ * A normalised address is hex digits, dots and colons, or the literal
+ * `unknown`, so nothing this produces can be mistaken for one and two callers
+ * cannot land in one budget by one of them having an id shaped like an IP.
+ */
+const IDENTITY_MARKER = 'u:';
+
+/**
+ * What an identity may look like before it is trusted with a place in a key.
+ *
+ * It arrives from a verified token, so this is not the boundary that keeps a
+ * caller from choosing it. It is the check that keeps a key well formed: no
+ * separator, and short enough that `MAX_KEY_LENGTH` cannot be reached.
+ */
+const IDENTITY_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+
 /** IPv6 is handed out in blocks. A /128 key would let one customer rotate forever. */
 const IPV6_PREFIX_GROUPS = 4;
 
@@ -272,12 +290,48 @@ function normalizeClientAddress(raw: string): string {
  * Only CF-Connecting-IP is read. X-Forwarded-For is ignored even when present,
  * because Cloudflare appends to it rather than replacing it, leaving the client
  * in control of what it contains. Decision 3 above.
+ *
+ * ## Counting against an identity instead of an address
+ *
+ * `identity` is optional and comes from a **verified** claim, never from a
+ * header. When it is there the counter is per account rather than per address,
+ * and both directions of that matter:
+ *
+ * A shared address is the common case, not the edge case. Carrier NAT puts
+ * thousands of unrelated people behind one address, so an address-keyed budget
+ * on a data path is a budget those people take from each other. That is the
+ * cost of getting this wrong on a path real users sit on, as opposed to the
+ * auth endpoints, where an address is the only thing there is.
+ *
+ * And the threat this is for is an authenticated one: somebody with a session
+ * calling an expensive endpoint in a loop. Counting their address rather than
+ * their account would let one account spread over several networks.
+ *
+ * ⚠️ What it does not do is stop somebody who makes more accounts. Account
+ * creation has its own budget, which is where that is bounded, and neither
+ * number stops a determined attacker with a proxy pool. These limits bound a
+ * runaway client and casual abuse. They are not a defence against a
+ * distributed one, and Cloudflare's own rate limiting is the layer for that.
+ *
+ * ⚠️ An identity that is unusable falls back to the address rather than
+ * throwing. It is prefixed so it can never collide with an address, and it is
+ * length-checked because it ends up in a key with a ceiling on it. A claim from
+ * a token this deployment signed should always pass; a request path is the
+ * wrong place to find out otherwise.
  */
-export function deriveRateLimitKey(request: Request, bucket: string): string {
+export function deriveRateLimitKey(
+  request: Request,
+  bucket: string,
+  identity?: string | null,
+): string {
   if (!BUCKET_PATTERN.test(bucket)) {
     throw invalid(
       `Bucket "${bucket}" is not a valid name. Use lowercase letters, digits, "_" and "-".`,
     );
+  }
+
+  if (identity !== undefined && identity !== null && IDENTITY_PATTERN.test(identity)) {
+    return `${bucket}${KEY_SEPARATOR}${IDENTITY_MARKER}${identity}`;
   }
 
   const address = request.headers.get('CF-Connecting-IP');

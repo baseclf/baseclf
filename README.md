@@ -308,6 +308,34 @@ advertises its strengths is not one you should trust.
 BaseCLF enforces policy at the query layer. It cannot enforce anything about a
 connection it is not part of. Scope your API tokens accordingly.
 
+## What is rate limited, and what is not
+
+Counters live in D1, so every instance of your Worker shares them. Over the limit is
+a `429` with a `Retry-After` header, which a client is meant to obey.
+
+| Path | Budget | Counted against |
+|---|---|---|
+| Sign-in, sign-up, password and email changes | 20 a minute | the caller's address |
+| Everything else under `/api/auth` | 100 a minute | the caller's address |
+| Storage upload and delete | 60 a minute | the account, or the address when signed out |
+| Storage download | 600 a minute | the account, or the address when signed out |
+| **`/rest/v1`** | **nothing** | |
+
+Storage counts against the account rather than the address because carrier NAT puts
+thousands of unrelated people behind one address, and a budget they take from each
+other is worse than no budget. The auth endpoints have no account to count against
+yet, which is the whole point of them.
+
+`/rest/v1` is deliberately not limited, and it is the line worth reading twice. The
+data plane exists to be called often, and a number invented here would be one every
+application built on this has to live inside. Volumetric protection for a data API
+belongs in front of the Worker, where Cloudflare's own rate limiting can see it.
+Storage is limited because an upload keeps costing after it returns.
+
+None of these numbers is measured. They are set where somebody doing the thing by
+hand will never meet them and a loop will, and they are not a defence against a
+distributed attack.
+
 ## Where BaseCLF differs from PostgREST
 
 Same query grammar, different database underneath. These are the places that
