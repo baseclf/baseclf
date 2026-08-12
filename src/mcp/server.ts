@@ -38,12 +38,8 @@ import {
 } from '@modelcontextprotocol/server';
 import { createMcpHandler } from 'agents/mcp/server';
 
-import {
-  createTokenVerifier,
-  MCP_SCOPE,
-  type McpAuthEnv,
-  protectedResourceMetadata,
-} from './auth.js';
+import { createTokenVerifier, MCP_SCOPE, protectedResourceMetadata } from './auth.js';
+import { type McpToolEnv, registerTools } from './tools/index.js';
 
 /** The one path this endpoint answers on. */
 export const MCP_ROUTE = '/mcp';
@@ -60,12 +56,14 @@ export function metadataUrlFor(origin: string): string {
  * shape is a fresh server per request with no Durable Object behind it. Building it
  * inside the request also keeps it off the one-second startup budget (`rules/02` §A).
  *
- * ⚠️ No tools yet. A server that lists nothing is the honest state of this slice, and
- * it is still worth wiring: everything below it, the auth and the discovery document,
- * is testable without a single tool existing.
+ * Rebuilding per request costs nothing worth counting: the tools close over `env`,
+ * and the catalogue and registry behind them are memoised per isolate, so a second
+ * request registers four objects and reads no database.
  */
-export function createServer(): McpServer {
-  return new McpServer({ name: 'baseclf', version: '0.1.0' });
+export function createServer(env: McpToolEnv): McpServer {
+  const server = new McpServer({ name: 'baseclf', version: '0.1.0' });
+  registerTools(server, env);
+  return server;
 }
 
 /**
@@ -100,7 +98,7 @@ export function metadataResponse(request: Request): Response | undefined {
  * unauthenticated client discover how to authenticate. Rebuilding that response here
  * would drop the header that makes the endpoint discoverable.
  */
-export async function handleMcp(request: Request, env: McpAuthEnv): Promise<Response> {
+export async function handleMcp(request: Request, env: McpToolEnv): Promise<Response> {
   const url = new URL(request.url);
   const resource = new URL(`${url.origin}${MCP_ROUTE}`);
 
@@ -116,7 +114,7 @@ export async function handleMcp(request: Request, env: McpAuthEnv): Promise<Resp
   // ⚠️ Not `export default createMcpHandler(...)`. Wrangler reads a bare default
   // export that is a function as a `WorkerEntrypoint`, so the handler is built and
   // called inside `fetch` instead.
-  const handler = createMcpHandler(() => createServer(), {
+  const handler = createMcpHandler(() => createServer(env), {
     route: MCP_ROUTE,
     // The deployment's own hostname, whatever it is. The default covers
     // `workers.dev` and localhost; a custom domain would otherwise be refused by
