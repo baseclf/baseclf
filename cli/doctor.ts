@@ -141,8 +141,36 @@ function originOf(value: string): string | null {
  * about propagation: both are the documented behaviour of a `workers.dev` URL in
  * the first half minute of its life, and `error code: 1042` in that window does not
  * mean what it means at any other time.
+ *
+ * `asked` says whether this is the second answer, which only happens when the first
+ * one disagreed with every other probe. See `runDoctor`.
  */
-function checkReachable(result: Awaited<ReturnType<typeof probe>>): Check {
+function checkReachable(
+  result: Awaited<ReturnType<typeof probe>>,
+  asked: 'once' | 'again' = 'once',
+): Check {
+  // Asked a second time, and it still disagrees with every other probe. Both answers
+  // are real and they are about different things: one request describes one path to
+  // the deployment, and four siblings answering at the same instant describe the
+  // deployment. Reported as the contradiction it is rather than resolved silently in
+  // either direction, and no longer as "wait and run this again", which is advice
+  // the evidence three lines below it already contradicts.
+  if (asked === 'again' && !('status' in result && result.status === 200)) {
+    const answer = 'error' in result ? result.error : `${result.status}`;
+
+    return {
+      name: 'reachable',
+      verdict: 'attention',
+      detail:
+        `/health gave ${answer} on both attempts, while the endpoints below answered ` +
+        'normally at the same moment. The deployment is serving, so this describes one ' +
+        'path to it rather than an address that is still coming up.',
+      action:
+        'Nothing to do if the checks below pass. If every run says this, something other ' +
+        'than the Worker is answering for this hostname.',
+    };
+  }
+
   if ('error' in result) {
     // 🔴 Not a fault on its own, and calling it one is what this said before.
     //
@@ -474,8 +502,33 @@ export async function runDoctor(baseUrl: string, fetcher: Fetcher = fetch): Prom
     probe(fetcher, `${origin}${ENGINE_PROBE_PATH}`),
   ]);
 
+  // 🔴 The five probes go out together, so an unreachable verdict that sits above
+  // four endpoints answering is not describing the deployment. It is describing one
+  // path to it, at one instant.
+  //
+  // Seen on a real run: `/health` answered 404 and was reported as an address still
+  // propagating, with "wait up to 45 seconds and run this again", directly above
+  // three checks that had just been served by the same origin at the same moment.
+  // The report contradicted itself and counted the transient as a cause, so a
+  // deployment with one thing to configure was reported as two.
+  //
+  // ⚠️ Asked again rather than inferred away. Reading the siblings and rewriting the
+  // verdict would report a reachable deployment on the strength of a request nobody
+  // made, and `rules/02` section C6 is the record of what that costs: a single
+  // observation was read as a fact about a deployment and was a fact about one
+  // isolate. If the second answer agrees with the first, the contradiction is real
+  // and gets printed as one.
+  const answeredNormally = (result: Awaited<ReturnType<typeof probe>>) =>
+    'status' in result && !isPropagating(result.status);
+
+  let reachable = checkReachable(health);
+
+  if (reachable.verdict !== 'allow' && [schema, keys, diagnose, engine].some(answeredNormally)) {
+    reachable = checkReachable(await probe(fetcher, `${origin}/health`), 'again');
+  }
+
   const checks: readonly Check[] = [
-    checkReachable(health),
+    reachable,
     checkSchema(schema),
     checkEngineTables(engine),
     checkKeys(keys),

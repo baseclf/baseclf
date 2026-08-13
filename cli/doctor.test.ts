@@ -267,8 +267,15 @@ describe('a deployment that has only just been created', () => {
     // "error code: 1042", then 500, then 200 after roughly thirty seconds. Calling
     // that broken would be wrong at exactly the moment somebody is deciding whether
     // this product works.
+    // 🔴 Every endpoint, not only /health, and the fixture had to change to say so.
+    //
+    // It used to set /health alone and leave the other four answering, which is not a
+    // deployment that has only just been created. It is one path failing while four
+    // succeed, and that is exactly the shape where "wait and run this again" is wrong
+    // advice: the evidence against it is three lines further down the same report.
+    // The old fixture is why that shipped. See the disagreement tests below.
     for (const status of [404, 500, 503]) {
-      const report = await runDoctor(BASE_URL, standIn({ '/health': { status, body: '' } }));
+      const report = await runDoctor(BASE_URL, () => Promise.resolve(new Response('', { status })));
       const reachable = report.checks.find((check) => check.name === 'reachable');
 
       expect(reachable?.verdict, `status ${status}`).toBe('attention');
@@ -279,7 +286,9 @@ describe('a deployment that has only just been created', () => {
   it('says that 1042 does not mean what it usually means', async () => {
     // Otherwise the reader searches the error code and is told it is about a Worker
     // fetching a Worker in the same zone, and goes to look at their fetch calls.
-    const report = await runDoctor(BASE_URL, standIn({ '/health': { status: 404, body: '' } }));
+    const report = await runDoctor(BASE_URL, () =>
+      Promise.resolve(new Response('', { status: 404 })),
+    );
 
     expect(report.checks.find((check) => check.name === 'reachable')?.detail).toContain('1042');
   });
@@ -425,6 +434,77 @@ describe('what the reader actually sees', () => {
     );
 
     expect(rendered.trimEnd().endsWith('baseclf doctor <url>')).toBe(true);
+  });
+});
+
+describe('a /health that disagrees with every other probe', () => {
+  // 🔴 Seen on a real deployment. `/health` answered 404 and was reported as an
+  // address still coming up, with "wait up to 45 seconds and run this again", printed
+  // directly above three checks that the same origin had just answered. The five
+  // probes go out together, so this is not a sequencing artifact: at one instant one
+  // path said 404 and four said 200.
+  //
+  // It also counted, so a deployment with one thing left to configure was reported
+  // as two things not finished.
+  function healthGives(...statuses: readonly number[]) {
+    const healthy = standIn({});
+    let attempts = 0;
+
+    const fetcher: Fetcher = (url, init) => {
+      if (new URL(url).pathname !== '/health') return healthy(url, init);
+
+      const status = statuses[Math.min(attempts, statuses.length - 1)] as number;
+      attempts += 1;
+      return Promise.resolve(new Response('', { status }));
+    };
+
+    return { fetcher, attempts: () => attempts };
+  }
+
+  it('asks again, and reports what the second answer says', async () => {
+    const { fetcher, attempts } = healthGives(404, 200);
+    const report = await runDoctor(BASE_URL, fetcher);
+    const reachable = report.checks.find((check) => check.name === 'reachable');
+
+    expect(attempts()).toBe(2);
+    expect(reachable?.verdict).toBe('allow');
+    // ⚠️ Asserted on this check rather than on the whole report, which is where the
+    // first version of this looked. Other checks end with "run this again" about
+    // their own fix, quite correctly, so a search of the rendered output answers a
+    // different question than the one being asked here.
+    expect(reachable?.action).toBeUndefined();
+  });
+
+  it('prints the contradiction rather than resolving it, when asking again agrees', async () => {
+    // ⚠️ Not resolved in either direction. Two 404s next to four answers is a real
+    // disagreement, and reporting the deployment as fine on the strength of the
+    // siblings would be asserting something no request checked.
+    const { fetcher, attempts } = healthGives(404, 404);
+    const report = await runDoctor(BASE_URL, fetcher);
+    const reachable = report.checks.find((check) => check.name === 'reachable');
+
+    expect(attempts()).toBe(2);
+    expect(reachable?.verdict).toBe('attention');
+    expect(reachable?.detail).toContain('both attempts');
+    expect(reachable?.action).not.toContain('Wait up to');
+  });
+
+  it('does not ask again when nothing else answered either', async () => {
+    // The case the retry must stay out of. A genuinely new address gives this on
+    // every endpoint, the original advice is right, and a second request would say
+    // the same thing while making the command slower at the one moment somebody is
+    // most likely to run it.
+    let healthAttempts = 0;
+    const propagating: Fetcher = (url) => {
+      if (new URL(url).pathname === '/health') healthAttempts += 1;
+      return Promise.resolve(new Response('', { status: 404 }));
+    };
+
+    const report = await runDoctor(BASE_URL, propagating);
+    const reachable = report.checks.find((check) => check.name === 'reachable');
+
+    expect(healthAttempts).toBe(1);
+    expect(reachable?.action).toContain('Wait up to');
   });
 });
 
