@@ -12,6 +12,10 @@
  * something less useful than a paragraph somebody wrote.
  */
 
+// Same source as the Worker reports on /health, and for the same reason: a version
+// typed by hand is right on the day it is typed. No import attribute, deliberately.
+// See the note in `src/index.ts`.
+import { version as BASECLF_VERSION } from '../package.json';
 import { runDoctor } from './doctor.js';
 import { LOGIN_FIXED_TEXT, type LoginHost, runLogin } from './login.js';
 import { findVoiceViolations, type Style } from './output.js';
@@ -65,9 +69,31 @@ const USAGE = [
   '  doctor <url>       Ask a deployment what is wrong with it, and what to do about it',
   '  secret set <KEY>   Set one secret on a deployed Worker, reading the value from stdin',
   '',
+  '  --version          Print the version of this CLI',
+  '',
   'BaseCLF enforces policies on requests that go through your Worker. It does not',
   'enforce anything on `wrangler d1 execute`, which writes straight to the database.',
 ].join('\n');
+
+/**
+ * The argument list `create-baseclf` runs, from the one it was handed.
+ *
+ * `npx create-baseclf` resolves a package rather than a subcommand, so the verb is
+ * chosen here instead of typed by the reader.
+ *
+ * ⚠️ Everything except the version flag, which has to reach the top level. Prepending
+ * the verb sends it into the create option parser, which refuses it as an unknown
+ * option, so asking the binary which version it is answered with an error. That was
+ * true on the one binary that is the first thing anybody runs, and the version of a
+ * cached `npx` package is exactly what somebody would be trying to find out.
+ *
+ * Lives here rather than in the binary so it can be tested. The binary is a top level
+ * await, so importing it to test it would run the CLI.
+ */
+export function createArgv(args: readonly string[]): readonly string[] {
+  const askedForVersion = args.length === 1 && (args[0] === '--version' || args[0] === '-v');
+  return askedForVersion ? args : ['create', ...args];
+}
 
 /**
  * Run the CLI.
@@ -85,6 +111,18 @@ export async function main(
   policyHost?: PolicyHost,
 ): Promise<number> {
   const [command, ...rest] = argv;
+
+  // ⚠️ Before the help branch, and printed bare so a script can read it.
+  //
+  // `npx` resolves a package once and then serves it from a cache, so the version
+  // somebody is running is not the version on the registry, and until this existed
+  // there was no way to ask. That is not hypothetical here: 0.1.0 could deploy a
+  // Worker and had no way to write a policy into it, and anybody holding it in a
+  // cache had nothing to compare against the fix.
+  if (command === '--version' || command === '-v') {
+    write(BASECLF_VERSION);
+    return EXIT.ok;
+  }
 
   if (command === undefined || command === '--help' || command === '-h') {
     write(USAGE);

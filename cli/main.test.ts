@@ -12,7 +12,8 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { EXIT, fixedTextViolations, main } from './main.js';
+import { version } from '../package.json';
+import { createArgv, EXIT, fixedTextViolations, main } from './main.js';
 import { findVoiceViolations, PLAIN } from './output.js';
 
 async function run(...argv: readonly string[]): Promise<{ code: number; out: string }> {
@@ -29,6 +30,40 @@ describe('being called wrongly', () => {
 
     expect(code).toBe(EXIT.usage);
     expect(out).toContain('doctor <url>');
+  });
+
+  it('answers which version it is, bare enough for a script to read', async () => {
+    // ⚠️ `npx` resolves a package once and serves it from a cache afterwards, so the
+    // version somebody is running is not the version on the registry. Until this
+    // existed there was no way to ask: 0.1.0 could deploy a Worker and had no way to
+    // write a policy into it, and anybody holding it had nothing to compare.
+    for (const flag of ['--version', '-v']) {
+      const { code, out } = await run(flag);
+
+      expect(code).toBe(EXIT.ok);
+      expect(out.trim()).toBe(version);
+      // Bare, so `npx baseclf --version` is usable in a condition. A usage banner
+      // here would mean every caller has to parse prose to get a number.
+      expect(out).not.toContain('Commands:');
+    }
+  });
+
+  it('lets create-baseclf answer the same question, without starting a project', async () => {
+    // ⚠️ Missed on this binary while the other one was being fixed, and this is the
+    // one somebody runs first. The verb is prepended for every other argument list,
+    // which sent the flag into the create option parser and answered a question about
+    // the version with "there is no --version option".
+    for (const flag of ['--version', '-v']) {
+      const { code, out } = await run(...createArgv([flag]));
+
+      expect(code).toBe(EXIT.ok);
+      expect(out.trim()).toBe(version);
+    }
+
+    // Anything else still gets the verb, or `npx create-baseclf` stops creating.
+    expect(createArgv([])).toEqual(['create']);
+    expect(createArgv(['--help'])).toEqual(['create', '--help']);
+    expect(createArgv(['--version', '--yes'])).toEqual(['create', '--version', '--yes']);
   });
 
   it('prints usage and succeeds when help was what was asked for', async () => {

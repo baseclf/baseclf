@@ -13,11 +13,11 @@
 
 import process from 'node:process';
 
-import { main } from './main.js';
+import { createArgv, main } from './main.js';
 import { runtime } from './node-host.js';
 
 process.exitCode = await main(
-  ['create', ...process.argv.slice(2)],
+  createArgv(process.argv.slice(2)),
   runtime.write,
   { colour: runtime.colour },
   runtime.host,
