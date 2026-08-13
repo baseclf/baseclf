@@ -17,6 +17,15 @@ import { runMutations } from './mutation-runner.mjs';
 
 const BOOTSTRAP = 'src/auth/bootstrap.ts';
 const INDEX = 'src/index.ts';
+/**
+ * Where `AUTH_TABLES` lives since the I8 fix on 2026-08-12.
+ *
+ * ⚠️ It used to be declared in `bootstrap.ts`, and this script kept pointing there
+ * for two days after it moved. Nothing noticed, because the full mutation suite was
+ * not run in between: the pattern matched nothing and the runner aborted the moment
+ * it finally ran, which is the behaviour that made the drift visible at all.
+ */
+const CATALOGUE = 'src/db/introspect.ts';
 
 const MUTATIONS = [
   {
@@ -77,7 +86,7 @@ const MUTATIONS = [
   },
   {
     name: 'the jwks table dropped from the list, which is the one that fails silently',
-    file: BOOTSTRAP,
+    file: CATALOGUE,
     expect: 'the list-matches-a-real-migration test',
     find: / {2}'jwks',\n/,
     replace: '',
@@ -94,7 +103,7 @@ const MUTATIONS = [
 ];
 
 await runMutations({
-  files: [BOOTSTRAP, INDEX],
+  files: [BOOTSTRAP, INDEX, CATALOGUE],
   suites: ['src/auth/bootstrap.test.ts'],
   mutations: MUTATIONS,
 });
