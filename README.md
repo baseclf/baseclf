@@ -18,29 +18,25 @@ One command, against your own Cloudflare account. It creates a database, a bucke
 and a Worker, deploys the engine onto them, and waits until the address answers
 before telling you it is done.
 
-```bash
-npx create-baseclf
-```
+Two things have to be true before that command will get anywhere. Both are one-time
+and both are free.
 
-### Two things to do first
-
-Both are one-time and both are free. The second one is where people get stuck,
-because nothing mentions it until a bucket fails to create.
-
-**1. Log in to Cloudflare.**
+### 1. Log in to Cloudflare
 
 ```bash
-npx wrangler login
+npx baseclf login
 ```
 
-This runs Cloudflare's own OAuth flow. The credential stays on your machine.
+This wraps Cloudflare's own OAuth flow. The credential stays on your machine, and
 BaseCLF has no OAuth app of its own and never sees your account.
 
-If you have `CLOUDFLARE_API_TOKEN` set in your shell or in a `.env` beside you, that
-token wins over the login and the login has no effect. `npx baseclf login` refuses to
-start rather than let that happen quietly, and tells you how to clear it.
+`npx wrangler login` does the same flow and works too. The wrapper adds two things
+worth having on the first run. It refuses to start when a `CLOUDFLARE_API_TOKEN` in
+your shell or in a nearby `.env` would win over the login and make it do nothing,
+which is otherwise silent. And it names the account you actually landed on, which the
+browser flow never tells you and which decides whose bill this ends up on.
 
-**2. Switch on R2.**
+### 2. Switch on R2
 
 R2 is off on a new Cloudflare account. Until it is switched on, the API refuses to
 create a bucket and refuses even to list them, so provisioning stops at that step.
@@ -51,6 +47,12 @@ does not appear again afterwards.
 
 If you skip this, `create-baseclf` stops with the same instruction and keeps
 everything it has already made, so you can enable R2 and run it again.
+
+### Then run it
+
+```bash
+npx create-baseclf
+```
 
 ### What it asks
 
