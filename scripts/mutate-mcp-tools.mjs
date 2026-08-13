@@ -20,6 +20,7 @@ const DESCRIBE = 'src/mcp/tools/schema-describe.ts';
 const LINT = 'src/mcp/tools/policy-lint.ts';
 const LIST = 'src/mcp/tools/policy-list.ts';
 const RESULT = 'src/mcp/tools/result.ts';
+const SIMULATE = 'src/mcp/tools/policy-simulate.ts';
 
 const MUTATIONS = [
   {
@@ -131,10 +132,72 @@ const MUTATIONS = [
     find: /\? error\.toResponseBody\(\)/,
     replace: '? { ...error.toResponseBody(), detail: error.detail }',
   },
+  {
+    // 🔴 The one that matters most for a simulator. Skipping the policy leaves a
+    // tool that still answers, still looks right, and describes a statement the
+    // engine would never send. A policy author would then tune against a fiction.
+    name: 'policy_simulate reporting the query without its policy',
+    file: SIMULATE,
+    expect: 'the agreement test, and the refuses-a-role-no-policy-covers test',
+    find: /const policied = applyPolicy\(node, \{ registry, catalogue, auth, operation: 'select' \}\);/,
+    replace: 'const policied = node;',
+  },
+  {
+    // The invariant gap, from the other direction: the flag is read but ignored,
+    // so the literals a policy author wrote go out on every call.
+    name: 'policy_simulate publishing the parameter values regardless of the flag',
+    file: SIMULATE,
+    expect: 'the withholds-the-parameter-values-by-default test',
+    find: /\.\.\.\(input\.includeParameterValues === true\n {12}\? \{ parameters: \[\.\.\.compiled\.parameters\] \}\n {12}: \{\}\),/,
+    replace: '...{ parameters: [...compiled.parameters] },',
+  },
+  {
+    // Withholding quietly. The values stay back, and the caller is told nothing
+    // was held, which reads as "this is everything".
+    name: 'policy_simulate withholding the values without admitting it',
+    file: SIMULATE,
+    expect: 'the withholds-the-parameter-values-by-default test, on the flag',
+    find: /const withheld = input\.includeParameterValues !== true && compiled\.parameters\.length > 0;/,
+    replace: 'const withheld = false;',
+  },
+  {
+    // ⭐ The slip worth guarding, and it is an ordinary one rather than an exotic
+    // one: every other read in the engine ends at `executeStatement`, so a later
+    // hand copying the router reaches for it here too. The answer is byte for
+    // byte the same either way, which is why only a test that counts what
+    // reached D1 can see it, and why that test exists.
+    name: 'policy_simulate actually running the statement it reports',
+    file: SIMULATE,
+    expect: 'the never-sends-a-statement-to-the-database test, and only that one',
+    edits: [
+      {
+        find: /import \{ prepareStatement \} from '\.\.\/\.\.\/rest\/execute\.js';/,
+        replace: "import { executeStatement, prepareStatement } from '../../rest/execute.js';",
+      },
+      {
+        find: /const compiled = prepareStatement\(\{ node: policied, catalogue, scope: \{ aliases \} \}\);/,
+        replace:
+          'const compiled = prepareStatement({ node: policied, catalogue, scope: { aliases } });\n' +
+          '        await executeStatement({ executor: env.DB, node: policied, catalogue, scope: { aliases } });',
+      },
+    ],
+  },
+  {
+    name: 'policy_simulate dropping its second reserved-name check',
+    file: SIMULATE,
+    expect: 'nothing, and that is recorded rather than hidden',
+    find: /if \(info === undefined \|\| info\.isSystem \|\| isReservedTableName\(table\)\) \{/,
+    replace: 'if (info === undefined) {',
+    knownSurvivor:
+      'identical in shape and cause to the schema_describe survivor above: resolveTable ' +
+      'has already refused every reserved name by the time this runs. Kept because the ' +
+      'two tools must refuse the same way, and a reader who found only one of them ' +
+      'guarded would reasonably conclude the other had been forgotten.',
+  },
 ];
 
 await runMutations({
-  files: [DESCRIBE, LINT, LIST, RESULT],
+  files: [DESCRIBE, LINT, LIST, RESULT, SIMULATE],
   suites: ['src/mcp/tools/tools.test.ts'],
   mutations: MUTATIONS,
 });

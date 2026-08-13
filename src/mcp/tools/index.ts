@@ -1,7 +1,7 @@
 /**
  * The tool registry, and the one place that touches the SDK.
  *
- * Four read-only tools. Every one of them declares all four annotations and an
+ * Five read-only tools. Every one of them declares all four annotations and an
  * `outputSchema`, with no exceptions, which is the bar `skills/mcp-server`
  * section 5 sets and the reason `ToolDefinition` makes both mandatory rather than
  * optional.
@@ -20,6 +20,7 @@ import type { McpServer } from '@modelcontextprotocol/server';
 
 import { policyLint } from './policy-lint.js';
 import { policyList } from './policy-list.js';
+import { policySimulate } from './policy-simulate.js';
 import { schemaDescribe } from './schema-describe.js';
 import { schemaList } from './schema-list.js';
 import type { McpToolEnv, ToolDefinition } from './types.js';
@@ -33,9 +34,13 @@ import type { McpToolEnv, ToolDefinition } from './types.js';
  * listings can be compared, and a difference means something actually changed.
  */
 export function toolDefinitions(env: McpToolEnv): readonly ToolDefinition[] {
-  return [policyLint(env), policyList(env), schemaDescribe(env), schemaList(env)].sort(
-    (left, right) => left.name.localeCompare(right.name),
-  );
+  return [
+    policyLint(env),
+    policyList(env),
+    policySimulate(env),
+    schemaDescribe(env),
+    schemaList(env),
+  ].sort((left, right) => left.name.localeCompare(right.name));
 }
 
 export function registerTools(server: McpServer, env: McpToolEnv): void {

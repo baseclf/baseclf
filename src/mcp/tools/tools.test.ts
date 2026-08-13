@@ -1,5 +1,5 @@
 /**
- * What the four read-only tools may and may not answer.
+ * What the five read-only tools may and may not answer.
  *
  * Driven through the tool definitions rather than over HTTP. The transport is the
  * SDK's and is covered in `server.test.ts`; what is ours, and what leaks if it is
@@ -9,13 +9,15 @@
 import { env } from 'cloudflare:workers';
 import { beforeAll, describe, expect, it } from 'vitest';
 
-import { resetCatalogue } from '../../db/index.js';
+import { getCatalogue, resetCatalogue } from '../../db/index.js';
 import {
   registerPolicies,
   seedDatabase,
   seedStandardPolicies,
 } from '../../policy/__fixtures__/schema.js';
+import { getRegistry } from '../../policy/index.js';
 import { resetRegistry } from '../../policy/registry.js';
+import { readTable } from '../../rest/router.js';
 import { toolDefinitions } from './index.js';
 import type { McpToolEnv } from './types.js';
 
@@ -68,10 +70,11 @@ beforeAll(async () => {
 });
 
 describe('the registry', () => {
-  it('offers exactly the four read-only tools', () => {
+  it('offers exactly the five read-only tools', () => {
     expect(toolDefinitions(toolEnv).map((definition) => definition.name)).toEqual([
       'policy_lint',
       'policy_list',
+      'policy_simulate',
       'schema_describe',
       'schema_list',
     ]);
@@ -314,5 +317,153 @@ describe('policy_lint', () => {
       await seedStandardPolicies(env.DB);
       resetRegistry();
     }
+  });
+});
+
+describe('policy_simulate', () => {
+  const ANON = { role: 'anon', uid: null, email: null, app: {} };
+
+  it('reports the statement a read would compile to, and which policy allows it', async () => {
+    const { structured } = await call('policy_simulate', { table: 'posts', role: 'anon' });
+    const result = structured as { sql: string; policies: string[]; columns: string[] };
+
+    expect(result.policies).toContain('read_published');
+    expect(result.sql).toContain('"posts"');
+    expect(result.columns).toContain('title');
+  });
+
+  it('is the same statement the REST path really sends', async () => {
+    // ⭐ The assertion that makes this a simulator rather than a second engine.
+    // Everything else here could pass while the tool described code nobody runs,
+    // and a policy author would then tune against a fiction. This is the only
+    // test that fails when the two drift, so it is the one that matters most.
+    const query = 'select=id,title&status=eq.published&limit=5';
+
+    const { structured } = await call('policy_simulate', { table: 'posts', role: 'anon', query });
+
+    const actual = await readTable({
+      executor: env.DB,
+      catalogue: await getCatalogue(env.DB),
+      registry: await getRegistry(env.DB),
+      auth: ANON,
+      table: 'posts',
+      search: new URLSearchParams(query),
+    });
+
+    expect((structured as { sql: string }).sql).toBe(actual.sql);
+  });
+
+  it('shows the client filter narrowing the policy rather than replacing it', async () => {
+    // Invariant I3, made visible. The policy term has to still be there once the
+    // caller adds one of their own, and this is the surface an author would use
+    // to convince themselves of that.
+    const { structured } = await call('policy_simulate', {
+      table: 'posts',
+      role: 'anon',
+      query: 'status=eq.draft',
+    });
+    const { sql, parameterCount } = structured as { sql: string; parameterCount: number };
+
+    // The policy binds 'published' and the client binds 'draft': two parameters,
+    // both present, which is what "narrowed" means rather than "overridden".
+    expect(parameterCount).toBeGreaterThanOrEqual(2);
+    expect(sql).toContain('and');
+  });
+
+  it('withholds the parameter values by default, and says that it did', async () => {
+    // 🔴 The invariant gap `policy_list` is written around. A predicate carries
+    // literals the operator wrote, and the SQL and the values separate cleanly
+    // only because invariant I7 made every value a bound parameter.
+    const { structured } = await call('policy_simulate', { table: 'posts', role: 'anon' });
+    const result = structured as {
+      parameters?: unknown[];
+      parametersWithheld: boolean;
+      parameterCount: number;
+    };
+
+    expect(result.parameterCount).toBeGreaterThan(0);
+    expect(result.parameters).toBeUndefined();
+    expect(result.parametersWithheld).toBe(true);
+  });
+
+  it('returns the values only when the caller asks for them', async () => {
+    const { structured } = await call('policy_simulate', {
+      table: 'posts',
+      role: 'anon',
+      includeParameterValues: true,
+    });
+    const result = structured as { parameters?: unknown[]; parametersWithheld: boolean };
+
+    expect(result.parameters).toContain('published');
+    expect(result.parametersWithheld).toBe(false);
+  });
+
+  it('never sends a statement to the database', async () => {
+    // ⚠️ The first version of this test asserted that no row title appeared in
+    // the answer, and it passed for the wrong reason: the output of a compiled
+    // statement and of an executed one whose rows were discarded are identical,
+    // so nothing about the answer can tell them apart. What can is whether D1
+    // was touched at all, which is also the thing that costs money.
+    //
+    // The natural slip this guards is not exotic. Every other read in the engine
+    // ends at `executeStatement`, so a later hand copying the router would reach
+    // for it here too, and the simulator would quietly start scanning rows on a
+    // production database on every call.
+    let prepares = 0;
+    const countingDb = new Proxy(env.DB, {
+      get(target, property, receiver) {
+        if (property === 'prepare') {
+          return (sql: string) => {
+            prepares += 1;
+            return target.prepare(sql);
+          };
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    }) as D1Database;
+
+    const countingEnv = { ...env, MCP_TOKEN: 'x', DB: countingDb } as unknown as McpToolEnv;
+
+    // Warm the catalogue and registry memos through the same proxy first. They
+    // do read D1, they are not this tool's doing, and they expire on a timer, so
+    // counting them would make this test fail on a slow run rather than on a bug.
+    await getCatalogue(countingDb);
+    await getRegistry(countingDb);
+    prepares = 0;
+
+    const definition = toolDefinitions(countingEnv).find((one) => one.name === 'policy_simulate');
+    const result = await definition?.handler({ table: 'posts', role: 'anon' });
+
+    expect(result?.isError).not.toBe(true);
+    expect(prepares).toBe(0);
+  });
+
+  it('refuses a role no policy covers, exactly as a real request would', async () => {
+    // Fail-closed is not re-implemented here, it is the same `applyPolicy` call
+    // reaching the same conclusion. Invariant I1.
+    const { isError } = await call('policy_simulate', { table: 'posts', role: 'nobody' });
+
+    expect(isError).toBe(true);
+  });
+
+  it('refuses an engine table with the same answer as a table that does not exist', async () => {
+    const owned = await call('policy_simulate', { table: 'account', role: 'anon' });
+    const missing = await call('policy_simulate', { table: 'no_such_table_at_all', role: 'anon' });
+
+    expect(owned.isError).toBe(true);
+    expect(owned.text).toBe(missing.text);
+  });
+
+  it('cannot be given user metadata, because the shape has nowhere to put it', async () => {
+    // Invariant I4 holds here by the type rather than by a check: `AuthCtx` has
+    // role, uid, email and app, and no `user` field exists at all. An input that
+    // tries anyway is dropped by the schema rather than reaching a predicate.
+    const { structured } = await call('policy_simulate', {
+      table: 'posts',
+      role: 'anon',
+      claims: { app: { tier: 'gold' } },
+    });
+
+    expect((structured as { role: string }).role).toBe('anon');
   });
 });
