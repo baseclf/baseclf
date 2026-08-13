@@ -175,12 +175,44 @@ const MUTATIONS = [
         replace: "import { executeStatement, prepareStatement } from '../../rest/execute.js';",
       },
       {
-        find: /const compiled = prepareStatement\(\{ node: policied, catalogue, scope: \{ aliases \} \}\);/,
+        // ⚠️ Kept in step with the handler by hand, and the runner is what makes
+        // that safe: when the call became multi-line during the write-path work
+        // this pattern matched nothing, and the run aborted rather than reporting
+        // a survivor. A drifted pattern reads exactly like a test gap otherwise.
+        find: / {8}\}\);\n(?=\n {8}const withheld)/,
         replace:
-          'const compiled = prepareStatement({ node: policied, catalogue, scope: { aliases } });\n' +
-          '        await executeStatement({ executor: env.DB, node: policied, catalogue, scope: { aliases } });',
+          '        });\n' +
+          '        await executeStatement({\n' +
+          '          executor: env.DB,\n' +
+          '          node: simulation.node,\n' +
+          '          catalogue,\n' +
+          '          scope: { aliases: new Set(simulation.aliases) },\n' +
+          '        });\n',
       },
     ],
+  },
+  {
+    // 🔴 The write equivalent of skipping the policy. `buildWrite` is the call
+    // that refuses when nothing grants the write and that attaches both the
+    // using and the check terms, so replacing it with a bare statement leaves a
+    // tool that still answers and describes something with no policy on it.
+    name: 'policy_simulate compiling a write with no policy on it',
+    file: SIMULATE,
+    expect: 'the update, insert, delete and write-agreement tests',
+    find: /const built = buildWrite\(\{ registry, catalogue, auth, table, operation, body, filter \}\);/,
+    replace:
+      'const built = buildWrite({ registry, catalogue, auth, table, operation: ' +
+      "'select', body, filter });",
+  },
+  {
+    // A filter on an insert has nothing to apply to. Dropping it rather than
+    // refusing means simulating a statement the router would never send, which
+    // is worse than refusing because it reads as an answer.
+    name: 'policy_simulate accepting a filter on an insert',
+    file: SIMULATE,
+    expect: 'the refuses-a-filter-on-an-insert test',
+    find: /if \(operation === 'insert' && parsed\.filters\.length > 0\) \{/,
+    replace: 'if (false) {',
   },
   {
     name: 'policy_simulate dropping its second reserved-name check',

@@ -11,13 +11,14 @@ import { beforeAll, describe, expect, it } from 'vitest';
 
 import { getCatalogue, resetCatalogue } from '../../db/index.js';
 import {
+  OWNER_WRITABLE_POLICIES,
   registerPolicies,
   seedDatabase,
   seedStandardPolicies,
 } from '../../policy/__fixtures__/schema.js';
 import { getRegistry } from '../../policy/index.js';
 import { resetRegistry } from '../../policy/registry.js';
-import { readTable } from '../../rest/router.js';
+import { readTable, writeTable } from '../../rest/router.js';
 import { toolDefinitions } from './index.js';
 import type { McpToolEnv } from './types.js';
 
@@ -452,6 +453,164 @@ describe('policy_simulate', () => {
 
     expect(owned.isError).toBe(true);
     expect(owned.text).toBe(missing.text);
+  });
+
+  it('compiles an update, and shows the check against the row as it will be', async () => {
+    // ⭐ This is the question the tool exists for. `update_own` does not grant
+    // author_id, so its post-image is the stored column and the check compiles to
+    // a comparison against that column. An author reading this can see that the
+    // owner is checked twice: once as the row is, once as it will be.
+    const { structured } = await call('policy_simulate', {
+      table: 'posts',
+      role: 'authenticated',
+      operation: 'update',
+      claims: { uid: 'u_ann' },
+      body: { title: 'renamed' },
+      query: 'id=eq.p1',
+    });
+    const { sql, policies } = structured as { sql: string; policies: string[] };
+
+    expect(policies).toContain('update_own');
+    expect(sql).toContain('update');
+    expect(sql).toContain('returning');
+    // Two author_id terms: the using pre-image and the check post-image, which
+    // are the same text precisely because the update cannot touch that column.
+    expect(sql.match(/"posts"\."author_id"/g)?.length).toBe(2);
+  });
+
+  it('shows the check becoming a value comparison when the owner may be written', async () => {
+    // 🔴 The pair that makes the previous test mean something. Grant author_id and
+    // the post-image is no longer the stored column but the value being assigned,
+    // so the check compiles to a comparison between the new owner and the caller.
+    // That is the whole of how handing a row to somebody else is refused, and it
+    // is invisible in the policy document that produced it.
+    await registerPolicies(env.DB, {
+      table: 'posts',
+      binds: { isAuthor: { author_id: { _eq: '$auth.uid' } } },
+      policies: OWNER_WRITABLE_POLICIES,
+    });
+    resetRegistry();
+
+    try {
+      const { structured } = await call('policy_simulate', {
+        table: 'posts',
+        role: 'authenticated',
+        operation: 'update',
+        claims: { uid: 'u_ann' },
+        body: { author_id: 'u_bob', title: 'stolen' },
+        query: 'id=eq.p1',
+      });
+      const { sql } = structured as { sql: string };
+
+      // One author_id term left, the `using` one. The check is now a comparison
+      // between two bound values, which is what refuses the transfer.
+      expect(sql.match(/"posts"\."author_id"/g)?.length).toBe(1);
+      // Measured, not guessed. The statement is
+      //   ... where (("posts"."author_id" = ?) and (? = ?)) and ("posts"."id" = ?) ...
+      // so this matches the check term and nothing else: every other comparison
+      // has an identifier on its left.
+      expect(sql).toMatch(/\?\s*=\s*\?/);
+    } finally {
+      await seedStandardPolicies(env.DB);
+      resetRegistry();
+    }
+  });
+
+  it('is the same write statement the REST path really sends', async () => {
+    // ⭐ The agreement test again, on the harder path. The filter matches no row
+    // on purpose: the statement is what is being compared, and running it must
+    // not change the fixture the rest of this file reads.
+    const query = 'id=eq.no_such_row';
+    const body = { title: 'renamed' };
+
+    const { structured } = await call('policy_simulate', {
+      table: 'posts',
+      role: 'authenticated',
+      operation: 'update',
+      claims: { uid: 'u_ann' },
+      body,
+      query,
+    });
+
+    const actual = await writeTable({
+      executor: env.DB,
+      catalogue: await getCatalogue(env.DB),
+      registry: await getRegistry(env.DB),
+      auth: { role: 'authenticated', uid: 'u_ann', email: 'ann@example.test', app: {} },
+      table: 'posts',
+      search: new URLSearchParams(query),
+      operation: 'update',
+      body,
+    });
+
+    expect((structured as { sql: string }).sql).toBe(actual.sql);
+  });
+
+  it('compiles an insert, with the columns the server fills in', async () => {
+    const { structured } = await call('policy_simulate', {
+      table: 'posts',
+      role: 'authenticated',
+      operation: 'insert',
+      claims: { uid: 'u_ann' },
+      body: { id: 'p_new', title: 'hello', status: 'draft', org_id: 'org_1', created_at: '2026' },
+    });
+    const { sql, policies } = structured as { sql: string; policies: string[] };
+
+    expect(policies).toContain('insert_own');
+    // The guarded insert idiom: values arrive through a select whose where clause
+    // is the check, so no row exists at any moment that the check has not passed.
+    expect(sql).toContain('insert into');
+    expect(sql).toContain('select');
+    expect(sql).toContain('where');
+  });
+
+  it('refuses a filter on an insert, the same way the router does', async () => {
+    // Dropping it silently would simulate a statement nobody would ever send.
+    const { isError } = await call('policy_simulate', {
+      table: 'posts',
+      role: 'authenticated',
+      operation: 'insert',
+      claims: { uid: 'u_ann' },
+      body: { id: 'p_new', title: 'hello', status: 'draft', org_id: 'o', created_at: '2026' },
+      query: 'id=eq.p1',
+    });
+
+    expect(isError).toBe(true);
+  });
+
+  it('refuses a body column the policy does not grant', async () => {
+    // `update_own` grants title, body and status. author_id is refused here for
+    // the same reason and with the same answer a real request would get.
+    const { isError } = await call('policy_simulate', {
+      table: 'posts',
+      role: 'authenticated',
+      operation: 'update',
+      claims: { uid: 'u_ann' },
+      body: { author_id: 'u_bob' },
+      query: 'id=eq.p1',
+    });
+
+    expect(isError).toBe(true);
+  });
+
+  it('compiles a delete, and refuses one the role has no policy for', async () => {
+    const allowed = await call('policy_simulate', {
+      table: 'posts',
+      role: 'authenticated',
+      operation: 'delete',
+      claims: { uid: 'u_ann' },
+      query: 'id=eq.p1',
+    });
+    expect((allowed.structured as { policies: string[] }).policies).toContain('delete_own');
+
+    // anon has no delete policy at all. Invariant I1, on the write path.
+    const refused = await call('policy_simulate', {
+      table: 'posts',
+      role: 'anon',
+      operation: 'delete',
+      query: 'id=eq.p1',
+    });
+    expect(refused.isError).toBe(true);
   });
 
   it('cannot be given user metadata, because the shape has nowhere to put it', async () => {
