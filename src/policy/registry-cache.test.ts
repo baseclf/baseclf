@@ -186,48 +186,49 @@ function gatedExecutor(): { executor: D1Executor; fail: (cause: Error) => void }
 }
 
 describe('F4: what happens to an isolate that saw a broken registry', () => {
-  it('recovers once the data is repaired, rather than staying broken until it recycles', async () => {
+  it('recovers once the failure clears, rather than staying broken until it recycles', async () => {
     // 🔴 This test asserted the opposite until the bug it described was fixed.
     // `cached ??= loadRegistry(...)` stored the promise, and a rejected promise is
-    // not null, so `??=` never replaced it: one malformed row broke the isolate for
-    // as long as it lived, and repairing the data changed nothing.
+    // not null, so `??=` never replaced it: one failed load broke the isolate for
+    // as long as it lived, and fixing the cause changed nothing.
     //
     // Fail-closed throughout, so this was never a leak. What it was is an outage with
     // no bound on it, which the operator could not end by fixing the cause.
-    await env.DB.prepare(INSERT_POLICY)
-      .bind(
-        'posts',
-        'bad',
-        'select',
-        JSON.stringify(['authenticated']),
-        '{not json',
-        null,
-        '[]',
-        null,
-      )
-      .run();
+    //
+    // ⚠️ The trigger changed on 2026-08-14. It used to be a malformed policy row,
+    // which was the cheapest way to make a load fail. That is no longer a way at
+    // all: a document that cannot be read now drops its own table and the load
+    // succeeds, which is the entire point of that change. What still fails a load
+    // is the platform, so that is what this simulates, and it is the more faithful
+    // trigger anyway since D1 trouble is the real-world cause.
     await env.DB.prepare(
       'INSERT INTO _exposed_tables (table_name, enabled, version) VALUES (?, 1, 1)',
     )
       .bind('posts')
       .run();
-
-    await expect(getRegistry(env.DB)).rejects.toThrow();
-
-    // Asked twice while still broken, because a memo that forgets a failure has to
-    // keep failing for the right reason rather than because it cached one.
-    await expect(getRegistry(env.DB)).rejects.toThrow();
-
-    // Repair it, exactly as an operator would.
-    await env.DB.prepare('DELETE FROM _policies WHERE table_name = ?').bind('posts').run();
     await env.DB.prepare(INSERT_POLICY)
       .bind(...policyRow('read', ['id']))
       .run();
 
+    const unavailable: D1Executor = {
+      prepare(sql: string) {
+        if (sql.includes('_policies')) throw new Error('D1 unavailable');
+        return env.DB.prepare(sql);
+      },
+      batch: (statements) => env.DB.batch(statements),
+    };
+
+    await expect(getRegistry(unavailable)).rejects.toThrow();
+
+    // Asked twice while still broken, because a memo that forgets a failure has to
+    // keep failing for the right reason rather than because it cached one.
+    await expect(getRegistry(unavailable)).rejects.toThrow();
+
+    // The failure clears, exactly as an outage does.
     const registry = await getRegistry(env.DB);
     expect(registry.candidates('posts', 'select', 'authenticated')[0]?.columns).toEqual(['id']);
 
-    // And it is a memo again: the repaired load is held, not repeated.
+    // And it is a memo again: the recovered load is held, not repeated.
     expect(await getRegistry(env.DB)).toBe(registry);
   });
 

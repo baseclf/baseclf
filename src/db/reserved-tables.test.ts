@@ -250,6 +250,13 @@ describe('a policy that reaches an engine table through EXISTS', () => {
     });
     resetRegistry();
 
-    await expect(getRegistry(env.DB)).rejects.toBeInstanceOf(BaseclfError);
+    // Dropped rather than fatal since 2026-08-14. The claim in the comment above
+    // is unchanged and is what is asserted: a document like this never gets to
+    // be the thing deciding who sees a row, because the table it belongs to is
+    // refused outright.
+    const registry = await getRegistry(env.DB);
+
+    expect(registry.definitions.has('posts')).toBe(false);
+    expect(() => registry.resolve('posts', 'select', 'anon', ['id'])).toThrow(BaseclfError);
   });
 });

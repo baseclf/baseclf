@@ -7,7 +7,7 @@
  */
 
 import { env } from 'cloudflare:workers';
-import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { resetCatalogue } from '../db/introspect.js';
 import type { BaseclfError } from '../utils/errors.js';
@@ -165,19 +165,12 @@ describe('documents that cannot be used', () => {
     expect(() => registry.resolve('posts', 'select', 'anon', ['id'])).not.toThrow();
   });
 
-  it('fails closed when an enabled document reaches into an engine table, at the cost of the whole registry', async () => {
-    // 🔴 Measured on 2026-08-13, and it is the one path where this file's own rule
-    // is not applied. The two cases above are handled precisely so that one bad
-    // document cannot take the rest down: a reserved table is dropped and logged,
-    // a disabled one is stored unvalidated. An *enabled* document that fails
-    // validation is neither, so `validateTableDefinition` throws and nothing
-    // catches it, and every other table goes with it.
-    //
-    // What this asserts is the part that is not in question: the direction. No row
-    // comes back from anywhere, so it is an availability failure and not a leak,
-    // and the refusal does not name the engine table that caused it. Whether the
-    // document should instead be dropped and logged, the way its two neighbours
-    // are, is a decision for the owner of this file rather than for a test.
+  it('drops an enabled document that fails validation, and keeps the rest of the registry', async () => {
+    // 🔴 This asserted the opposite until 2026-08-14, because until then the
+    // behaviour was the opposite: one enabled document that failed validation
+    // threw, nothing caught it, and `/rest/v1/*` failed for every table on the
+    // deployment. Measured, then decided, then changed. The test was left
+    // failing on purpose so that whoever made the change had to read the note.
     await registerPolicies(env.DB, {
       table: 'secrets',
       policies: [
@@ -194,28 +187,74 @@ describe('documents that cannot be used', () => {
     });
     resetRegistry();
 
-    // The load itself, which is what "the whole registry" means here.
-    await expect(getRegistry(env.DB)).rejects.toThrow();
+    const registry = await getRegistry(env.DB);
 
-    // The blast radius, asserted rather than described. `posts` has a document
-    // that validates and is still unreachable, because there is no registry left
-    // to ask. The two tests above assert the opposite for their own cases, so this
-    // is the line that separates a dropped document from a fatal one.
-    await expect(
-      getRegistry(env.DB).then((registry) => registry.resolve('posts', 'select', 'anon', ['id'])),
-    ).rejects.toThrow();
+    // The bad table is gone, not repaired. Fail-closed: no definition means the
+    // same refusal a table nobody ever exposed would get.
+    expect(registry.definitions.has('secrets')).toBe(false);
+    expect(() => registry.resolve('secrets', 'select', 'anon', ['id'])).toThrow();
 
-    const error = await getRegistry(env.DB).catch((caught: BaseclfError) => caught);
+    // ⭐ The point of the change, and the assertion that would have failed before
+    // it: a table with a document that validates is unaffected by one that does not.
+    expect(() => registry.resolve('posts', 'select', 'anon', ['id'])).not.toThrow();
+  });
 
-    // ⚠️ `parse` and `validate` raise the same message and the same code, so the
-    // message cannot say which layer refused. `detail` can, and asserting it here
-    // is what keeps the comment above from being a guess: this is the validation
-    // pass reading the catalogue, not the parser reading the shape.
-    expect((error as BaseclfError).detail).toContain('belongs to the engine');
+  it('says out loud which table it dropped and why', async () => {
+    // Dropping quietly would turn a misconfiguration into a table that is simply
+    // gone, with nothing anywhere saying so. The operator gets the full reason,
+    // which is the same split invariant I9 draws: detail to the log, not to the
+    // caller. Asserted rather than assumed, because a log nobody checks is a
+    // comment that happens to compile.
+    const lines: string[] = [];
+    const spy = vi.spyOn(console, 'log').mockImplementation((line: unknown) => {
+      lines.push(String(line));
+    });
 
-    // The same split invariant I9 draws, on this path too: the operator reading
-    // the log sees the table, the caller reading the response does not.
-    expect((error as BaseclfError).message).not.toContain('_exposed_tables');
+    try {
+      await registerPolicies(env.DB, {
+        table: 'secrets',
+        policies: [
+          {
+            name: 'typo',
+            operation: 'select',
+            roles: ['anon'],
+            using: { no_such_column: { _eq: 'x' } },
+            columns: ['id'],
+          },
+        ],
+      });
+      resetRegistry();
+      await getRegistry(env.DB);
+    } finally {
+      spy.mockRestore();
+    }
+
+    const dropped = lines.find((line) => line.includes('was dropped from the registry'));
+    expect(dropped).toBeDefined();
+    expect(dropped).toContain('secrets');
+    expect(dropped).toContain('no_such_column');
+  });
+
+  it('drops a table whose stored JSON is malformed, and keeps the rest', async () => {
+    // The third path to the same outage, and the one nobody had named. Decoding
+    // used to happen while grouping the rows, which put it in front of the
+    // per-table isolation rather than inside it, so a single corrupt column took
+    // every table down with it.
+    await registerPolicies(env.DB, {
+      table: 'secrets',
+      policies: [
+        { name: 'fine', operation: 'select', roles: ['anon'], using: true, columns: ['id'] },
+      ],
+    });
+    await env.DB.prepare('UPDATE _policies SET using_expr = ? WHERE table_name = ?')
+      .bind('{not valid json', 'secrets')
+      .run();
+    resetRegistry();
+
+    const registry = await getRegistry(env.DB);
+
+    expect(registry.definitions.has('secrets')).toBe(false);
+    expect(() => registry.resolve('posts', 'select', 'anon', ['id'])).not.toThrow();
   });
 });
 

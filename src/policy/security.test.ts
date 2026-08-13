@@ -25,9 +25,11 @@ import {
   seedDatabase,
   seedStandardPolicies,
 } from './__fixtures__/schema.js';
+import { parseTableDefinition } from './parse.js';
 import { createPolicyPlugin } from './plugin.js';
 import { getRegistry, resetRegistry } from './registry.js';
 import type { AuthCtx } from './types.js';
+import { validateTableDefinition } from './validate.js';
 
 const ANON: AuthCtx = Object.freeze({ role: 'anon', uid: null, email: null, app: {} });
 
@@ -69,6 +71,35 @@ function outerSelectList(sql: string): string {
   const start = 'select '.length;
   const end = sql.indexOf(' from "');
   return sql.slice(start, end);
+}
+
+/**
+ * Run a stored document through the two passes `loadRegistry` runs on it, and
+ * return whatever they raise.
+ *
+ * ⚠️ Asserted directly rather than through a read, and the reason is the whole
+ * shape of tests 4 and 5. Rule 00 requires these documents to be refused at
+ * validation time. Since 2026-08-14 `loadRegistry` catches that refusal and
+ * drops the one table rather than failing every table on the deployment, so the
+ * code a reader sees is now the generic not-found rather than the diagnostic one.
+ * The guarantee did not move; its blast radius did. Reading only through the
+ * request path would leave the requirement Rule 00 actually names unasserted,
+ * which is how a test ends up passing for a reason unrelated to its name.
+ */
+async function refusalFor(document: {
+  table: string;
+  enabled: boolean;
+  version: number;
+  binds: Record<string, unknown>;
+  policies: unknown[];
+}): Promise<BaseclfError> {
+  const catalogue = await getCatalogue(env.DB);
+  try {
+    validateTableDefinition(catalogue, parseTableDefinition(document));
+  } catch (caught) {
+    return caught as BaseclfError;
+  }
+  throw new Error('The document was accepted, and this test exists because it must not be.');
 }
 
 beforeAll(async () => {
@@ -273,8 +304,28 @@ describe('4. a policy that reads user metadata', () => {
     });
     await refresh();
 
-    const error = await read(ANON, 'posts').catch((caught: BaseclfError) => caught);
-    expect((error as BaseclfError).code).toBe('FORBIDDEN_CLAIM');
+    // The guarantee Rule 00 names, asserted where Rule 00 names it.
+    const refusal = await refusalFor({
+      table: 'posts',
+      enabled: true,
+      version: 1,
+      binds: {},
+      policies: [
+        {
+          name: 'escalation',
+          for: 'select',
+          to: ['anon'],
+          using: { author_id: { _eq: '$auth.user.id' } },
+          columns: ['id'],
+        },
+      ],
+    });
+    expect(refusal.code).toBe('FORBIDDEN_CLAIM');
+
+    // And nothing reaches a reader through it. The code here is the generic
+    // not-found, which is what invariant I5 wants a caller to see: the reason is
+    // in the log, where the operator is.
+    await expect(read(ANON, 'posts')).rejects.toBeInstanceOf(BaseclfError);
   });
 
   it('is refused wherever it appears, including inside a bind', async () => {
@@ -293,8 +344,24 @@ describe('4. a policy that reads user metadata', () => {
     });
     await refresh();
 
-    const error = await read(ANON, 'posts').catch((caught: BaseclfError) => caught);
-    expect((error as BaseclfError).code).toBe('FORBIDDEN_CLAIM');
+    const refusal = await refusalFor({
+      table: 'posts',
+      enabled: true,
+      version: 1,
+      binds: { sneaky: { author_id: { _eq: '$auth.user.role' } } },
+      policies: [
+        {
+          name: 'escalation_via_bind',
+          for: 'select',
+          to: ['anon'],
+          using: { $bind: 'sneaky' },
+          columns: ['id'],
+        },
+      ],
+    });
+    expect(refusal.code).toBe('FORBIDDEN_CLAIM');
+
+    await expect(read(ANON, 'posts')).rejects.toBeInstanceOf(BaseclfError);
   });
 
   it('allows app_metadata, which only the server can write', async () => {
@@ -380,8 +447,30 @@ describe('5. a column name that does not exist', () => {
     });
     await refresh();
 
-    const error = await read(ANON, 'posts').catch((caught: BaseclfError) => caught);
-    expect((error as BaseclfError).code).toBe('UNKNOWN_IDENTIFIER');
+    // 🔴 The DQS defence, asserted at the layer that provides it. D1 has double
+    // quoted string literals enabled, so a mistyped column does not raise: it
+    // comes back as its own name in string form and the predicate quietly stops
+    // filtering. Validation against the catalogue is what turns that into a
+    // refusal, and it is still what does it.
+    const refusal = await refusalFor({
+      table: 'posts',
+      enabled: true,
+      version: 1,
+      binds: {},
+      policies: [
+        {
+          name: 'typo',
+          for: 'select',
+          to: ['anon'],
+          using: { autor_id: { _eq: '$auth.uid' } },
+          columns: ['id'],
+        },
+      ],
+    });
+    expect(refusal.code).toBe('UNKNOWN_IDENTIFIER');
+
+    // And no row is served through the typo, which is the part that matters.
+    await expect(read(ANON, 'posts')).rejects.toBeInstanceOf(BaseclfError);
   });
 });
 

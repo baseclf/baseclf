@@ -125,6 +125,31 @@ async function query<R>(executor: D1Executor, sql: string): Promise<R[]> {
   return result.results ?? [];
 }
 
+/** Decode one table's binds. Called inside the per-table block, never before it. */
+function bindsFor(rows: readonly BindRow[]): Record<string, unknown> {
+  const binds: Record<string, unknown> = {};
+  for (const row of rows) {
+    binds[row.name] = parseJson(row.expression, `Bind "${row.name}" on "${row.table_name}"`);
+  }
+  return binds;
+}
+
+/** Decode one table's policies, in the shape `parseTableDefinition` expects. */
+function policiesFor(rows: readonly PolicyRow[]): unknown[] {
+  return rows.map((row) => {
+    const where = `Policy "${row.name}" on "${row.table_name}"`;
+    return {
+      name: row.name,
+      for: row.operation,
+      to: parseJson(row.roles, `${where} roles`),
+      using: parseJson(row.using_expr, `${where} using`),
+      ...(row.check_expr === null ? {} : { check: parseJson(row.check_expr, `${where} check`) }),
+      columns: parseJson(row.columns, `${where} columns`),
+      ...(row.set_expr === null ? {} : { set: parseJson(row.set_expr, `${where} set`) }),
+    };
+  });
+}
+
 /**
  * Read every policy, turn it into an AST, and check it against the live schema.
  *
@@ -134,6 +159,26 @@ async function query<R>(executor: D1Executor, sql: string): Promise<R[]> {
  * not raise: double quoted string literals are enabled, so the missing column
  * would come back as its own name in string form and the predicate would
  * quietly compare against the wrong thing.
+ *
+ * ## One bad document costs one table
+ *
+ * Every way a stored document can be unusable is contained to the table it
+ * belongs to: malformed JSON in a column, a shape the parser refuses, a
+ * predicate naming something the catalogue does not have. The table is dropped
+ * and the reason is logged; every other table loads as it always did.
+ *
+ * 🔴 This was measured on 2026-08-13 and it was not true then. Two of the three
+ * cases were already contained, and the containment was deliberate, with the
+ * reason written down: a reserved name is dropped, a disabled document is stored
+ * without being validated, both so that a misconfiguration does not become an
+ * outage. The third case, an enabled document that fails validation, was neither.
+ * It threw, nothing caught it, and one bad row made `/rest/v1/*` fail for every
+ * table on the deployment.
+ *
+ * Dropping is fail-closed and the direction is worth being explicit about: a
+ * dropped table has no definition, so `resolve` and `candidates` refuse it the
+ * same way they refuse a table nobody ever exposed. Nothing is served that the
+ * author did not write. What changes is only how far the failure reaches.
  */
 export async function loadRegistry(executor: D1Executor): Promise<Registry> {
   const catalogue = await getCatalogue(executor);
@@ -148,27 +193,19 @@ export async function loadRegistry(executor: D1Executor): Promise<Registry> {
     ),
   ]);
 
-  const bindsByTable = new Map<string, Record<string, unknown>>();
+  // ⚠️ Grouped without being parsed. The JSON in these columns is decoded inside
+  // the per-table block below so that a row holding malformed JSON takes down its
+  // own table and nothing else. Decoding here, which is what this did until the
+  // outage below was measured, put a third total-failure path in front of the
+  // isolation rather than behind it.
+  const bindsByTable = new Map<string, BindRow[]>();
   for (const row of binds) {
-    const bucket = bindsByTable.get(row.table_name) ?? {};
-    bucket[row.name] = parseJson(row.expression, `Bind "${row.name}" on "${row.table_name}"`);
-    bindsByTable.set(row.table_name, bucket);
+    bindsByTable.set(row.table_name, [...(bindsByTable.get(row.table_name) ?? []), row]);
   }
 
-  const policiesByTable = new Map<string, unknown[]>();
+  const policiesByTable = new Map<string, PolicyRow[]>();
   for (const row of policies) {
-    const bucket = policiesByTable.get(row.table_name) ?? [];
-    const where = `Policy "${row.name}" on "${row.table_name}"`;
-    bucket.push({
-      name: row.name,
-      for: row.operation,
-      to: parseJson(row.roles, `${where} roles`),
-      using: parseJson(row.using_expr, `${where} using`),
-      ...(row.check_expr === null ? {} : { check: parseJson(row.check_expr, `${where} check`) }),
-      columns: parseJson(row.columns, `${where} columns`),
-      ...(row.set_expr === null ? {} : { set: parseJson(row.set_expr, `${where} set`) }),
-    });
-    policiesByTable.set(row.table_name, bucket);
+    policiesByTable.set(row.table_name, [...(policiesByTable.get(row.table_name) ?? []), row]);
   }
 
   const definitions = new Map<string, TableDefinition>();
@@ -194,23 +231,54 @@ export async function loadRegistry(executor: D1Executor): Promise<Registry> {
       continue;
     }
 
-    const definition = parseTableDefinition({
-      table: row.table_name,
-      enabled: row.enabled === 1,
-      version: row.version,
-      binds: bindsByTable.get(row.table_name) ?? {},
-      policies: policiesByTable.get(row.table_name) ?? [],
-    });
+    try {
+      const definition = parseTableDefinition({
+        table: row.table_name,
+        enabled: row.enabled === 1,
+        version: row.version,
+        binds: bindsFor(bindsByTable.get(row.table_name) ?? []),
+        policies: policiesFor(policiesByTable.get(row.table_name) ?? []),
+      });
 
-    // A disabled row is configuration, not a mistake, and its policies may well
-    // reference columns that no longer exist. Validating it would turn a
-    // switched-off table into a failure for every other table in the registry.
-    if (!definition.enabled) {
-      definitions.set(definition.table, definition);
-      continue;
+      // A disabled row is configuration, not a mistake, and its policies may well
+      // reference columns that no longer exist. Validating it would turn a
+      // switched-off table into a failure for every other table in the registry.
+      if (!definition.enabled) {
+        definitions.set(definition.table, definition);
+        continue;
+      }
+
+      definitions.set(definition.table, validateTableDefinition(catalogue, definition));
+    } catch (cause) {
+      // 🔴 Only a PolicyError is a statement about the document. Anything else is
+      // a fault in the engine or the platform, and swallowing one would report a
+      // transient failure as a configuration problem while every table it touched
+      // silently disappeared. Rethrown so it stays loud.
+      //
+      // ⚠️ No test covers this line, and the reason is worth writing down rather
+      // than leaving as a gap somebody later reads as an oversight. Nothing
+      // reachable inside this block throws anything else today: the three
+      // functions it calls raise PolicyError and only PolicyError, and
+      // `parseJson` catches everything `JSON.parse` can raise and rewraps it. The
+      // catalogue is materialised before the loop, so a failure loading it never
+      // arrives here. A test written against this would have to reach a path that
+      // does not exist, and would pass for a reason unrelated to what it claims.
+      // It is here for the next function added to the block, not for today.
+      if (!(cause instanceof PolicyError)) throw cause;
+
+      // The whole table is dropped, never individual policies within it. Dropping
+      // one policy and keeping its neighbours is the dangerous version: permissive
+      // policies are combined with OR, so losing a narrow one while a wide one
+      // survives would widen access rather than remove it. Losing the table
+      // refuses every request for it, which is the only direction that is safe.
+      logEvent({
+        event: 'error',
+        code: cause.code,
+        detail:
+          `Table "${row.table_name}" was dropped from the registry and is now refused: ` +
+          (cause.detail ?? cause.message),
+      });
     }
-
-    definitions.set(definition.table, validateTableDefinition(catalogue, definition));
   }
 
   return buildRegistry(definitions, catalogue);
