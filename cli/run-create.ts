@@ -168,7 +168,7 @@ async function resolveCredential(
       // couple of minutes before every expiry in which the command could not be run
       // for a reason the reader could not act on. Measured by hitting it.
       write(note('That Cloudflare login expires shortly. Carrying on with it.'));
-      write(note('If this fails partway, run "npx wrangler login" and try again.'));
+      write(note('If this fails partway, run "npx baseclf login" and try again.'));
       return { token: oauth.token, warnings: [] };
     }
 

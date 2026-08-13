@@ -33,8 +33,9 @@ import type { Catalogue } from '../src/db/introspect.js';
 import { introspect } from '../src/db/introspect.js';
 import { type LintFinding, lintTable } from '../src/policy/lint.js';
 import { loadRegistry } from '../src/policy/registry.js';
-import { POLICY_LOCK_TABLE_DDL } from '../src/policy/schema.js';
+import { POLICY_SCHEMA } from '../src/policy/schema.js';
 import type { TableDefinition } from '../src/policy/types.js';
+import { BaseclfError } from '../src/utils/errors.js';
 import { MAX_REGISTRY_AGE_MS } from '../src/utils/memo.js';
 import {
   type D1Credentials,
@@ -315,6 +316,34 @@ async function releaseLock(endpoint: D1Endpoint, table: string, holder: string):
   }
 }
 
+/**
+ * What to show the operator when the engine refuses their document.
+ *
+ * 🔴 `detail` rather than `message`, and the reason is that this is a terminal and
+ * not an HTTP response. The engine splits the two on purpose: `message` is what a
+ * caller over HTTP may see, and `detail` names the column or the table, which
+ * invariants I5 and I9 keep off the wire because telling "does not exist" apart
+ * from "not yours" is how somebody maps a schema they have no rights to.
+ *
+ * None of that applies here. This runs on the machine of the person who owns the
+ * deployment, against their own database, under their own credential. There is
+ * nobody to withhold it from, and withholding it turns
+ *
+ *   Policy document refers to something that does not exist.
+ *
+ * into a message that cannot be acted on, when the engine already produced
+ *
+ *   Policy "read_published" names column "autor_id" on table "posts", which does
+ *   not exist. Matching is exact and case sensitive.
+ *
+ * Measured on 2026-08-14: an operator hit the first form and could not tell whether
+ * the table was missing or a column name was wrong.
+ */
+function explain(cause: unknown): string {
+  if (cause instanceof BaseclfError && cause.detail !== undefined) return cause.detail;
+  return cause instanceof Error ? cause.message : String(cause);
+}
+
 async function apply(
   endpoint: D1Endpoint,
   document: ReturnType<typeof readPolicyDocument>,
@@ -329,7 +358,7 @@ async function apply(
     catalogue = await introspect(restExecutor(endpoint));
   } catch (cause) {
     write(styledResultLine('deny', 'Could not read the database schema.', style));
-    write(note(cause instanceof Error ? cause.message : String(cause)));
+    write(note(explain(cause)));
     return 'failed';
   }
 
@@ -339,15 +368,21 @@ async function apply(
     write(
       styledResultLine('deny', `That document does not match the schema of "${table}".`, style),
     );
-    write(note(cause instanceof Error ? cause.message : String(cause)));
+    write(note(explain(cause)));
     return 'usage';
   }
 
-  // The lock table, before the lock. `applyEngineSchema` creates it when the Worker
-  // serves its first request, and a deployment can be applied to before it has served
-  // one. The DDL comes from the engine's own constant rather than being written again
-  // here, so there is one definition of the table.
-  await runSql(endpoint, POLICY_LOCK_TABLE_DDL);
+  // 🔴 The whole engine schema, not just the lock table, and the difference is the
+  // one this got wrong. The Worker creates these tables, but only on a request to
+  // `/rest/v1` or `/storage/v1`: `/health` and `/_schema` deliberately do not pay
+  // for it. So a deployment that has been created and checked but never asked for
+  // data has no `_exposed_tables`, and this command used to fail against it with a
+  // raw SQLite error naming a table the reader has never heard of.
+  //
+  // Measured on 2026-08-14 on a fresh deployment, after `doctor` had reported the
+  // engine tables present. `IF NOT EXISTS` throughout, from the engine's own
+  // constant, so there is one definition and running it twice costs nothing.
+  for (const statement of POLICY_SCHEMA) await runSql(endpoint, statement);
 
   const holder = host.newId();
   const lock = acquireLockStatement(table, holder);

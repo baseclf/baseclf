@@ -272,7 +272,13 @@ export function readOAuthCredential(
       lines: [
         'There is no Cloudflare login on this machine yet.',
         `Nothing was found at ${path}`,
-        'Run: npx wrangler login',
+        // ⚠️ `baseclf login` rather than `wrangler login`, and the difference is not
+        // branding. Both run the same Cloudflare flow, but the wrapper refuses to
+        // start when a CLOUDFLARE_API_TOKEN would win over the login and silently
+        // make it do nothing, and it names the account the login landed on. Rule 02
+        // section C1 is a day lost to the first of those, and this line used to send
+        // a first-time reader past both guards on the one run where they matter most.
+        'Run: npx baseclf login',
       ],
     };
   }
@@ -310,7 +316,7 @@ export function readOAuthCredential(
       lines: [
         'There is no readable expiry on that Cloudflare login, so there is no way to tell ' +
           'whether it is still good.',
-        'Run: npx wrangler login',
+        'Run: npx baseclf login',
       ],
     };
   }

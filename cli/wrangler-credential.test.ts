@@ -252,7 +252,11 @@ describe('deciding whether the login is usable', () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.reason).toBe('no-file');
-      expect(result.lines.join(' ')).toContain('wrangler login');
+      // `baseclf login` rather than `wrangler login`: both run the same flow, but
+      // only one refuses to start when an API token would shadow the result, and
+      // only one names the account. This is the first run, which is when both
+      // matter most and when neither is on the reader's mind.
+      expect(result.lines.join(' ')).toContain('baseclf login');
       expect(result.lines.join(' ')).toContain(PATH);
     }
   });

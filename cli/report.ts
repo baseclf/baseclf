@@ -47,8 +47,13 @@ function renderSummary(report: DoctorReport): readonly string[] {
     ];
   }
 
-  const blocking = report.checks.filter((check) => check.verdict === 'deny').length;
-  const worth = report.checks.filter((check) => check.verdict === 'attention').length;
+  // ⚠️ Counted on causes rather than on lines. A check marked `followsFrom` is
+  // printed and still keeps the report from being ok, but it is a way to satisfy
+  // another check rather than a job of its own, and counting it told a reader with
+  // one thing to do that they had three.
+  const causes = report.checks.filter((check) => check.followsFrom === undefined);
+  const blocking = causes.filter((check) => check.verdict === 'deny').length;
+  const worth = causes.filter((check) => check.verdict === 'attention').length;
 
   const counted =
     blocking > 0

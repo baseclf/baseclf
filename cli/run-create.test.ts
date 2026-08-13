@@ -278,12 +278,16 @@ describe('running it a second time', () => {
 });
 
 describe('when it cannot start', () => {
-  it('refuses when there is no login, and names wrangler rather than permissions', async () => {
+  it('refuses when there is no login, and names the login command rather than permissions', async () => {
+    // The "rather than permissions" half is the point and predates the other. Rule 02
+    // section C1 is a day lost to a credential problem whose every symptom pointed at
+    // permissions that were already correct, so this refusal must not send anybody
+    // there.
     const h = harness({ authFileText: undefined });
     const outcome = await runCreate([], h.write, PLAIN, h.host);
 
     expect(outcome).toBe('failed');
-    expect(h.text()).toMatch(/wrangler login/);
+    expect(h.text()).toMatch(/baseclf login/);
     expect(h.text()).not.toMatch(/permission/i);
   });
 

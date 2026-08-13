@@ -224,6 +224,32 @@ describe('refusing before anything is written', () => {
     expect(await runPolicy(['apply', 'p.json'], h.write, PLAIN, h.host)).toBe('usage');
     expect(h.sql().filter((sql) => sql.includes('INSERT'))).toHaveLength(0);
     expect(h.sql().filter((sql) => sql.includes('DELETE'))).toHaveLength(0);
+
+    // 🔴 And it says which column. The engine splits `message` from `detail` so that
+    // an HTTP caller cannot tell "does not exist" from "not yours", which is invariant
+    // I5, and this printed the `message`. On a terminal there is nobody to withhold it
+    // from, and the reader was left with "refers to something that does not exist" and
+    // six columns to guess between. Measured on a real onboarding on 2026-08-14.
+    expect(h.text()).toContain('author_id');
+  });
+
+  it('applies the engine schema first, so a deployment that never served data works', async () => {
+    // 🔴 The engine creates its own tables on the first request to /rest/v1 or
+    // /storage/v1, and deliberately not on the cheap paths. So a deployment that has
+    // been created and checked with `doctor` but never asked for data has none of
+    // them, and this command used to fail against it with a raw SQLite error naming
+    // `_exposed_tables`. Hit on a real onboarding on 2026-08-14.
+    const h = harness({ file: policyDocument() });
+
+    expect(await runPolicy(['apply', 'p.json'], h.write, PLAIN, h.host)).toBe('ok');
+
+    const created = h.sql().filter((sql) => sql.startsWith('CREATE TABLE'));
+    for (const table of ['_exposed_tables', '_policies', '_policy_binds', '_policy_lock']) {
+      expect(created.some((sql) => sql.includes(table))).toBe(true);
+    }
+    // Idempotent, because this runs on every apply and most of them find the tables
+    // already there.
+    for (const sql of created) expect(sql).toContain('IF NOT EXISTS');
   });
 
   it('says a missing file is a missing file', async () => {
@@ -347,9 +373,17 @@ describe('the order the write happens in', () => {
     // mentions SELECT. The statement that exposes the table is now an
     // `INSERT ... SELECT ... WHERE EXISTS`, so the older filter dropped the very
     // statement this test is about and then found no INSERT to assert on.
+    // ⚠️ `CREATE TABLE` is excluded as well now. The command applies the engine's
+    // own schema before it writes, because a deployment that has been created but
+    // never asked for data has no engine tables at all, and the DDL is idempotent
+    // so it runs on every apply. It is not part of the open-and-close ordering this
+    // test is about.
     const writes = h
       .sql()
-      .filter((sql) => sql.includes('_exposed_tables') && !sql.startsWith('SELECT'));
+      .filter(
+        (sql) =>
+          sql.includes('_exposed_tables') && !sql.startsWith('SELECT') && !sql.includes('CREATE'),
+      );
 
     expect(writes[0]).toContain('DELETE');
     expect(writes[writes.length - 1]).toContain('INSERT');

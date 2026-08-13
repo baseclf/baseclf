@@ -43,10 +43,25 @@ function against(deployment: Env): Fetcher {
 }
 
 /** Answers whatever the test says, for failures a real database cannot be put into. */
+/**
+ * A deployment that answers everything, and refuses an unknown table.
+ *
+ * ⚠️ The refusal is the default rather than a 200, because on the engine probe path
+ * a 200 would mean something is badly wrong: an unknown table is a 404, and anything
+ * else says the data path is not working. Defaulting it to 200 like the rest would
+ * have every test here model a broken deployment without saying so.
+ */
+const HEALTHY_BY_DEFAULT: Readonly<Record<string, { status: number; body: string }>> = {
+  '/rest/v1/baseclf_doctor_probe': {
+    status: 404,
+    body: '{"error":"Not found.","code":"NOT_FOUND"}',
+  },
+};
+
 function standIn(answers: Readonly<Record<string, { status: number; body: string }>>): Fetcher {
   return (url) => {
     const path = new URL(url).pathname;
-    const answer = answers[path] ?? { status: 200, body: '{}' };
+    const answer = answers[path] ?? HEALTHY_BY_DEFAULT[path] ?? { status: 200, body: '{}' };
     return Promise.resolve(new Response(answer.body, { status: answer.status }));
   };
 }
@@ -175,6 +190,57 @@ describe('a deployment that is not finished', () => {
     const provider = report.checks.find((check) => check.name === 'provider google');
     expect(provider?.verdict).toBe('attention');
     expect(provider?.copy).toBe(uri);
+  });
+
+  it('refuses to call the engine tables present when it has not checked', async () => {
+    // 🔴 This check used to be a 200 from /_schema, and that endpoint reads the
+    // catalogue with PRAGMA, so it answers on a deployment with no engine tables at
+    // all. Measured on 2026-08-14: doctor said present, and the next command failed
+    // with `no such table: _exposed_tables`.
+    //
+    // The probe now asks a path that cannot answer without them. Anything but a
+    // refusal of the unknown table means the data path is not working.
+    const report = await runDoctor(
+      BASE_URL,
+      standIn({
+        '/rest/v1/baseclf_doctor_probe': { status: 500, body: '{"code":"INTERNAL"}' },
+      }),
+    );
+
+    const engine = report.checks.find((check) => check.name === 'engine');
+    expect(engine?.verdict).toBe('deny');
+    expect(report.ok).toBe(false);
+  });
+
+  it('counts one thing to do when one thing explains the rest', async () => {
+    // ⚠️ Reported "3 things are not finished" for a deployment with no social
+    // provider: the configuration warning plus one line per provider. Configuring
+    // either provider satisfies all three, so it was one job counted three times.
+    // The summary even hedged with "the first one usually explains the rest".
+    const report = await runDoctor(
+      BASE_URL,
+      standIn({
+        '/api/auth/jwks': { status: 200, body: '{"keys":[{"kty":"EC","alg":"ES256"}]}' },
+        '/api/auth/_diagnose': {
+          status: 200,
+          body: JSON.stringify({
+            secret_configured: true,
+            warnings: ['No social provider is configured, so nobody can sign in.'],
+            providers: {
+              google: { configured: false, redirect_uri: `${BASE_URL}/api/auth/callback/google` },
+              github: { configured: false, redirect_uri: `${BASE_URL}/api/auth/callback/github` },
+            },
+          }),
+        },
+      }),
+    );
+
+    // Still printed, still keeps the report from being ok. Just not counted twice
+    // more, because they are ways to satisfy the warning rather than jobs of their own.
+    expect(report.checks.filter((check) => check.name.startsWith('provider'))).toHaveLength(2);
+    expect(report.ok).toBe(false);
+
+    expect(renderReport(report, PLAIN)).toContain('1 thing is not finished');
   });
 
   it('counts attention as not ok, so a script can trust the exit code', async () => {

@@ -59,6 +59,17 @@ export interface Check {
   readonly action?: string;
   /** A value the reader has to copy. Printed unindented by the renderer. */
   readonly copy?: string;
+  /**
+   * The check this one is a consequence of, when it is one.
+   *
+   * ⚠️ Still printed, and still counts against `ok`. What it does not do is add to
+   * the number in the closing line. A deployment with no social provider produced
+   * "3 things are not finished" for what is one thing to do: the configuration
+   * warning says nobody can sign in, and the two provider lines are how to fix that,
+   * not two more jobs. The summary already hedged with "the first one usually
+   * explains the rest", which was the shape of this admitting itself.
+   */
+  readonly followsFrom?: string;
 }
 
 export interface DoctorReport {
@@ -183,11 +194,71 @@ function checkReachable(result: Awaited<ReturnType<typeof probe>>): Check {
 }
 
 /**
- * Are the engine's own tables there.
+ * A table name no schema will have, asked for on the path that needs the engine.
  *
- * Without them every REST request answers 500 carrying a D1 error about a table the
- * reader has never heard of. Fail-closed, so nothing is exposed, but nothing works
- * either and the response says nothing useful.
+ * The leading segment is a plain name rather than an underscore one on purpose: a
+ * reserved name is refused by `assertRoutable` before anything touches the database,
+ * which would make this probe answer without proving a thing.
+ */
+const ENGINE_PROBE_PATH = '/rest/v1/baseclf_doctor_probe';
+
+/**
+ * Are the engine's own tables there, asked of a path that cannot answer without them.
+ *
+ * ⭐ Two things happen on this request, and both are wanted. The engine creates its
+ * tables here if they are missing, because `/rest/v1` is one of the two paths that
+ * does that, and then it refuses the unknown table with a 404. So a 404 means the
+ * engine is able to serve data, and the asking is what makes it true rather than
+ * merely observed.
+ *
+ * ⚠️ Which does mean this check has a side effect, and it is written down rather
+ * than left for somebody to discover: `doctor` warms a deployment that has never
+ * been asked for data. That is the same idempotent DDL the engine runs on its own
+ * first data request, and doing it here is what stops the next command failing with
+ * a raw SQLite error about a table its reader has never heard of.
+ */
+function checkEngineTables(result: Awaited<ReturnType<typeof probe>>): Check {
+  if ('error' in result) {
+    return {
+      name: 'engine',
+      verdict: 'deny',
+      detail: `${ENGINE_PROBE_PATH} did not answer: ${result.error}`,
+    };
+  }
+
+  if (result.status === 404) {
+    return {
+      name: 'engine',
+      verdict: 'allow',
+      detail: 'The engine tables are present, and the data path refuses an unknown table.',
+    };
+  }
+
+  return {
+    name: 'engine',
+    verdict: 'deny',
+    detail:
+      `${ENGINE_PROBE_PATH} answered ${result.status} rather than 404. An unknown table is a ` +
+      'refusal, so anything else means the data path is not working.',
+    action: 'Deploy the engine again, then run this once more.',
+  };
+}
+
+/**
+ * Whether the catalogue endpoint answers.
+ *
+ * 🔴 This used to report "The engine tables are present" on a 200, and that was a
+ * claim it had not checked. `/_schema` reads the catalogue with PRAGMA and needs no
+ * engine table to answer, so it returns 200 on a deployment that has none.
+ *
+ * Measured on 2026-08-14 on a fresh deployment: this reported present, and the very
+ * next command failed with `no such table: _exposed_tables`. The engine creates its
+ * tables on the first request to `/rest/v1` or `/storage/v1` and deliberately not on
+ * the cheap paths, so a deployment that has been created and looked at but never
+ * asked for data genuinely has none.
+ *
+ * Now it says what it measured. The engine tables get their own check below, which
+ * asks a path that needs them.
  */
 function checkSchema(result: Awaited<ReturnType<typeof probe>>): Check {
   if ('error' in result) {
@@ -199,7 +270,7 @@ function checkSchema(result: Awaited<ReturnType<typeof probe>>): Check {
   }
 
   if (result.status === 200) {
-    return { name: 'schema', verdict: 'allow', detail: 'The engine tables are present.' };
+    return { name: 'schema', verdict: 'allow', detail: 'The catalogue endpoint answers.' };
   }
 
   return {
@@ -361,6 +432,10 @@ function checkConfiguration(result: Awaited<ReturnType<typeof probe>>): readonly
               `Register this exact value as an authorized redirect URI in the ${provider} ` +
               'console, then set the two credential variables.',
             copy: status.redirect_uri,
+            // Configuring one provider is what makes the deployment usable, so an
+            // unconfigured provider is a way to satisfy the configuration warning
+            // rather than a separate thing to finish.
+            followsFrom: 'configuration',
           },
     );
   }
@@ -391,16 +466,18 @@ export async function runDoctor(baseUrl: string, fetcher: Fetcher = fetch): Prom
     };
   }
 
-  const [health, schema, keys, diagnose] = await Promise.all([
+  const [health, schema, keys, diagnose, engine] = await Promise.all([
     probe(fetcher, `${origin}/health`),
     probe(fetcher, `${origin}/_schema`),
     probe(fetcher, `${origin}/api/auth/jwks`),
     probe(fetcher, `${origin}/api/auth/_diagnose`),
+    probe(fetcher, `${origin}${ENGINE_PROBE_PATH}`),
   ]);
 
   const checks: readonly Check[] = [
     checkReachable(health),
     checkSchema(schema),
+    checkEngineTables(engine),
     checkKeys(keys),
     ...checkConfiguration(diagnose),
   ];

@@ -84,6 +84,42 @@ Safe, and it is the way to update a deployment. The database, the bucket and the
 signing secret are kept. The secret is never regenerated, because a new one would
 invalidate every session and every token already issued.
 
+### First, a table to expose
+
+BaseCLF governs tables. It does not create them, and there is no migration tooling
+yet, so the schema is yours to make and yours to change.
+
+Two ways, both fine:
+
+- **The Cloudflare dashboard.** Storage and Databases, then D1, then your database,
+  then the Console tab. Paste the SQL and run it. Nothing to install.
+- **`wrangler d1 execute <project> --remote --file schema.sql`**, if you would rather
+  stay in a terminal.
+
+```sql
+CREATE TABLE posts (
+  id         TEXT NOT NULL PRIMARY KEY,
+  title      TEXT NOT NULL,
+  body       TEXT,
+  status     TEXT NOT NULL,
+  author_id  TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+) STRICT;
+
+CREATE INDEX posts_status    ON posts(status);
+CREATE INDEX posts_author_id ON posts(author_id);
+```
+
+The two indexes are not decoration. D1 bills by rows scanned rather than rows
+returned, so a policy that filters on a column with no index is a full table scan on
+every request, charged every time. `baseclf policy lint` checks for exactly this and
+hands back the `CREATE INDEX` to paste.
+
+> The caveat table further down says `wrangler d1 execute` bypasses the engine, and
+> it does. That is the right warning for reading and writing rows, where going around
+> the policies is the whole danger. It is not a warning about `CREATE TABLE`: policies
+> govern rows, not schemas, and there is nothing for them to bypass here.
+
 ### Then expose a table
 
 A deployment on its own exposes nothing. That is the point: a table absent from the
