@@ -25,6 +25,22 @@ const AUTH_SCHEMA: readonly string[] = Object.freeze([
   'CREATE TABLE IF NOT EXISTS "jwks" (id TEXT NOT NULL PRIMARY KEY, private_key TEXT NOT NULL) STRICT',
 ]);
 
+/**
+ * An application table pointing at both an application table and an engine one.
+ *
+ * The shared fixture has no foreign keys at all, so without this the filter in
+ * `schema_describe` has nothing to act on and a mutation removing it survives.
+ * Both directions matter: `post_id` is what a test asserting "no foreign keys
+ * come back" would pass against, which is why it is here.
+ */
+const FOREIGN_KEY_SCHEMA: readonly string[] = Object.freeze([
+  `CREATE TABLE IF NOT EXISTS "comments" (
+     id        TEXT NOT NULL PRIMARY KEY,
+     post_id   TEXT NOT NULL REFERENCES "posts"(id),
+     author_id TEXT NOT NULL REFERENCES "user"(id)
+   ) STRICT`,
+]);
+
 const toolEnv = { ...env, MCP_TOKEN: 'not-used-here' } as unknown as McpToolEnv;
 
 function tool(name: string) {
@@ -46,6 +62,7 @@ beforeAll(async () => {
   await seedDatabase(env.DB);
   await seedStandardPolicies(env.DB);
   for (const statement of AUTH_SCHEMA) await env.DB.prepare(statement).run();
+  for (const statement of FOREIGN_KEY_SCHEMA) await env.DB.prepare(statement).run();
   resetCatalogue();
   resetRegistry();
 });
@@ -162,6 +179,25 @@ describe('schema_describe', () => {
     expect(text).not.toContain('engine');
     expect(text).not.toContain('account');
   });
+
+  it('reports a foreign key into another application table', async () => {
+    // The positive half of the pair below. Without it, dropping every foreign key
+    // would read as "the filter works" instead of as the tool going silent.
+    const { structured } = await call('schema_describe', { table: 'comments' });
+    const keys = (structured as { foreignKeys: { referencesTable: string }[] }).foreignKeys;
+
+    expect(keys.map((key) => key.referencesTable)).toContain('posts');
+  });
+
+  it('never reports a foreign key into a table the engine owns', async () => {
+    // 🔴 A foreign key names a second table, so it is a way back to one the caller
+    // may not address. `schema_list` withholds `user`; describing `comments` would
+    // hand the same name back through a field nobody reads as a table listing.
+    const { structured } = await call('schema_describe', { table: 'comments' });
+    const keys = (structured as { foreignKeys: { referencesTable: string }[] }).foreignKeys;
+
+    expect(keys.map((key) => key.referencesTable)).not.toContain('user');
+  });
 });
 
 describe('policy_list', () => {
@@ -233,5 +269,50 @@ describe('policy_lint', () => {
     const findings = (structured as { findings: { policy: string }[] }).findings;
 
     for (const finding of findings) expect(finding.policy).toContain('.');
+  });
+
+  it('withholds a finding that names a table the engine owns, and says it did', async () => {
+    // 🔴 A finding does not have to be about the table being linted. A predicate
+    // reaching through `_exists` produces a finding whose `table` is the target,
+    // so linting a table the caller may address hands back the name of one they
+    // may not, with a CREATE INDEX naming its columns.
+    //
+    // Reached through a disabled document deliberately, and that is the whole
+    // reason this test can exist: `validateTableDefinition` refuses `_exists`
+    // into an engine table, so an enabled document cannot carry one. A disabled
+    // document is stored unvalidated by `loadRegistry` and linted anyway, which
+    // is the one path where the filter is reachable rather than defence in depth.
+    await registerPolicies(env.DB, {
+      table: 'org_members',
+      enabled: false,
+      policies: [
+        {
+          name: 'reaches_into_the_identity_provider',
+          operation: 'select',
+          roles: ['anon'],
+          using: { _exists: { _table: 'user', _where: { email: { _eq: 'someone@example.com' } } } },
+          columns: ['org_id'],
+        },
+      ],
+    });
+    resetRegistry();
+
+    try {
+      const { structured } = await call('policy_lint');
+      const { findings, withheld } = structured as {
+        findings: { table: string }[];
+        withheld: number;
+      };
+
+      expect(findings.map((finding) => finding.table)).not.toContain('user');
+      // Counted, not silently dropped. A lint that returns less than it found
+      // without saying so reads as a clean bill of health.
+      expect(withheld).toBeGreaterThan(0);
+    } finally {
+      // In `finally` because an assertion above throws, and cleanup written after
+      // one that fails does not run at exactly the moment it matters most.
+      await seedStandardPolicies(env.DB);
+      resetRegistry();
+    }
   });
 });

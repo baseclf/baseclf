@@ -164,6 +164,59 @@ describe('documents that cannot be used', () => {
     expect(registry.definitions.has('_exposed_tables')).toBe(false);
     expect(() => registry.resolve('posts', 'select', 'anon', ['id'])).not.toThrow();
   });
+
+  it('fails closed when an enabled document reaches into an engine table, at the cost of the whole registry', async () => {
+    // 🔴 Measured on 2026-08-13, and it is the one path where this file's own rule
+    // is not applied. The two cases above are handled precisely so that one bad
+    // document cannot take the rest down: a reserved table is dropped and logged,
+    // a disabled one is stored unvalidated. An *enabled* document that fails
+    // validation is neither, so `validateTableDefinition` throws and nothing
+    // catches it, and every other table goes with it.
+    //
+    // What this asserts is the part that is not in question: the direction. No row
+    // comes back from anywhere, so it is an availability failure and not a leak,
+    // and the refusal does not name the engine table that caused it. Whether the
+    // document should instead be dropped and logged, the way its two neighbours
+    // are, is a decision for the owner of this file rather than for a test.
+    await registerPolicies(env.DB, {
+      table: 'secrets',
+      policies: [
+        {
+          name: 'reaches_into_the_engine',
+          operation: 'select',
+          roles: ['anon'],
+          using: {
+            _exists: { _table: '_exposed_tables', _where: { table_name: { _eq: 'posts' } } },
+          },
+          columns: ['id'],
+        },
+      ],
+    });
+    resetRegistry();
+
+    // The load itself, which is what "the whole registry" means here.
+    await expect(getRegistry(env.DB)).rejects.toThrow();
+
+    // The blast radius, asserted rather than described. `posts` has a document
+    // that validates and is still unreachable, because there is no registry left
+    // to ask. The two tests above assert the opposite for their own cases, so this
+    // is the line that separates a dropped document from a fatal one.
+    await expect(
+      getRegistry(env.DB).then((registry) => registry.resolve('posts', 'select', 'anon', ['id'])),
+    ).rejects.toThrow();
+
+    const error = await getRegistry(env.DB).catch((caught: BaseclfError) => caught);
+
+    // ⚠️ `parse` and `validate` raise the same message and the same code, so the
+    // message cannot say which layer refused. `detail` can, and asserting it here
+    // is what keeps the comment above from being a guess: this is the validation
+    // pass reading the catalogue, not the parser reading the shape.
+    expect((error as BaseclfError).detail).toContain('belongs to the engine');
+
+    // The same split invariant I9 draws, on this path too: the operator reading
+    // the log sees the table, the caller reading the response does not.
+    expect((error as BaseclfError).message).not.toContain('_exposed_tables');
+  });
 });
 
 describe('the cache', () => {
