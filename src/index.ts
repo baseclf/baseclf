@@ -15,6 +15,22 @@
  *   3. Better Auth itself.
  */
 
+/**
+ * The published version, read from the manifest rather than written here.
+ *
+ * A hand-kept constant is right on the day it is typed and wrong from then on,
+ * and wrong quietly: nothing fails, the endpoint just reports a number nobody
+ * updated. This reported a literal 0.0.0 for every build until 2026-08-14.
+ *
+ * ⚠️ No `with { type: 'json' }`, and the omission is load bearing. With the
+ * attribute this becomes a standard JSON module, which has only a default export,
+ * so the named form below fails to bundle. `tsc --noEmit` passes it either way, so
+ * a typecheck is not evidence that this file builds. Without the attribute the
+ * bundler's own JSON loader applies, named imports work, and everything else in
+ * the manifest is shaken out rather than shipped: measured at 485.08 KiB gzip with
+ * the whole file embedded, against 483.77 KiB with only this string.
+ */
+import { version as BASECLF_VERSION } from '../package.json';
 import { ensureAuthSchema } from './auth/bootstrap.js';
 import { diagnose } from './auth/diagnose.js';
 import { type AuthEnv, authConfig, getAuth, isAuthPath, verifierConfig } from './auth/index.js';
@@ -800,7 +816,12 @@ async function respond(request: Request, env: Env): Promise<Response> {
 
   try {
     if (url.pathname === '/health') {
-      return Response.json({ status: 'ok', version: '0.0.0' });
+      // ⚠️ The version is the point of this endpoint, not decoration. `status: ok`
+      // is true of a deployment carrying a hole and of the one that patched it,
+      // so an operator asking "am I running the fixed build" has nothing else to
+      // read. This reported 0.0.0 for every build until 2026-08-14, which made
+      // that question unanswerable from outside.
+      return Response.json({ status: 'ok', version: BASECLF_VERSION });
     }
 
     if (url.pathname === '/_schema') {

@@ -19,7 +19,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 
 import worker, { type Env } from '../src/index.js';
 import { POLICY_SCHEMA } from '../src/policy/schema.js';
-import { type Fetcher, runDoctor } from './doctor.js';
+import { type Check, type DoctorReport, type Fetcher, runDoctor } from './doctor.js';
 import { findVoiceViolations, PLAIN } from './output.js';
 import { renderReport } from './report.js';
 
@@ -425,5 +425,68 @@ describe('what the reader actually sees', () => {
     );
 
     expect(rendered.trimEnd().endsWith('baseclf doctor <url>')).toBe(true);
+  });
+});
+
+describe('the closing line, which has to agree with its own count', () => {
+  // Built by hand rather than driven through `runDoctor`. What varies here is the
+  // combination of causes and consequences, and reaching each combination through a
+  // stand-in deployment would be testing which checks fire rather than what the
+  // closing sentence says about them.
+  const report = (checks: readonly Check[]): DoctorReport => ({ ok: false, checks });
+
+  const attention = (name: string, followsFrom?: string): Check => ({
+    name,
+    verdict: 'attention',
+    detail: `${name} is not finished.`,
+    ...(followsFrom === undefined ? {} : { followsFrom }),
+  });
+
+  const oneCauseOneConsequence = [
+    attention('configuration'),
+    attention('provider google', 'configuration'),
+  ];
+
+  it('does not tell a reader with one job to fix them', () => {
+    // ⚠️ The count learned to say "1 thing is" and this sentence did not, so the
+    // change that made the number right left the line telling a reader with one job
+    // to fix "them", and that the first explained "the rest" of a set with no rest
+    // in it. Seen on a real deployment, not in a test.
+    const rendered = renderReport(report(oneCauseOneConsequence), PLAIN);
+
+    expect(rendered).toContain('1 thing is not finished');
+    expect(rendered).not.toContain('Fix them');
+    expect(rendered).not.toContain('explains the rest');
+  });
+
+  it('accounts for the marked lines it chose not to count', () => {
+    // The gap this sentence exists to close. Two lines are printed and marked, and
+    // the reader is told one, so without this the count reads as an undercount by
+    // somebody who can see both lines.
+    const rendered = renderReport(report(oneCauseOneConsequence), PLAIN);
+
+    expect(rendered).toContain('The other marked lines follow from it.');
+    expect(findVoiceViolations(rendered)).toEqual([]);
+  });
+
+  it('stops at the count when nothing follows from it', () => {
+    // Nothing to reconcile: one marked line, one counted. A sentence explaining a
+    // gap that is not there would send the reader looking for a line that does not
+    // exist.
+    const rendered = renderReport(report([attention('configuration')]), PLAIN);
+
+    expect(rendered).toContain('1 thing is not finished.');
+    expect(rendered).not.toContain('follow from it');
+    expect(rendered).not.toContain('Fix them');
+  });
+
+  it('keeps the ordering hint when more than one thing is a cause', () => {
+    // The plural line is worth keeping rather than replacing. With several
+    // independent causes the print order is the order to work through, and the
+    // first often makes the others moot.
+    const rendered = renderReport(report([attention('configuration'), attention('cors')]), PLAIN);
+
+    expect(rendered).toContain('2 things are not finished');
+    expect(rendered).toContain('Fix them in the order above');
   });
 });

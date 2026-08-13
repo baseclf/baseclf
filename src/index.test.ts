@@ -1,6 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { beforeAll, describe, expect, it } from 'vitest';
 
+import { version } from '../package.json';
 import { resetCatalogue } from './db/index.js';
 import worker from './index.js';
 
@@ -21,6 +22,18 @@ describe('worker', () => {
     const response = await call('/health');
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({ status: 'ok' });
+  });
+
+  it('reports the published version at /health, not a literal', async () => {
+    // ⚠️ The check above passes for every version, including the literal 0.0.0 this
+    // answered with until 2026-08-14. `status: ok` is true of a deployment carrying
+    // a hole and of the one that patched it, so the version is the only thing here
+    // that answers "am I running the fixed build", and for months it answered
+    // nothing. Found by curling a deployment, not by a test.
+    const body = (await (await call('/health')).json()) as { version: string };
+
+    expect(body.version).toBe(version);
+    expect(body.version).not.toBe('0.0.0');
   });
 
   it('describes user tables at /_schema', async () => {

@@ -60,12 +60,29 @@ function renderSummary(report: DoctorReport): readonly string[] {
       ? `${blocking} ${blocking === 1 ? 'problem stops' : 'problems stop'} this deployment working`
       : `${worth} ${worth === 1 ? 'thing is' : 'things are'} not finished`;
 
-  return [
-    '',
-    `  ${counted}. Fix them in the order above: the first one usually explains the rest.`,
-    '',
-    '  Check: baseclf doctor <url>',
-  ];
+  // ⚠️ The count and the sentence after it have to agree, and they did not. The
+  // count learned to say "1 thing is" while the guidance stayed written for the
+  // plural, so a reader with one job was told to "fix them" and that "the first
+  // one explains the rest" of a set with no rest in it.
+  //
+  // The sentence also has a second job worth keeping. The count is of causes,
+  // while the report prints the checks that follow from them as well, so a reader
+  // can see four marked lines and be told one. With a single cause, saying that
+  // the others follow from it is the entire explanation of that gap. With nothing
+  // following, there is nothing to explain and the line stops at the count.
+  const count = blocking > 0 ? blocking : worth;
+  const following = report.checks.filter(
+    (check) => check.followsFrom !== undefined && check.verdict !== 'allow',
+  ).length;
+
+  const guidance =
+    count > 1
+      ? ' Fix them in the order above: the first one usually explains the rest.'
+      : following > 0
+        ? ' The other marked lines follow from it.'
+        : '';
+
+  return ['', `  ${counted}.${guidance}`, '', '  Check: baseclf doctor <url>'];
 }
 
 export function renderReport(report: DoctorReport, style: Style): string {
