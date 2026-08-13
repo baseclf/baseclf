@@ -10,9 +10,11 @@
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
 
+import { version } from '../../package.json';
 import worker, { type Env } from '../index.js';
 import { createTokenVerifier } from './auth.js';
-import { metadataUrlFor } from './server.js';
+import { createServer, metadataUrlFor } from './server.js';
+import type { McpToolEnv } from './tools/index.js';
 
 const BASE = 'https://baseclf.test';
 const TOKEN = 'a-shared-secret-of-ordinary-length';
@@ -252,5 +254,30 @@ describe('the discovery document', () => {
 
   it('sits under .well-known, where RFC 9728 says to look', async () => {
     expect(metadataUrlFor(BASE)).toBe(`${BASE}/.well-known/oauth-protected-resource/mcp`);
+  });
+});
+
+describe('what the server says it is', () => {
+  it('names the published version, not one frozen when the file was written', async () => {
+    // ⚠️ This said 0.1.0 while the package was 0.4.0. It is the version handed to a
+    // client in the handshake, so it is the number somebody would quote while
+    // reporting that a tool misbehaved, and it named a release three versions back.
+    //
+    // Third surface with this same fault found in one day: /health answered a literal
+    // 0.0.0, and neither binary had a --version at all. A version typed by hand is
+    // right on the day it is typed.
+    const server = createServer(configured as McpToolEnv);
+
+    // The SDK keeps its own info private, and there is no request in this revision of
+    // the spec that hands it back: the initialize handshake is gone and capabilities
+    // travel per request. So the reach is through the public `server` property into a
+    // private field, which is deliberate and narrow rather than a way of testing an
+    // implementation detail: this value has no other observable surface.
+    const info = (server.server as unknown as { _serverInfo: { name: string; version: string } })
+      ._serverInfo;
+
+    expect(info.name).toBe('baseclf');
+    expect(info.version).toBe(version);
+    expect(info.version).not.toBe('0.1.0');
   });
 });

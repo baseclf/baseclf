@@ -38,6 +38,9 @@ import {
 } from '@modelcontextprotocol/server';
 import { createMcpHandler } from 'agents/mcp/server';
 
+// No import attribute, deliberately. See the note in `src/index.ts`.
+import { version as BASECLF_VERSION } from '../../package.json';
+
 import { createTokenVerifier, MCP_SCOPE, protectedResourceMetadata } from './auth.js';
 import { type McpToolEnv, registerTools } from './tools/index.js';
 
@@ -61,7 +64,11 @@ export function metadataUrlFor(origin: string): string {
  * request registers four objects and reads no database.
  */
 export function createServer(env: McpToolEnv): McpServer {
-  const server = new McpServer({ name: 'baseclf', version: '0.1.0' });
+  // ⚠️ Read from the manifest. This said 0.1.0 while the package was 0.4.0, which is
+  // the version a client is handed in the handshake and the one it would quote while
+  // reporting that a tool behaved oddly. Third surface with the same fault in one
+  // day: `/health` answered 0.0.0 and neither binary had a `--version` at all.
+  const server = new McpServer({ name: 'baseclf', version: BASECLF_VERSION });
   registerTools(server, env);
   return server;
 }
