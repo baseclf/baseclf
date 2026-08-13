@@ -1,5 +1,12 @@
 /**
- * Ask a deployed BaseCLF for its tool list, and report what came back.
+ * Ask a deployed BaseCLF for its tool list, then call every tool on it.
+ *
+ * The second half is the point. `tools/list` answers the same way whether the
+ * engine behind a tool reaches D1 or was never wired to it, and four of these
+ * five shipped in a release having proved only that they had been registered.
+ * Two of the calls below are expected to be refused, and the refusal is what
+ * passes: one writes a column the policy does not grant, and one asks for an
+ * operation with no policy at all.
  *
  * Written as a file rather than as a shell one-liner on purpose. A JSON-RPC body
  * quoted inside cmd.exe is exactly the shape `rules/01` section G10 records as
@@ -22,6 +29,16 @@
 
 const DEFAULT_BASE = 'https://baseclf.raspy-firefly-4c0b.workers.dev';
 const PROTOCOL_VERSION = '2026-07-28';
+
+/**
+ * ⚠️ This probe expects the demo fixture: a table `posts` with a select policy
+ * for `anon` and an `update_own` for `authenticated` that grants `title` and does
+ * not grant `author_id`. Pointed at a deployment carrying anything else it will
+ * fail, and the failure will name which call disagreed. That is deliberate: a
+ * probe that skipped whatever it did not find would report a deployment with no
+ * policies at all as a clean run.
+ */
+const TABLE = 'posts';
 
 const EXPECTED = [
   'policy_lint',
@@ -90,6 +107,39 @@ function rpc(base, token, method, params) {
   });
 }
 
+/**
+ * One call, with the envelope unwrapped and the two failure kinds kept apart.
+ *
+ * `error` means the request never reached the tool: a protocol mistake by this
+ * probe, or a deployment that cannot answer. `refusal` means the tool ran and
+ * said no, which for several calls below is the passing result rather than the
+ * failing one. Collapsing them would report a working fail-closed engine as a
+ * broken probe, and a broken probe as a working engine.
+ */
+async function callTool(base, token, name, args) {
+  const response = await rpc(base, token, 'tools/call', { name, arguments: args });
+  const text = await response.text();
+
+  let envelope;
+  try {
+    envelope = parseBody(response.headers.get('content-type') ?? '', text);
+  } catch {
+    return { error: `body was neither JSON nor SSE: ${text.slice(0, 200)}` };
+  }
+
+  if (envelope?.error !== undefined) {
+    return { error: `JSON-RPC ${envelope.error.code}: ${envelope.error.message}` };
+  }
+  if (envelope?.result === undefined) {
+    return { error: `no result. HTTP ${response.status}, body: ${text.slice(0, 200)}` };
+  }
+  if (envelope.result.isError === true) {
+    return { refusal: JSON.stringify(envelope.result.content) };
+  }
+
+  return { structured: envelope.result.structuredContent ?? {} };
+}
+
 async function main() {
   const base = (process.argv[2] ?? DEFAULT_BASE).replace(/\/+$/, '');
   const token = process.env.MCP_TOKEN;
@@ -145,34 +195,38 @@ async function main() {
   // Listing a tool only proves it was registered. Calling one proves the engine
   // behind it can reach D1, load a registry and compile, which is the part that
   // has only ever run in a local test.
-  const called = await rpc(base, token, 'tools/call', {
-    name: 'policy_simulate',
-    arguments: { table: 'posts', role: 'anon' },
-  });
-  const calledText = await called.text();
-  const envelope = parseBody(called.headers.get('content-type') ?? '', calledText);
+  //
+  // ⚠️ Every tool is called, not one. A listing looks the same whether the engine
+  // behind a tool works or was never wired to D1 at all, and four of these went
+  // out in a release having proved only that they had been registered.
+  console.log('\nCalling each one, because being listed is not reaching D1:');
 
-  if (envelope?.error !== undefined) {
-    console.error(`\nJSON-RPC error ${envelope.error.code}: ${envelope.error.message}`);
-    console.error('That is this probe being wrong about the protocol, not the deployment.');
+  for (const [name, args] of [
+    ['schema_list', {}],
+    ['schema_describe', { table: TABLE }],
+    ['policy_list', {}],
+    ['policy_lint', {}],
+  ]) {
+    const call = await callTool(base, token, name, args);
+    if (call.error !== undefined) {
+      console.error(`\n${name}: ${call.error}`);
+      return 1;
+    }
+    if (call.refusal !== undefined) {
+      console.error(`\n${name} refused: ${call.refusal}`);
+      return 1;
+    }
+    console.log(`  ${name.padEnd(16)} answered`);
+  }
+
+  const read = await callTool(base, token, 'policy_simulate', { table: TABLE, role: 'anon' });
+  if (read.error !== undefined || read.refusal !== undefined) {
+    console.error(`\npolicy_simulate select: ${read.error ?? read.refusal}`);
     return 1;
   }
 
-  const result = envelope?.result;
-  if (result === undefined) {
-    // Printed verbatim rather than summarised. A summary of a shape you did not
-    // predict is a guess wearing a diagnosis.
-    console.error(`\nNo result in the response. HTTP ${called.status}, body:`);
-    console.error(calledText.slice(0, 500));
-    return 1;
-  }
-  if (result.isError === true) {
-    console.error('\npolicy_simulate refused:', JSON.stringify(result.content));
-    return 1;
-  }
-
-  const structured = result.structuredContent ?? {};
-  console.log('\npolicy_simulate on posts as anon:');
+  const structured = read.structured;
+  console.log(`\npolicy_simulate on ${TABLE} as anon:`);
   console.log(`  policies       ${JSON.stringify(structured.policies)}`);
   console.log(`  columns        ${JSON.stringify(structured.columns)}`);
   console.log(`  parameterCount ${structured.parameterCount}`);
@@ -184,6 +238,65 @@ async function main() {
   if (structured.parameters !== undefined) {
     console.error('\nParameter values came back without being asked for.');
     return 1;
+  }
+
+  // The write path, which is the half that cannot be read off a policy by eye.
+  // SQLite has no WITH CHECK, so the condition on the row as it will be is built
+  // by rewriting every column reference in `check` into its post-image, and the
+  // result is a statement whose safety is not visible from the policy that
+  // produced it. Printed rather than asserted, because the shape is what a policy
+  // author reads, and an assertion on its text would break on a reworded policy
+  // while saying nothing about whether the engine still refuses the right things.
+  const write = await callTool(base, token, 'policy_simulate', {
+    table: TABLE,
+    role: 'authenticated',
+    operation: 'update',
+    claims: { uid: 'u_1' },
+    body: { title: 'edited' },
+  });
+  if (write.error !== undefined || write.refusal !== undefined) {
+    console.error(`\npolicy_simulate update: ${write.error ?? write.refusal}`);
+    return 1;
+  }
+  console.log(`\npolicy_simulate update on ${TABLE} as authenticated:`);
+  console.log(`  policies       ${JSON.stringify(write.structured.policies)}`);
+  console.log(`  sql            ${write.structured.sql}`);
+
+  // Two refusals, and here the refusal is the passing result. These are asserted
+  // rather than printed: a deployment that compiled either one would be fail-open,
+  // and a printed line is something a reader skims past.
+  //
+  // ⚠️ The refusal is asserted, its wording is not. The code behind both is the
+  // single not-found that I5 asks for on "does not exist" and "not allowed" alike,
+  // so matching the message would tie this probe to prose rather than to the rule.
+  for (const [what, args] of [
+    // A column the policy does not grant, sent the way a caller would if they were
+    // trying to hand the row to somebody else. `update_own` grants title, body and
+    // status, so `author_id` has to be refused before anything is compiled.
+    [
+      'writing a column the policy does not grant',
+      {
+        table: TABLE,
+        role: 'authenticated',
+        operation: 'update',
+        claims: { uid: 'u_1' },
+        body: { title: 'edited', author_id: 'u_2' },
+      },
+    ],
+    // No policy exists for this pair at all, and I1 says that is a refusal rather
+    // than an empty result.
+    ['an operation with no policy at all', { table: TABLE, role: 'anon', operation: 'delete' }],
+  ]) {
+    const call = await callTool(base, token, 'policy_simulate', args);
+    if (call.error !== undefined) {
+      console.error(`\n${what}: ${call.error}`);
+      return 1;
+    }
+    if (call.refusal === undefined) {
+      console.error(`\nCompiled rather than refused: ${what}. That is fail-open.`);
+      return 1;
+    }
+    console.log(`\n  refused, as it must be: ${what}`);
   }
 
   return 0;
