@@ -108,7 +108,17 @@ CREATE TABLE posts (
 
 CREATE INDEX posts_status    ON posts(status);
 CREATE INDEX posts_author_id ON posts(author_id);
+
+INSERT INTO posts (id, title, body, status, author_id, created_at) VALUES
+  ('p_1', 'Published by u_1', 'anyone may read this',   'published', 'u_1', 1),
+  ('p_2', 'Draft by u_1',     'only u_1 may read this', 'draft',     'u_1', 2),
+  ('p_3', 'Published by u_2', 'anyone may read this',   'published', 'u_2', 3),
+  ('p_4', 'Draft by u_2',     'only u_2 may read this', 'draft',     'u_2', 4);
 ```
+
+Four rows, two of them drafts. The split is what makes the next two steps show you
+anything: a policy applied to an empty table returns an empty list whether it works or
+not.
 
 The two indexes are not decoration. D1 bills by rows scanned rather than rows
 returned, so a policy that filters on a column with no index is a full table scan on
@@ -126,7 +136,7 @@ A deployment on its own exposes nothing. That is the point: a table absent from 
 policy tables is a table nobody can reach, so there is no state where you forgot to
 turn security on.
 
-Write what may be read, and by whom:
+Write what may be read, and by whom. Save this as `posts.json`:
 
 ```json
 {
@@ -134,30 +144,66 @@ Write what may be read, and by whom:
   "enabled": true,
   "policies": [
     {
-      "name": "read_own",
+      "name": "read_published",
       "for": "select",
-      "to": ["authenticated"],
-      "using": { "author_id": { "_eq": "$auth.uid" } },
-      "columns": ["id", "title", "body", "author_id"]
+      "to": ["anon"],
+      "using": { "status": { "_eq": "published" } },
+      "columns": ["id", "title", "body", "status", "author_id", "created_at"]
     }
   ]
 }
 ```
 
+That grants one thing to one role: a caller who is not signed in may read published
+rows. Drafts are not excluded by a rule, they are simply never granted, which is the
+same distinction that makes a table with no document unreachable rather than open.
+`examples/posts.policy.json` in this repository carries the fuller set, including what
+a signed-in caller may read and what they may write.
+
 ```bash
-npx baseclf policy apply posts.json
+npx baseclf policy apply posts.json --project your-project-name
 ```
+
+`--project` names the deployment, and it is the same name you gave `create-baseclf`,
+which is also the name of the database. It defaults to `baseclf`, so you can leave it
+off only if you accepted that default. Every `policy` command takes it.
 
 It refuses the document before it stores anything if the policy breaks a rule: a
 reference to `user_metadata`, which the end user can write, or a column that does not
 exist in your schema. Both are checked by the same code the engine runs, not by a
 second copy of it.
 
+### See it working
+
+Give it half a minute first. A deployment answers from the policies it has already
+loaded and re-reads once those are about thirty seconds old, so a request sent the
+instant `apply` returns can still be answered under the previous rules, which here
+means no rules at all. The section on changing a policy below has the detail.
+
+```bash
+curl https://your-project.your-subdomain.workers.dev/rest/v1/posts
+```
+
+```json
+[{"id":"p_1","title":"Published by u_1","body":"anyone may read this","status":"published","author_id":"u_1","created_at":1},
+ {"id":"p_3","title":"Published by u_2","body":"anyone may read this","status":"published","author_id":"u_2","created_at":3}]
+```
+
+Four rows in the table, two came back, and there is no filter in the URL. The drafts
+are not hidden by the query, they are outside what the caller was granted, so no
+request they can write reaches them. That is the whole product, and it is the one
+thing worth checking before reading further.
+
+Two limits on what that output proves, since it is easy to read more into it. It shows
+the `anon` path only, because signing in needs an OAuth app you have not set up yet.
+And it says nothing about writes: `wrangler d1 execute` and the D1 console still write
+straight to the database, and always will. See the caveat table below.
+
 To see what is exposed, and what is exposed but has no rules and therefore refuses
 every request:
 
 ```bash
-npx baseclf policy list
+npx baseclf policy list --project your-project-name
 ```
 
 Applying is safe to repeat and is how you change a policy. It replaces every rule on
@@ -172,7 +218,7 @@ shows up under load. It is a line on a bill, every request, for as long as the p
 exists.
 
 ```bash
-npx baseclf policy lint
+npx baseclf policy lint --project your-project-name
 ```
 
 It names the policy, says which column has no index, and gives you the statement:
@@ -196,7 +242,7 @@ about can still be slow.
 To stop exposing a table and delete its rules:
 
 ```bash
-npx baseclf policy rm posts --confirm
+npx baseclf policy rm posts --confirm --project your-project-name
 ```
 
 The rules are not stored anywhere else, so keep the document that made them. Without
