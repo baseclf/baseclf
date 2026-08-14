@@ -60,7 +60,7 @@ Two questions, both with a default you can accept by pressing enter.
 
 | Question | Why it is asked |
 |---|---|
-| Project name | It names the database, the bucket and the Worker on your account. A name that collides takes over an existing deployment on the next run rather than making a second one. |
+| Project name | It names the database, the bucket and the Worker on your account, and every `baseclf policy` command afterwards takes it as `--project`. A name that collides takes over an existing deployment on the next run rather than making a second one. |
 | Frontend origin | Where your app runs. Without it a browser on any other origin cannot call the API at all, and the error it shows says nothing about this setting. |
 
 The signing secret is generated, not asked for. Which OAuth provider you want is
@@ -232,11 +232,15 @@ npx baseclf policy lint --project your-project-name
 It names the policy, says which column has no index, and gives you the statement:
 
 ```
-▲ posts.read_own: "author_id" has no index, so every request that runs this
+▲ posts.update_own: "author_id" has no index, so every request that runs this
   policy scans "posts" in full. D1 bills for rows scanned.
 
 CREATE INDEX "posts_author_id_idx" ON "posts" ("author_id");
 ```
+
+The walkthrough above indexes both columns its policy touches, so you will see
+nothing there. That is what a quiet linter looks like, and it is worth running once
+after every policy you write rather than once at the start.
 
 `apply` runs the same checks on the document it just stored, so you see this at the
 moment you write the policy rather than on a bill later. It also warns when `_neq` is
@@ -487,18 +491,21 @@ These were measured against a real D1 database, not read from documentation.
   It does roll back on failure.
 - **`rows_read` counts rows scanned, not returned.** An unindexed policy column
   is a recurring bill, not a latency problem. Every response carries an
-  `x-baseclf-rows-read` header so you can see it; the linter that warns about it
-  automatically is not built yet.
+  `x-baseclf-rows-read` header so you can see it, and `baseclf policy lint` names
+  the columns that will cause it.
 - **10 GB per database, and Cloudflare says it cannot be raised.**
 - **Double-quoted string literals are enabled.** A misspelled column returns the
   string instead of raising, so every identifier is matched against the live
   catalogue before a query is built.
-- **A policy change is not instant, and nothing bounds the delay.** Each Worker
-  instance reads the policies once and keeps them until it recycles. Storing a new
-  policy does not reach an instance that has already started, so an instance can go
-  on answering under the previous rules. Widening is harmless; **narrowing is the
-  case to be careful with**, because the old, wider rule is the one still being
-  served. A fleet-wide invalidation is on the roadmap and is not built.
+- **A policy change is not instant. It lands within about thirty seconds.** Each
+  Worker instance answers from the policies it has loaded and re-reads once those
+  are half a minute old, so a change may take effect sooner and will not take
+  longer. Widening is harmless; **narrowing is the case to be careful with**,
+  because until an instance re-reads, the old and wider rule is the one being
+  served. This is a bound, not fleet-wide invalidation: instances re-read on their
+  own schedules, so inside the window some have the change and others do not. It is
+  also a property of the deployed engine rather than of the CLI, so a deployment
+  created by an older `create-baseclf` does not have it until you redeploy.
 - **Two people applying a policy to the same table at the same time can leave the
   union of both.** Permissive policies are combined with OR, so the result is wider
   than either person wrote. The second one to finish is told its write failed, which
@@ -513,9 +520,9 @@ These were measured against a real D1 database, not read from documentation.
 | **V2** | Policy engine, write path with `WITH CHECK` | shipped |
 | **V3** | Auth: Google, GitHub, JWT | shipped |
 | **V4** | Storage on R2 | shipped |
-| **V5** | One-command deploy | shipped ← **you are here** |
-| V6 | MCP server | |
-| V7 | Studio, including the policy simulator | |
+| **V5** | One-command deploy | shipped |
+| **V6** | MCP server | **five read tools live, including the policy simulator** ← **you are here** |
+| V7 | Studio | |
 | V8 | SDK, docs, sample application | |
 
 What "shipped" means here: it runs, it has tests, and V5 was proved by
