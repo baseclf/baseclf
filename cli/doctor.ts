@@ -523,7 +523,16 @@ export async function runDoctor(baseUrl: string, fetcher: Fetcher = fetch): Prom
 
   let reachable = checkReachable(health);
 
-  if (reachable.verdict !== 'allow' && [schema, keys, diagnose, engine].some(answeredNormally)) {
+  // ⚠️ `attention` rather than "not allow", and the difference decides whether a second
+  // request can tell anybody anything. `checkReachable` says attention for a failed
+  // request and for a propagating status, which are the two answers that can come back
+  // different a moment later. It says deny for a definite status this engine does not
+  // produce, and asking again for one of those buys a round trip to be told the same
+  // thing, while turning a state worth alarm into a state worth a glance.
+  if (
+    reachable.verdict === 'attention' &&
+    [schema, keys, diagnose, engine].some(answeredNormally)
+  ) {
     reachable = checkReachable(await probe(fetcher, `${origin}/health`), 'again');
   }
 

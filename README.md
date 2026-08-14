@@ -98,11 +98,11 @@ Two ways, both fine:
 
 ```sql
 CREATE TABLE posts (
-  id         TEXT NOT NULL PRIMARY KEY,
-  title      TEXT NOT NULL,
-  body       TEXT,
-  status     TEXT NOT NULL,
-  author_id  TEXT NOT NULL,
+  id         TEXT    NOT NULL PRIMARY KEY,
+  title      TEXT    NOT NULL,
+  body       TEXT    NOT NULL,
+  status     TEXT    NOT NULL,
+  author_id  TEXT    NOT NULL,
   created_at INTEGER NOT NULL
 ) STRICT;
 
@@ -129,6 +129,12 @@ hands back the `CREATE INDEX` to paste.
 > it does. That is the right warning for reading and writing rows, where going around
 > the policies is the whole danger. It is not a warning about `CREATE TABLE`: policies
 > govern rows, not schemas, and there is nothing for them to bypass here.
+>
+> The four rows above are row writes, so that warning does reach them, and the answer
+> is that it does not matter here rather than that it does not apply. Nothing governs
+> what the owner of a database puts in it. Policies decide what a **caller** may read
+> and write through the API, and seeding your own table from your own console is not
+> a caller. It stops being harmless the moment your users' rows arrive the same way.
 
 ### Then expose a table
 
@@ -177,8 +183,10 @@ second copy of it.
 
 Give it half a minute first. A deployment answers from the policies it has already
 loaded and re-reads once those are about thirty seconds old, so a request sent the
-instant `apply` returns can still be answered under the previous rules, which here
-means no rules at all. The section on changing a policy below has the detail.
+instant `apply` returns can still be answered under what came before. Here that is a
+table nobody had exposed yet, and the answer for one of those is a refusal, so an
+early request returns `404` rather than everything. The section on changing a policy
+below has the detail.
 
 ```bash
 curl https://your-project.your-subdomain.workers.dev/rest/v1/posts
@@ -189,10 +197,10 @@ curl https://your-project.your-subdomain.workers.dev/rest/v1/posts
  {"id":"p_3","title":"Published by u_2","body":"anyone may read this","status":"published","author_id":"u_2","created_at":3}]
 ```
 
-Four rows in the table, two came back, and there is no filter in the URL. The drafts
-are not hidden by the query, they are outside what the caller was granted, so no
-request they can write reaches them. That is the whole product, and it is the one
-thing worth checking before reading further.
+Four rows in the table, two came back, and there is no filter in the URL. The two
+drafts were not left out by the query. They are outside what this caller was granted,
+so there is no request they can write that reaches those rows. That is the whole
+product, and it is the one thing worth checking before reading further.
 
 Two limits on what that output proves, since it is easy to read more into it. It shows
 the `anon` path only, because signing in needs an OAuth app you have not set up yet.

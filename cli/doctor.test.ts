@@ -489,6 +489,21 @@ describe('a /health that disagrees with every other probe', () => {
     expect(reachable?.action).not.toContain('Wait up to');
   });
 
+  it('does not ask again about an answer that cannot change', async () => {
+    // ⚠️ A definite status this engine does not produce is a deny, and a second
+    // request returns the same one. Asking would buy a round trip to be told the same
+    // thing, and the retry reports at attention, so it would also turn a state worth
+    // alarm into a state worth a glance. The first draft of this checked "not allow"
+    // and did exactly that.
+    const { fetcher, attempts } = healthGives(403, 403);
+    const report = await runDoctor(BASE_URL, fetcher);
+    const reachable = report.checks.find((check) => check.name === 'reachable');
+
+    expect(attempts()).toBe(1);
+    expect(reachable?.verdict).toBe('deny');
+    expect(reachable?.action).toContain('serving this hostname');
+  });
+
   it('does not ask again when nothing else answered either', async () => {
     // The case the retry must stay out of. A genuinely new address gives this on
     // every endpoint, the original advice is right, and a second request would say
