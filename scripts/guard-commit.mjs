@@ -34,7 +34,14 @@ const PRIVATE_PATHS = [
   /^AGENTS\.md$/,
   /^Baas With CLF\.md$/,
   /^baas-cloudflare-mvp-plan\.md$/,
+  // Three names for one thing. Agent tooling mirrors the same material under its own
+  // directory: `.agents/skills/` was byte for byte identical to `.claude/skills/`.
+  // ⚠️ A fourth tool means a fourth name here, and nothing catches that but reading
+  // `git status` before staging: `--all` sees tracked files, so untracked copies are
+  // exactly what it cannot see.
   /^\.claude\//,
+  /^\.agents\//,
+  /^\.codex\//,
   /^probe\//,
   /^_design_system\/(?!README\.md|tokens\.json|theme\.css)/,
   /^\.codegraph\//,

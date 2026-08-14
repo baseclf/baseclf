@@ -33,7 +33,11 @@ baas-cloudflare-mvp-plan.md
 AGENTS.md
 
 # --- Agent config. Vietnamese, and rule 04 A bans that from public surfaces.
+#     Three names for one thing: other tools mirror the same skills under their own
+#     directory. .agents/skills/ was byte for byte identical to .claude/skills/.
 .claude/
+.agents/
+.codex/
 
 # --- Probe results. Private until launch, then published as a written piece.
 probe/
