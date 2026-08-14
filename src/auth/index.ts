@@ -264,7 +264,14 @@ export function verifierConfig(env: AuthEnv): VerifierConfig {
   const { baseURL } = authSettings(env);
 
   return {
-    jwksUrl: `${baseURL}/api/auth/jwks`,
+    // Names the key set for the cache. Never requested. See `verify.ts`.
+    keySetUrl: `${baseURL}/api/auth/jwks`,
+    // Read in process, because the issuer is this same Worker. Going over the
+    // network for it is what broke every token from V3 until 2026-08-15: a
+    // Worker fetching its own `*.workers.dev` JWKS URL is answered 404, while
+    // the same URL answers 200 from outside, so nothing looking from outside
+    // could see it.
+    readKeySet: () => getAuth(env).api.getJwks(),
     issuer: baseURL,
     // Better Auth sets `aud` to the base URL. Measured, not assumed: the token
     // contract in the skill used to claim a service name here.

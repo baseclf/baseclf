@@ -26,7 +26,7 @@
  *      loop bound.** Cover the bound from the other side, by counting iterations
  *      against a known budget.
  *
- * Callers pass their own mutation list. See `mutate-jwks-brake.mjs` for the shape.
+ * Callers pass their own mutation list. See `mutate-jwks-source.mjs` for the shape.
  */
 
 import { execFileSync } from 'node:child_process';

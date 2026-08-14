@@ -47,23 +47,21 @@ export interface ErrorEvent {
  * log line does the most damage.
  */
 export interface AuthEvent {
-  readonly event: 'jwks_refresh';
+  readonly event: 'jwks_reload';
   readonly reason: 'no_matching_key';
 }
 
 /**
- * A refresh that was asked for and refused.
+ * ⚠️ `jwks_refresh_declined` was removed on 2026-08-15 along with the brake that
+ * emitted it.
  *
- * A separate event rather than another `reason` on the one above, because those
- * two are opposites: one records an outbound fetch happening, the other records
- * one being prevented. Counting them under a single name would make the only
- * signal that says whether this Worker is calling itself in a loop ambiguous at
- * exactly the moment somebody needs to read it.
+ * It recorded a refresh being refused by a cooldown, and that cooldown existed
+ * to bound outbound requests. The key set is now read in process, so there is no
+ * outbound request to bound, nothing to decline, and an event nothing can emit is
+ * worse than no event: somebody reading a dashboard would take its absence as
+ * evidence the brake was holding. `jwks_refresh` was renamed `jwks_reload` for
+ * the same reason, since nothing is being fetched. See `src/auth/verify.ts`.
  */
-export interface AuthRefreshDeclinedEvent {
-  readonly event: 'jwks_refresh_declined';
-  readonly reason: 'cooldown';
-}
 
 /**
  * An object was written or removed.
@@ -81,13 +79,7 @@ export interface StorageWriteEvent {
   readonly bytes: number;
 }
 
-export type LogEvent =
-  | QueryEvent
-  | PolicyRefusalEvent
-  | ErrorEvent
-  | AuthEvent
-  | AuthRefreshDeclinedEvent
-  | StorageWriteEvent;
+export type LogEvent = QueryEvent | PolicyRefusalEvent | ErrorEvent | AuthEvent | StorageWriteEvent;
 
 export function logEvent(event: LogEvent): void {
   console.log(JSON.stringify(event));

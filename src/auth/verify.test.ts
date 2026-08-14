@@ -63,19 +63,29 @@ const options = {
 const auth = betterAuth(options);
 
 /**
- * The issuer, served to the verifier over `fetch`.
+ * 🔴 Every outbound request fails, including the JWKS endpoint. That is the
+ * point of this fixture, not a limitation of it.
  *
- * The verifier reaches its JWKS endpoint with a real request, so the test
- * intercepts fetch and routes that one URL into the Better Auth handler. Every
- * other URL is refused loudly rather than escaping to the network.
+ * This interceptor used to make one exception: it routed the JWKS URL into the
+ * Better Auth handler, so the verifier's `fetch` of its own key set succeeded.
+ * It was written to avoid mocking, and it looked more honest than a mock. It was
+ * worse than a mock, because it faithfully simulated the one thing that did not
+ * work in production: a Worker fetching its own `*.workers.dev` URL is answered
+ * 404, so every JWT failed verification on every deployment from V3 until
+ * 2026-08-15, while this suite stayed green.
+ *
+ * Now nothing is allowed out. The verifier reads its key set in process, so a
+ * `fetch` reaching this function at all means somebody put the network back on
+ * the identity path, and the tests below turn red instead of a deployment doing
+ * it silently months later.
  */
 const realFetch = globalThis.fetch;
 
+let outboundAttempts: string[] = [];
+
 const interceptor = (async (input: RequestInfo | URL) => {
   const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-  if (url.startsWith(`${BASE_URL}${JWKS_PATH}`)) {
-    return auth.handler(new Request(url, { method: 'GET' }));
-  }
+  outboundAttempts.push(url);
   throw new Error(`unexpected outbound request in a test: ${url}`);
 }) as typeof fetch;
 
@@ -130,7 +140,10 @@ beforeAll(async () => {
   // what the documentation says it should. If those disagree, the test that
   // prints this is where it shows up.
   config = {
-    jwksUrl: `${BASE_URL}${JWKS_PATH}`,
+    keySetUrl: `${BASE_URL}${JWKS_PATH}`,
+    // In process, the same way `verifierConfig` builds it for the worker. No
+    // request leaves, which is why the interceptor above can refuse everything.
+    readKeySet: () => auth.api.getJwks(),
     issuer: String(issuedPayload.iss),
     audience: String(issuedPayload.aud),
   };
@@ -149,6 +162,56 @@ async function foreignToken(overrides: Record<string, unknown> = {}): Promise<st
     .setExpirationTime('1h')
     .sign(privateKey);
 }
+
+/**
+ * 🔴 The test this file did not have, and the reason a broken deployment looked
+ * healthy from V3 until 2026-08-15.
+ *
+ * The verifier used to reach its key set with `fetch`, at a URL belonging to the
+ * Worker doing the fetching. On Cloudflare that is answered 404, so every JWT
+ * was refused on every deployment. Nothing here failed, because the fixture
+ * routed exactly that URL back into the issuer: the suite proved the verifier
+ * works when the network works, and the network was the broken part.
+ *
+ * So this asserts about the network rather than about the result. It is the same
+ * discipline `policy_simulate` needed for "does not touch data", where compiling
+ * and running-then-discarding produce identical output and only a count of
+ * round trips can tell them apart.
+ */
+describe('the identity path and the network', () => {
+  it('verifies a real token without making a single outbound request', async () => {
+    // A key set name nothing has used, so the Cache API cannot answer from an
+    // earlier test and `readKeySet` is genuinely invoked. Without this the
+    // assertion would pass on a warm cache while a reintroduced fetch sat
+    // unexercised behind it.
+    const cold: VerifierConfig = {
+      ...config,
+      keySetUrl: `${BASE_URL}${JWKS_PATH}/cold-no-network-check`,
+    };
+
+    outboundAttempts = [];
+    const claims = await verifyToken(goodToken, cold);
+
+    // Both halves matter. Without the first, a verifier that refused everything
+    // would also make no outbound request and would pass.
+    expect(claims.sub).toBe(issuedPayload.sub);
+    expect(outboundAttempts).toEqual([]);
+  });
+
+  it('refuses when the issuer produces something that is not a key set', async () => {
+    // The replacement for "the JWKS endpoint answered 404". A local read has no
+    // status code, so the only thing left to get wrong is the shape, and a shape
+    // that is not a key set must fail closed rather than verify against nothing.
+    const broken: VerifierConfig = {
+      ...config,
+      keySetUrl: `${BASE_URL}${JWKS_PATH}/cold-not-a-key-set`,
+      readKeySet: async () => ({ nothing: 'useful' }),
+    };
+
+    const error = await expectUnauthenticated(verifyToken(goodToken, broken));
+    expect(error.detail).toContain('did not produce a key set');
+  });
+});
 
 describe('the token contract Better Auth actually issues', () => {
   it('carries a subject and an expiry', () => {
@@ -424,36 +487,49 @@ async function rotationKey(kid: string): Promise<RotationKey> {
   };
 }
 
-/** What each scenario's endpoint answers with at this moment. */
+/** What each scenario's key store holds at this moment. */
 const servedKeySets = new Map<string, JSONWebKeySet>();
-/** How many times each scenario's endpoint was actually reached. */
-const timesFetched = new Map<string, number>();
+/** How many times each scenario's key store was actually read. */
+const timesRead = new Map<string, number>();
 
 /**
- * A JWKS URL of its own for every scenario.
+ * A key set name of its own for every scenario.
  *
- * `loadJwks` caches by URL through the Cache API, and that cache outlives the
- * test that filled it. Two scenarios sharing a URL would share a cached key
+ * `loadJwks` caches by this name through the Cache API, and that cache outlives
+ * the test that filled it. Two scenarios sharing a name would share a cached key
  * set, so the second one would be reading the first one's leftovers while
  * appearing to arrange its own. Every count below would then be measuring the
- * wrong thing, and nothing would look wrong. Distinct URLs are what keeps these
+ * wrong thing, and nothing would look wrong. Distinct names are what keeps these
  * tests independent.
+ *
+ * `readKeySet` reads the map rather than answering a request. Rotation used to be
+ * staged by chaining another `fetch` interceptor on top of the file's own, which
+ * worked and also meant these tests could not tell a local read from a network
+ * one. Now they can: nothing here can reach `fetch` at all.
  */
 function scenario(name: string): VerifierConfig {
+  const keySetUrl = `${ROTATION_ISSUER}/jwks/${name}`;
+
   return {
-    jwksUrl: `${ROTATION_ISSUER}/jwks/${name}`,
+    keySetUrl,
+    readKeySet: async () => {
+      const served = servedKeySets.get(keySetUrl);
+      if (served === undefined) throw new Error(`scenario "${name}" has no key set staged`);
+      timesRead.set(keySetUrl, (timesRead.get(keySetUrl) ?? 0) + 1);
+      return served;
+    },
     issuer: ROTATION_ISSUER,
     audience: ROTATION_AUDIENCE,
   };
 }
 
-/** Point a scenario's endpoint at a key set, replacing whatever it served before. */
+/** Point a scenario's key store at a key set, replacing whatever it held before. */
 function nowServes(config: VerifierConfig, ...keys: readonly RotationKey[]): void {
-  servedKeySets.set(config.jwksUrl, { keys: keys.map((key) => key.publicJwk) });
+  servedKeySets.set(config.keySetUrl, { keys: keys.map((key) => key.publicJwk) });
 }
 
-function fetchesOf(config: VerifierConfig): number {
-  return timesFetched.get(config.jwksUrl) ?? 0;
+function readsOf(config: VerifierConfig): number {
+  return timesRead.get(config.keySetUrl) ?? 0;
 }
 
 async function tokenFrom(
@@ -472,38 +548,9 @@ async function tokenFrom(
 }
 
 describe('when the issuer rotates its signing key', () => {
-  let restoreFetch = (): void => {};
-
-  beforeAll(() => {
-    // Chained onto whatever this file already installed, and installed in a
-    // hook for the same reason the top-level one gives: module scope has run to
-    // completion before the first test starts, so an interceptor set up there
-    // is never in effect while anything is being tested. Any URL that is not
-    // one of these scenarios falls through to the Better Auth interceptor,
-    // which still refuses the rest of the internet loudly.
-    const outer = globalThis.fetch;
-    const delegate = outer.bind(globalThis);
-
-    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-
-      const served = servedKeySets.get(url);
-      if (served === undefined) return delegate(input, init);
-
-      timesFetched.set(url, (timesFetched.get(url) ?? 0) + 1);
-      return new Response(JSON.stringify(served), {
-        headers: { 'content-type': 'application/json' },
-      });
-    }) as typeof fetch;
-
-    restoreFetch = () => {
-      globalThis.fetch = outer;
-    };
-  });
-
-  afterAll(() => {
-    restoreFetch();
-  });
+  // No fetch interception here any more. Rotation is staged through the
+  // scenario's own `readKeySet`, so the file-level interceptor stays in force
+  // throughout and any request escaping to the network fails the test.
 
   it('accepts a token signed by the new key after dropping the cached key set once', async () => {
     const config = scenario('heals');
@@ -514,7 +561,7 @@ describe('when the issuer rotates its signing key', () => {
     nowServes(config, retired);
     const settled = await tokenFrom(retired, config, 'u_before');
     await verifyToken(settled, config);
-    expect(fetchesOf(config)).toBe(1);
+    expect(readsOf(config)).toBe(1);
 
     // Prove the cache is really holding the old set before rotating anything,
     // because the rest of this test means nothing otherwise. If the put had
@@ -522,7 +569,7 @@ describe('when the issuer rotates its signing key', () => {
     // set on its first attempt and succeed without ever reaching the branch
     // under test, and the final count would still read two.
     await verifyToken(settled, config);
-    expect(fetchesOf(config)).toBe(1);
+    expect(readsOf(config)).toBe(1);
 
     // The rotation. Tokens signed by a key our cached copy predates start
     // arriving immediately, long before any TTL would have expired.
@@ -534,10 +581,10 @@ describe('when the issuer rotates its signing key', () => {
 
     // And the endpoint was reached exactly once more, so the stale set did come
     // back from the cache, was dropped once, and the refetch did not repeat.
-    expect(fetchesOf(config)).toBe(2);
+    expect(readsOf(config)).toBe(2);
   });
 
-  it('writes the refreshed key set back, so the rotation costs one refetch and not one per request', async () => {
+  it('writes the reloaded key set back, so the rotation costs one reload and not one per request', async () => {
     const config = scenario('persists');
     const retired = await rotationKey('key-2026-07');
     const current = await rotationKey('key-2026-08');
@@ -548,7 +595,7 @@ describe('when the issuer rotates its signing key', () => {
     nowServes(config, current);
     const token = await tokenFrom(current, config, 'u_after');
     await verifyToken(token, config);
-    expect(fetchesOf(config)).toBe(2);
+    expect(readsOf(config)).toBe(2);
 
     // The next request pays nothing. If the refresh had handed the fresh set to
     // its caller without storing it, every request for the rest of this
@@ -556,10 +603,10 @@ describe('when the issuer rotates its signing key', () => {
     // only visible symptom would be a quiet doubling of outbound requests
     // against a subrequest budget of 50.
     await expect(verifyToken(token, config)).resolves.toBeTruthy();
-    expect(fetchesOf(config)).toBe(2);
+    expect(readsOf(config)).toBe(2);
   });
 
-  it('still refuses with 401 when the refreshed key set has no matching key either', async () => {
+  it('still refuses with 401 when the reloaded key set has no matching key either', async () => {
     const config = scenario('still-unknown');
     const issuerKey = await rotationKey('key-2026-07');
     const impostorKey = await rotationKey('key-nobody-published');
@@ -574,22 +621,22 @@ describe('when the issuer rotates its signing key', () => {
       verifyToken(await tokenFrom(impostorKey, config, 'u_impostor'), config),
     );
 
-    expect(fetchesOf(config)).toBe(2);
+    expect(readsOf(config)).toBe(2);
 
     // The refusal came from the retry rather than from the first attempt. Every
     // refusal on this path carries the same status, code and message by design
     // (invariant I5), so without checking the diagnostic the assertions above
     // would hold even if the refresh had never happened at all.
-    expect(refused.detail).toContain('after refreshing the key set');
+    expect(refused.detail).toContain('after reloading the key set');
   });
 
-  it('does not refetch for a refusal that a fresh key set could not fix', async () => {
+  it('does not reload for a refusal that a fresh key set could not fix', async () => {
     const config = scenario('no-pointless-refresh');
     const key = await rotationKey('key-2026-07');
 
     nowServes(config, key);
     await verifyToken(await tokenFrom(key, config, 'u_before'), config);
-    expect(fetchesOf(config)).toBe(1);
+    expect(readsOf(config)).toBe(1);
 
     // Signed by the very key the endpoint publishes, and expired. `jose` finds
     // the key and then rejects the claim, so there is no key set anywhere that
@@ -598,148 +645,123 @@ describe('when the issuer rotates its signing key', () => {
     const refused = await expectUnauthenticated(verifyToken(expired, config));
 
     // The narrow condition on the retry is load-bearing rather than tidy. A
-    // refresh on any refusal would let anyone turn a stream of junk tokens into
-    // a stream of outbound requests to the issuer, one each, paid for out of
-    // this Worker's subrequest budget.
-    expect(fetchesOf(config)).toBe(1);
-    expect(refused.detail).not.toContain('after refreshing');
+    // reload on any refusal would mean an expired token, the most ordinary
+    // refusal there is, re-reading the key store on every request.
+    //
+    // ⚠️ The count is the assertion that carries this. The `detail` check below
+    // is deliberately written against the message the retry path emits *today*:
+    // when this said `not.toContain('after refreshing')` and the message had
+    // become "after reloading", it passed no matter what the code did. A
+    // negative assertion on a string that no longer exists proves nothing, and
+    // it goes on reporting success while it does.
+    expect(readsOf(config)).toBe(1);
+    expect(refused.detail).not.toContain('after reloading');
   });
 });
 
 /**
- * The brake on the retry, tested by trying to abuse it.
+ * ⚠️ This section used to test a brake on the retry. The brake was removed on
+ * 2026-08-15 by an explicit decision, and these tests were rewritten rather than
+ * deleted, so read this before assuming they were weakened to go green.
  *
- * The section above proves the retry heals a rotation. This one proves it cannot
- * be used as a lever. `kid` is a header field, the attacker writes the token, and
- * this deployment's JWKS URL points back at this same Worker, so an unthrottled
- * retry is one outbound request per inbound one against a subrequest budget of
- * 50. No data leaks either way, which is what makes it easy to leave in: the
- * symptom is a bill and an outage, not a breach.
+ * `kid` is a header field the attacker writes, so an unknown one on every token
+ * is free to produce. When the retry meant `fetch`, that bought one outbound
+ * request per inbound one against a subrequest budget of 50, and a cooldown
+ * marker plus an in-flight map existed to bound it. The key set is now read in
+ * process, so a forged token buys a local read and no subrequest at all, and
+ * both brakes went with the fetch that justified them.
+ *
+ * What replaced them is the assertion the brake was only ever a proxy for: under
+ * a flood of forged tokens, **nothing goes out**. That is a stronger statement
+ * than "at most one request per window", and unlike the old one it stays true
+ * without any counting. Refusal itself is unchanged and still asserted here,
+ * because it is the part that was always about security rather than about cost.
  */
 describe('when tokens carry key ids nobody published', () => {
-  let restoreFetch = (): void => {};
-
-  beforeAll(() => {
-    // The same delegating interceptor as the rotation section. Repeated rather
-    // than shared because the two sections are about different things and a
-    // helper spanning both would make each one harder to read on its own.
-    const outer = globalThis.fetch;
-    const delegate = outer.bind(globalThis);
-
-    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-
-      const served = servedKeySets.get(url);
-      if (served === undefined) return delegate(input, init);
-
-      timesFetched.set(url, (timesFetched.get(url) ?? 0) + 1);
-      return new Response(JSON.stringify(served), {
-        headers: { 'content-type': 'application/json' },
-      });
-    }) as typeof fetch;
-
-    restoreFetch = () => {
-      globalThis.fetch = outer;
-    };
-  });
-
-  afterAll(() => {
-    restoreFetch();
-  });
+  // No fetch interception, for the same reason as the rotation section: these
+  // scenarios stage their key sets through `readKeySet`, so the file-level
+  // interceptor stays in force and a request escaping to the network fails.
 
   /** A token signed by a key the issuer never published, with a `kid` of its own. */
   async function impostorToken(config: VerifierConfig, kid: string): Promise<string> {
     return tokenFrom(await rotationKey(kid), config, 'u_impostor');
   }
 
-  it('reloads the key set once for the whole run, not once per token', async () => {
-    const config = scenario('braked-sequential');
+  it('refuses every one of them, however many arrive', async () => {
+    const config = scenario('unknown-kid-sequential');
     const issuerKey = await rotationKey('key-2026-07');
 
     nowServes(config, issuerKey);
     await verifyToken(await tokenFrom(issuerKey, config, 'u_before'), config);
-    expect(fetchesOf(config)).toBe(1);
 
+    // The security property, and the one that did not change when the brake
+    // went. Each of these reloads the key set now instead of one of them doing
+    // it, and not one of them verifies.
     for (let n = 0; n < 5; n += 1) {
       await expectUnauthenticated(
         verifyToken(await impostorToken(config, `nobody-published-${n}`), config),
       );
     }
 
-    // Two: the warm-up, plus the one reload the first impostor is allowed to
-    // trigger. Without the brake this reads six, and every extra one is this
-    // Worker fetching its own JWKS endpoint because somebody sent a string.
-    expect(fetchesOf(config)).toBe(2);
+    expect(readsOf(config)).toBe(6);
   });
 
-  it('refuses the braked ones identically to the client and distinctly in the log', async () => {
-    const config = scenario('braked-reason');
+  it('costs no outbound request, which is what the brake used to buy', async () => {
+    const config = scenario('unknown-kid-no-network');
     const issuerKey = await rotationKey('key-2026-07');
 
     nowServes(config, issuerKey);
     await verifyToken(await tokenFrom(issuerKey, config, 'u_before'), config);
 
-    const paid = await expectUnauthenticated(
+    outboundAttempts = [];
+    for (let n = 0; n < 5; n += 1) {
+      await expectUnauthenticated(
+        verifyToken(await impostorToken(config, `no-network-${n}`), config),
+      );
+    }
+
+    // The replacement for counting reloads. Five forged tokens used to mean up
+    // to five requests this Worker paid for out of a budget of 50; now the
+    // number that matters is zero, and it stays zero however many arrive.
+    expect(outboundAttempts).toEqual([]);
+  });
+
+  it('refuses them identically to the client', async () => {
+    const config = scenario('unknown-kid-reason');
+    const issuerKey = await rotationKey('key-2026-07');
+
+    nowServes(config, issuerKey);
+    await verifyToken(await tokenFrom(issuerKey, config, 'u_before'), config);
+
+    const first = await expectUnauthenticated(
       verifyToken(await impostorToken(config, 'unknown-a'), config),
     );
-    const braked = await expectUnauthenticated(
+    const second = await expectUnauthenticated(
       verifyToken(await impostorToken(config, 'unknown-b'), config),
     );
 
-    // The first one paid for a reload and says so; the second was stopped before
-    // it could. Both are 401 with the same code and the same client-visible
-    // message, invariant I5, so the response bodies have to be identical. The
-    // difference lives only in `detail`, which never reaches a client, and
-    // checking it is what makes this test able to tell the brake apart from no
-    // brake at all.
-    expect(paid.detail).toContain('after refreshing the key set');
-    expect(braked.detail).toContain('too recently');
-    expect(braked.detail).not.toContain('after refreshing');
-    expect(braked.toResponseBody()).toEqual(paid.toResponseBody());
+    // Invariant I5. Both took the same path now that neither is braked, and the
+    // client-visible body has to be identical either way. `detail` never reaches
+    // a client and says the reload happened and did not help.
+    expect(first.detail).toContain('after reloading the key set');
+    expect(second.detail).toContain('after reloading the key set');
+    expect(second.toResponseBody()).toEqual(first.toResponseBody());
   });
 
-  it('reloads once for a burst that arrives all at once', async () => {
-    const config = scenario('braked-concurrent');
-    const issuerKey = await rotationKey('key-2026-07');
-
-    nowServes(config, issuerKey);
-    await verifyToken(await tokenFrom(issuerKey, config, 'u_before'), config);
-    expect(fetchesOf(config)).toBe(1);
-
-    const tokens = await Promise.all(
-      [0, 1, 2, 3, 4].map((n) => impostorToken(config, `concurrent-${n}`)),
-    );
-    const outcomes = await Promise.allSettled(tokens.map((token) => verifyToken(token, config)));
-
-    for (const outcome of outcomes) {
-      expect(outcome.status).toBe('rejected');
-      const error = (outcome as PromiseRejectedResult).reason;
-      expect(error).toBeInstanceOf(BaseclfError);
-      expect((error as BaseclfError).status).toBe(401);
-    }
-
-    // Arriving one after another is the easy case, because by the second token
-    // the marker is already written. This is the case that says whether the
-    // marker is written before the fetch or after it: written afterwards, every
-    // request in the burst looks at an empty cache at the same moment and they
-    // all go out together.
-    expect(fetchesOf(config)).toBe(2);
-  });
-
-  it('brakes one issuer without braking a rotation at another', async () => {
-    const flooded = scenario('braked-isolation-flooded');
-    const rotating = scenario('braked-isolation-rotating');
+  it('lets one issuer be flooded without disturbing a rotation at another', async () => {
+    const flooded = scenario('unknown-kid-isolation-flooded');
+    const rotating = scenario('unknown-kid-isolation-rotating');
 
     const floodedKey = await rotationKey('key-2026-07');
     nowServes(flooded, floodedKey);
     await verifyToken(await tokenFrom(floodedKey, flooded, 'u_before'), flooded);
     await expectUnauthenticated(verifyToken(await impostorToken(flooded, 'unknown'), flooded));
-    expect(fetchesOf(flooded)).toBe(2);
 
     // A second deployment, rotating honestly, at the same moment the first is
-    // being flooded. A brake kept in one shared place instead of one per URL
-    // would spend this deployment's allowance on somebody else's attacker, and
-    // the symptom would be every request 401ing on the day a key rotates.
+    // being flooded. Cached per key set name, so one deployment's flood cannot
+    // reach another's cache entry. Under the old brake the failure this guards
+    // against was every request 401ing on the day a key rotates; the cache is
+    // keyed the same way, so the guard is still worth keeping.
     const retired = await rotationKey('key-2026-07');
     const current = await rotationKey('key-2026-08');
 
@@ -749,6 +771,6 @@ describe('when tokens carry key ids nobody published', () => {
 
     const claims = await verifyToken(await tokenFrom(current, rotating, 'u_after'), rotating);
     expect(claims.sub).toBe('u_after');
-    expect(fetchesOf(rotating)).toBe(2);
+    expect(readsOf(rotating)).toBe(2);
   });
 });
