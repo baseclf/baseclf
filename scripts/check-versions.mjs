@@ -77,9 +77,65 @@ for (const root of ROOTS) {
   }
 }
 
-if (offences.length === 0) {
-  console.log(`versions: clean. No hand-written version in ${ROOTS.join(' or ')}.`);
+/**
+ * The one version that has to be written down, checked instead of trusted.
+ *
+ * `server.json` is read by `mcp-publisher`, which is a downloaded binary rather than
+ * anything this project runs, so the file has to exist on disk with a literal in it.
+ * That makes it the fourth hand-written version, arriving on the same day as a check
+ * forbidding the other three, and the honest answer is to check it rather than to
+ * pretend the rule has no exception.
+ *
+ * ⚠️ Registry versions are immutable once published. A `server.json` that lags the
+ * package does not fail loudly: it claims a release that ships something else, and
+ * the claim cannot be corrected in place afterwards.
+ *
+ * The schema constraints are asserted here too, for the same reason. `mcp-publisher`
+ * is not installable with npx and the registry is still preview, so nothing in this
+ * project's own gate would otherwise read this file before somebody tries to publish
+ * it, by hand, from a machine that has the binary.
+ */
+function checkServerManifest() {
+  const server = JSON.parse(readFileSync('server.json', 'utf8'));
+  const { version } = JSON.parse(readFileSync('package.json', 'utf8'));
+  const problems = [];
+
+  if (server.version !== version) {
+    problems.push(`server.json says ${server.version}, package.json says ${version}`);
+  }
+  // Both measured off the published schema rather than remembered: description is 100
+  // and name is a namespace and a name around a slash.
+  if (server.description.length > 100) {
+    problems.push(`description is ${server.description.length} characters, the schema allows 100`);
+  }
+  if (!/^[a-zA-Z0-9.-]+\/[a-zA-Z0-9._-]+$/.test(server.name)) {
+    problems.push(`name "${server.name}" is not <namespace>/<name>`);
+  }
+  for (const field of ['name', 'description', 'version']) {
+    if (!(field in server)) problems.push(`"${field}" is required and absent`);
+  }
+
+  return problems;
+}
+
+const manifestProblems = checkServerManifest();
+
+if (offences.length === 0 && manifestProblems.length === 0) {
+  console.log(
+    `versions: clean. No hand-written version in ${ROOTS.join(' or ')}, server.json agrees.`,
+  );
   process.exit(0);
+}
+
+if (manifestProblems.length > 0) {
+  console.error('versions: server.json does not agree with the package.\n');
+  for (const problem of manifestProblems) console.error(`  ${problem}`);
+  console.error(
+    '\nRegistry versions are immutable once published, so a server.json that lags the\n' +
+      'package claims a release that ships something else and cannot be corrected later.',
+  );
+  if (offences.length === 0) process.exit(1);
+  console.error('');
 }
 
 console.error('versions: a version number is written by hand in code that ships.\n');
