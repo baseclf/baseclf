@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { CREATE_CRONS, CREATE_PLAN, SIGNING_SECRET_NAME } from './create.js';
-import { findVoiceViolations, PLAIN } from './output.js';
+import { findVoiceViolations, markFor, PLAIN } from './output.js';
 import { CREATE_FIXED_TEXT, type CreateHost, runCreate } from './run-create.js';
 
 const TOKEN_CANARY = 'oauth-token-never-printed';
@@ -59,6 +59,8 @@ interface HarnessOptions {
   readonly failOn?: string;
   /** Cloudflare's own code on the injected failure. Some of them are actionable. */
   readonly failCode?: number;
+  /** Cloudflare's own prose on the injected failure, which can carry anything. */
+  readonly failMessage?: string;
   readonly authFileText?: string | undefined;
   /** What the file holds after a refresh, when the refresh is meant to have worked. */
   readonly refreshTo?: string;
@@ -113,7 +115,7 @@ function harness(options: HarnessOptions = {}): Harness {
       return new Response(
         JSON.stringify({
           success: false,
-          errors: [{ code: options.failCode ?? 10001, message: 'nope' }],
+          errors: [{ code: options.failCode ?? 10001, message: options.failMessage ?? 'nope' }],
         }),
         { status: 500 },
       );
@@ -444,6 +446,22 @@ describe('when a step fails', () => {
     expect(h.text()).not.toContain(ACCOUNT);
   });
 
+  it('keeps the account id out of a message Cloudflare wrote, not only out of the path', async () => {
+    // 🔴 The path redaction was covering half the message. Cloudflare puts the id in a
+    // dashboard link of its own, and the refusal for too many cron triggers ends with
+    // one. There is no `/accounts/` segment in a `dash.cloudflare.com` URL, so the
+    // path rule cannot see it and the id reached a real terminal on 2026-08-15.
+    const h = harness({
+      failOn: '/d1/database',
+      failMessage: `Upgrade to Workers Paid: https://dash.cloudflare.com/${ACCOUNT}/workers/plans`,
+    });
+    await runCreate([], h.write, PLAIN, h.host);
+
+    // The rest of the message survives, because that is what makes it useful.
+    expect(h.text()).toContain('Upgrade to Workers Paid');
+    expect(h.text()).not.toContain(ACCOUNT);
+  });
+
   it('calls a slow address a success, because everything is deployed', async () => {
     // A new address answers 404, then 500, then 200, over about thirty seconds.
     // Everything is provisioned by then, and `doctor` has more to say than another
@@ -458,6 +476,98 @@ describe('when a step fails', () => {
   it('calls a 403 a failure, because waiting will not fix somebody else server', async () => {
     const h = harness({ healthStatus: 403 });
     expect(await runCreate([], h.write, PLAIN, h.host)).toBe('failed');
+  });
+});
+
+describe('when the schedule is the only step that failed', () => {
+  // 🔴 Measured on a real account on 2026-08-15. Cloudflare allows five cron triggers
+  // per account on the free plan, counted across every Worker on it, so an account
+  // that already has five refuses this step for a reason that has nothing to do with
+  // this deployment. Eight steps were green, the deployment was up and answering, and
+  // the run printed no address at all.
+  const refused = (): Harness =>
+    harness({
+      failOn: '/schedules',
+      failMessage: 'This account has reached the Workers Free limit of 5 cron triggers per account',
+    });
+
+  it('still prints the address, because the deployment is up and answering', async () => {
+    const h = refused();
+    await runCreate([], h.write, PLAIN, h.host);
+
+    // The one thing in the whole plan a reader cannot work out for themselves.
+    expect(h.text()).toContain('demo.quiet-frog-1a2b.workers.dev');
+    expect(h.text()).toContain('Next: let people sign in');
+  });
+
+  it('carries on to the last step rather than stopping at this one', async () => {
+    const h = refused();
+    await runCreate([], h.write, PLAIN, h.host);
+
+    // Asserted against the request rather than the output: the address is printed
+    // from a value known since step four, so printing it proves nothing about
+    // whether the run actually continued.
+    expect(callsTo(h.sent, 'workers.dev/health')).not.toHaveLength(0);
+  });
+
+  it('still exits non-zero, because the run did not finish', async () => {
+    // The prose and the exit code disagree on purpose. A person reads the output and
+    // carries on with a deployment that works; a script reads the number and stops.
+    const h = refused();
+
+    expect(await runCreate([], h.write, PLAIN, h.host)).toBe('failed');
+  });
+
+  it('marks it as attention rather than as a refusal', async () => {
+    const h = refused();
+    await runCreate([], h.write, PLAIN, h.host);
+
+    const line = h.lines.find((each) => each.includes('Set the scheduled work'));
+    expect(line).toContain(markFor('attention'));
+    expect(line).not.toContain(markFor('deny'));
+  });
+
+  it('says the deployment works and names what is not running', async () => {
+    const h = refused();
+    await runCreate([], h.write, PLAIN, h.host);
+
+    expect(h.text()).toContain('Everything else is deployed and the API answers');
+    expect(h.text()).toContain('grows without bound');
+    // Cloudflare's own reason, which is the only part that knows why this failed.
+    expect(h.text()).toContain('5 cron triggers per account');
+  });
+
+  it('does not tell the reader to rerun as though rerunning were the fix', async () => {
+    // The generic line is right about nothing being undone and wrong about the
+    // remedy: the limit is account-wide, so an identical rerun hits the same wall
+    // every time. The advice has to point at the refusal, not at the command.
+    const h = refused();
+    await runCreate([], h.write, PLAIN, h.host);
+
+    expect(h.text()).not.toContain('Fix the cause and rerun');
+    expect(h.text()).toContain('Deal with that');
+  });
+
+  it('says none of that when the schedule was set', async () => {
+    // The control. Without it a change that prints the advice unconditionally, or
+    // that reports every run as unfinished, passes every assertion above.
+    const h = harness();
+    const outcome = await runCreate([], h.write, PLAIN, h.host);
+
+    expect(outcome).toBe('ok');
+    expect(h.text()).not.toContain('Everything else is deployed and the API answers');
+    expect(h.lines.find((each) => each.includes('Set the scheduled work'))).toContain(
+      markFor('allow'),
+    );
+  });
+
+  it('is the only step allowed to be survived', async () => {
+    // Holds the count at one. A second step carrying this field is a decision about
+    // what a half-finished run means, and it should cost somebody a failing test
+    // rather than a copied field.
+    const survivable = CREATE_PLAN.filter((step) => step.whenSkipped !== undefined);
+
+    expect(survivable.map((step) => step.title)).toEqual(['Set the scheduled work']);
   });
 });
 

@@ -393,6 +393,15 @@ export interface CreatePlanStep {
   readonly title: string;
   /** What breaks if this step is skipped. Printed when a step fails. */
   readonly consequence: string;
+  /**
+   * What to say when this step fails and the run carries on regardless.
+   *
+   * Present on the one step whose failure still leaves a deployment that works, and
+   * absent everywhere else because for every other step there is nothing to carry on
+   * to. A test holds that count at one, so attaching these lines to a second step is
+   * a decision somebody has to make on purpose rather than by copying a field.
+   */
+  readonly whenSkipped?: readonly string[];
 }
 
 /**
@@ -428,7 +437,34 @@ export const CREATE_PLAN: readonly CreatePlanStep[] = Object.freeze([
   // is the rate limit sweep and the storage reconciliation, so the symptom arrives
   // months later as a table that grew without bound, with nothing pointing back at the
   // step that was skipped.
-  { title: 'Set the scheduled work', consequence: 'nothing is ever swept or reconciled' },
+  //
+  // 🔴 It is also the one step that does not stop the run, and it took a real account
+  // to find out why it has to be. Cloudflare allows five cron triggers per account on
+  // the free plan, counted across every Worker on it, so somebody who already has five
+  // is refused here for a reason that has nothing to do with this deployment. By then
+  // the database, the bucket, the Worker and the route are all up and the API answers.
+  // Treating that as a failed run threw the address away with it, and the address is
+  // the one thing in the whole plan a reader cannot work out for themselves. Measured
+  // on 2026-08-15: eight steps green, no address printed, a working deployment that
+  // read as a total failure.
+  {
+    title: 'Set the scheduled work',
+    consequence: 'nothing is ever swept or reconciled',
+    // Deliberately says nothing about which refusal this was. Cloudflare's own message
+    // is printed on the line above and it names the cause; the cron limit one even
+    // names the number and the plan. Repeating a guess at the cause here would be
+    // wrong for every other way this call can fail, and this text cannot tell them
+    // apart.
+    whenSkipped: Object.freeze([
+      'Everything else is deployed and the API answers. What is missing is the hourly',
+      'sweep of the rate limit table and the reconciliation between the bucket and the',
+      'database, so the cost of leaving it is a table that grows without bound, months',
+      'from now.',
+      '',
+      'The line above is Cloudflare refusing, and it gives the reason. Deal with that,',
+      'then run this again to add the schedule. Nothing created so far is lost.',
+    ]),
+  },
   { title: 'Wait for the address to answer', consequence: 'the first visit lands on a 404' },
 ]);
 

@@ -51,6 +51,7 @@ import {
   CREATE_CRONS,
   CREATE_PLAN,
   type CreateAnswers,
+  type CreatePlanStep,
   collectAnswers,
   deriveResourceNames,
   generateSecret,
@@ -280,12 +281,12 @@ async function runPlan(
   context: StepContext,
   write: Write,
   style: Style,
-): Promise<{ ok: true; url: string } | { ok: false }> {
+): Promise<{ ok: true; url: string; complete: boolean } | { ok: false }> {
   const { credentials, answers } = context;
   const names = deriveResourceNames(answers.project);
 
   let stepIndex = 0;
-  const step = (): { title: string; consequence: string } => {
+  const step = (): CreatePlanStep => {
     const entry = CREATE_PLAN[stepIndex];
     stepIndex += 1;
     return entry ?? { title: 'Unnamed step', consequence: 'unknown' };
@@ -373,9 +374,22 @@ async function runPlan(
     await enableWorkersDev(host.fetcher, credentials, names.script);
     write(styledResultLine('allow', route.title, style));
 
+    // 🔴 The only step wrapped on its own, and the wrapping is the point: a refusal
+    // here has to not reach the outer catch. Everything above has succeeded, so the
+    // deployment is up and answering, and the reader still needs the address. See the
+    // note on this step in `CREATE_PLAN` for the run that taught this.
     const schedules = step();
-    await putSchedules(host.fetcher, credentials, names.script, CREATE_CRONS);
-    write(styledResultLine('allow', schedules.title, style));
+    let complete = true;
+    try {
+      await putSchedules(host.fetcher, credentials, names.script, CREATE_CRONS);
+      write(styledResultLine('allow', schedules.title, style));
+    } catch (error) {
+      complete = false;
+      const reason = error instanceof Error ? error.message : String(error);
+      write(styledResultLine('attention', `${schedules.title}: ${reason}`, style));
+      write(note(`Without this, ${schedules.consequence}.`));
+      for (const line of schedules.whenSkipped ?? []) write(line === '' ? '' : note(line));
+    }
 
     const waiting = step();
     const outcome = await waitForDeployment(
@@ -389,7 +403,7 @@ async function runPlan(
 
     if (outcome.kind === 'live') {
       write(styledResultLine('allow', waiting.title, style));
-      return { ok: true, url };
+      return { ok: true, url, complete };
     }
 
     if (outcome.kind === 'wrong-server') {
@@ -402,7 +416,7 @@ async function runPlan(
     write(styledResultLine('attention', `${waiting.title}: not answering yet.`, style));
     write(note('Everything is deployed. New addresses take about thirty seconds.'));
     write(note(`Check it with: npx baseclf doctor ${url}`));
-    return { ok: true, url };
+    return { ok: true, url, complete };
   } catch (error) {
     return fail(
       CREATE_PLAN[Math.max(0, stepIndex - 1)] ?? {
@@ -474,18 +488,17 @@ export async function runCreate(
       // here, which is the trap the auth skill calls the biggest drop-off point
       // in onboarding. The addresses differ only in the last segment, so the
       // mistake is easy to make and hard to see.
-      // Both, because the step above offers both. Printing only Google sent
-      // anyone who picked GitHub to register a Google callback, and the error
-      // for that arrives at the provider as `redirect_uri_mismatch` rather than
-      // here, which is the trap the auth skill calls the biggest drop-off point
-      // in onboarding. The addresses differ only in the last segment, so the
-      // mistake is easy to make and hard to see.
       copy: [`${result.url}/api/auth/callback/google`, `${result.url}/api/auth/callback/github`],
       verify: `npx baseclf doctor ${result.url}`,
     }),
   );
 
-  return 'ok';
+  // ⚠️ The address and the next step are printed either way, and the exit code still
+  // says the run did not finish. The two are allowed to disagree here because they
+  // are read by different things: a script reads the number and stops, a person reads
+  // the output and carries on with a deployment that works. Collapsing them either
+  // way loses one of those readers.
+  return result.complete ? 'ok' : 'failed';
 }
 
 /**

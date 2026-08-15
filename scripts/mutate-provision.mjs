@@ -265,6 +265,26 @@ const MUTATIONS = [
       'costs a failed provision. If this ever stops surviving, a test started depending on ' +
       'a duration, and that test is the thing to look at.',
   },
+  {
+    // 🔴 The leak as it shipped. The path was redacted and Cloudflare's own prose was
+    // not, and Cloudflare puts the id in a dashboard link of its own. Nothing about
+    // the message looks wrong afterwards, which is why it survived to a screenshot.
+    name: 'the id left in the half of the message Cloudflare wrote',
+    file: CLOUDFLARE,
+    expect: 'the taken-out-of-prose-Cloudflare-wrote test',
+    find: / {6}redactAccountId\(\n {8}`\$\{withoutAccountId\(path\)\} answered/,
+    replace: '      ((t) => t)(\n        `${withoutAccountId(path)} answered',
+  },
+  {
+    // The other half, and the one whose order is easy to get wrong later: truncating
+    // first leaves the front of an id in the message, and a fragment still narrows a
+    // guess.
+    name: 'a non-JSON body truncated before the id is taken out of it',
+    file: CLOUDFLARE,
+    expect: 'the redacted-before-truncated test',
+    find: / {4}const body = redactAccountId\(text, credentials\.accountId\)\.slice\(0, 120\);/,
+    replace: '    const body = redactAccountId(text.slice(0, 120), credentials.accountId);',
+  },
 ];
 
 await runMutations({

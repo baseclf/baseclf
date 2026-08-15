@@ -588,6 +588,54 @@ describe('a refusal that arrives as 200', () => {
   });
 });
 
+describe('the account id, which every failure message has a way of carrying', () => {
+  const messageFrom = async (response: Response): Promise<string> => {
+    const error = await ensureDatabase(() => Promise.resolve(response), CREDENTIALS, 'x').catch(
+      (e: unknown) => e,
+    );
+    return (error as CloudflareError).message;
+  };
+
+  it('is taken out of the path this file builds', async () => {
+    const message = await messageFrom(refuse(10001, 'nope'));
+
+    expect(message).toContain('/accounts/...');
+    expect(message).not.toContain(CREDENTIALS.accountId);
+  });
+
+  it('is taken out of prose Cloudflare wrote, which has no /accounts/ segment in it', async () => {
+    // 🔴 The half that was leaking. Cloudflare answers the cron trigger limit with a
+    // dashboard link that carries the id, and a `dash.cloudflare.com` URL matches
+    // nothing the path rule looks for. It reached a real terminal on 2026-08-15.
+    const message = await messageFrom(
+      refuse(10001, `Upgrade: https://dash.cloudflare.com/${CREDENTIALS.accountId}/workers/plans`),
+    );
+
+    // What Cloudflare said still has to survive. A message with the reason cut out of
+    // it is a message the reader cannot act on.
+    expect(message).toContain('Upgrade: https://dash.cloudflare.com/');
+    expect(message).toContain('/workers/plans');
+    expect(message).not.toContain(CREDENTIALS.accountId);
+  });
+
+  it('is taken out of a body that is not JSON, before that body is truncated', async () => {
+    // ⚠️ Order matters here and only here, so the id is placed to straddle the cut.
+    //
+    // 🔴 The first version of this test padded to 100 and proved nothing: the id fit
+    // inside the truncation whole, so redacting after slicing would have passed it
+    // too. Asserting the full id is absent is not enough when the question is whether
+    // a fragment survives, and a fragment still narrows a guess.
+    const CUT = 120;
+    const KEPT = 8;
+    const message = await messageFrom(
+      new Response(`${'x'.repeat(CUT - KEPT)}${CREDENTIALS.accountId} trailing`, { status: 502 }),
+    );
+
+    expect(message).toContain('not JSON');
+    expect(message).not.toContain(CREDENTIALS.accountId.slice(0, KEPT));
+  });
+});
+
 describe('the whole chain, run twice', () => {
   it('changes nothing the second time and fails nothing', async () => {
     // The property that matters most. The first run is the one that gets interrupted,

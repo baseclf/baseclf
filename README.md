@@ -78,6 +78,11 @@ deployment is finished and answering before that comes up.
 | A signing secret | generated, set once, never regenerated |
 | An hourly cron trigger | sweeps the rate limit table and reconciles storage |
 
+The cron trigger is the one item that can be refused without stopping the rest. Free
+plans allow five per account across every Worker on it, so an account already at five
+gets everything else and a note saying what is missing. The API works without it. What
+does not run is the hourly sweep, so the rate limit table grows until you add one.
+
 ### Running it again
 
 Safe, and it is the way to update a deployment. The database, the bucket and the

@@ -340,7 +340,14 @@ describe('everything this file can print', () => {
     // being run over code. Every reason and every plan line goes through, because
     // a checker that only covers what somebody remembered to list is one that drifts.
     const rendered = [
-      ...CREATE_PLAN.flatMap((step) => [step.title, step.consequence]),
+      ...CREATE_PLAN.flatMap((step) => [
+        step.title,
+        step.consequence,
+        // The paragraph a survivable step prints is the longest prose the plan holds,
+        // so leaving it out would exempt the most likely place for a rule to be
+        // broken. That is the drift the comment above is about.
+        ...(step.whenSkipped ?? []),
+      ]),
       // The prompts are the first thing anybody reads, so they go through the same
       // check as everything else. Collected by driving the real questions rather
       // than by listing them here, because a list drifts from what is asked.

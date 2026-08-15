@@ -133,8 +133,12 @@ async function call<T>(
   } catch {
     // A body that is not JSON is itself the diagnosis, and truncated because an
     // HTML error page is not worth putting in a terminal.
+    //
+    // ⚠️ Redacted before it is truncated, not after. Slicing first can cut an id in
+    // half and leave the half in the message, and half of one still narrows a guess.
+    const body = redactAccountId(text, credentials.accountId).slice(0, 120);
     throw new CloudflareError(
-      `${path} answered ${response.status} with a body that is not JSON: ${text.slice(0, 120)}`,
+      `${withoutAccountId(path)} answered ${response.status} with a body that is not JSON: ${body}`,
       response.status,
     );
   }
@@ -144,7 +148,10 @@ async function call<T>(
     const messages = (envelope.errors ?? []).map((error) => error.message ?? 'no message');
 
     throw new CloudflareError(
-      `${withoutAccountId(path)} answered ${response.status}: ${messages.join('; ') || 'no error given'}`,
+      redactAccountId(
+        `${withoutAccountId(path)} answered ${response.status}: ${messages.join('; ') || 'no error given'}`,
+        credentials.accountId,
+      ),
       response.status,
       codes,
     );
@@ -172,6 +179,29 @@ async function call<T>(
  */
 export function withoutAccountId(path: string): string {
   return path.replace(/\/accounts\/[^/?]+/, '/accounts/...');
+}
+
+/**
+ * The account id taken out of a message, wherever in it the id happens to sit.
+ *
+ * 🔴 The rule above covers the path this file builds, and a failure message is only
+ * half that path. The other half is Cloudflare's own prose, which carries the id in a
+ * dashboard link: the refusal for too many cron triggers ends with
+ * `https://dash.cloudflare.com/<account id>/workers/plans`. There is no `/accounts/`
+ * segment anywhere in that, so the path rule cannot see it, and the id went to the
+ * terminal regardless. Found on a real run on 2026-08-15, in a screenshot.
+ *
+ * ⚠️ Matches the id this call is being made with, rather than anything shaped like an
+ * id. Same reasoning as the rule above and pointing the other way: recognising an id
+ * by its format is a bet on somebody else's format, while the id is already in hand
+ * here, so nothing has to be recognised at all.
+ *
+ * `split`/`join` rather than a regular expression, so an id never has to be escaped.
+ */
+export function redactAccountId(text: string, accountId: string): string {
+  // An empty id would split on every character and join the whole message with
+  // ellipses. There is no id to hide in that case anyway.
+  return accountId === '' ? text : text.split(accountId).join('...');
 }
 
 /** Cloudflare's code for "that name is taken", which idempotency has to absorb. */
