@@ -75,7 +75,7 @@ function record(name, proves, ok, detail) {
   const sawOthersDraft = ids.includes(OTHER);
 
   record(
-    'reads own draft, not another account\'s draft',
+    "reads own draft, not another account's draft",
     'the token verified and resolved to authenticated, not silently to anon',
     status === 200 && sawOwnDraft && !sawOthersDraft,
     `HTTP ${status}, rows [${ids.join(', ')}]`,
