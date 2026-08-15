@@ -466,9 +466,21 @@ export async function runCreate(
       goal: 'let people sign in',
       steps: [
         'Create an OAuth app with Google or GitHub.',
-        'Paste this as the redirect URI, exactly as it is here:',
+        'Paste the one for the provider you chose as its redirect URI, exactly as it is here:',
       ],
-      copy: `${result.url}/api/auth/callback/google`,
+      // Both, because the step above offers both. Printing only Google sent
+      // anyone who picked GitHub to register a Google callback, and the error
+      // for that arrives at the provider as `redirect_uri_mismatch` rather than
+      // here, which is the trap the auth skill calls the biggest drop-off point
+      // in onboarding. The addresses differ only in the last segment, so the
+      // mistake is easy to make and hard to see.
+      // Both, because the step above offers both. Printing only Google sent
+      // anyone who picked GitHub to register a Google callback, and the error
+      // for that arrives at the provider as `redirect_uri_mismatch` rather than
+      // here, which is the trap the auth skill calls the biggest drop-off point
+      // in onboarding. The addresses differ only in the last segment, so the
+      // mistake is easy to make and hard to see.
+      copy: [`${result.url}/api/auth/callback/google`, `${result.url}/api/auth/callback/github`],
       verify: `npx baseclf doctor ${result.url}`,
     }),
   );

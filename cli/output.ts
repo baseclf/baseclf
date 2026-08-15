@@ -142,8 +142,17 @@ export interface NextAction {
   readonly goal: string;
   /** Ordered steps. A value to copy belongs in `copy`, not in here. */
   readonly steps: readonly string[];
-  /** Printed unindented so it can be selected cleanly. */
-  readonly copy?: string;
+  /**
+   * Printed unindented so it can be selected cleanly. A list prints one per line.
+   *
+   * A list rather than a single value because a step that offers a choice has to
+   * show the value for every branch of it. Offering "Google or GitHub" and then
+   * printing one address sends whoever picked the other one to paste a redirect
+   * URI that belongs to a provider they did not choose, and the symptom arrives
+   * later as `redirect_uri_mismatch` at the provider rather than here. Found by
+   * somebody walking the real quickstart, 2026-08-15.
+   */
+  readonly copy?: string | readonly string[];
   /** A command that checks the result. */
   readonly verify?: string;
 }
@@ -162,7 +171,14 @@ export function nextAction(action: NextAction): string {
     lines.push(`  ${index + 1}. ${step}`);
   }
 
-  if (action.copy !== undefined) lines.push(copyable(action.copy));
+  if (action.copy !== undefined) {
+    // One `copyable` per value would stack its surrounding blank lines into a
+    // gap that reads as the end of the block, so the values are joined into a
+    // single one. Each still starts at column zero, which is the property that
+    // makes a redirect URI selectable without picking up indentation.
+    const values = typeof action.copy === 'string' ? [action.copy] : action.copy;
+    lines.push(copyable(values.join('\n')));
+  }
   if (action.verify !== undefined) lines.push(`  Check: ${action.verify}`);
 
   return lines.join('\n');

@@ -195,6 +195,32 @@ describe('running the plan', () => {
     expect(h.text()).toContain('demo.quiet-frog-1a2b.workers.dev');
   });
 
+  it('prints a redirect URI for every provider the step offers', async () => {
+    // Found by somebody running the published package on their own account,
+    // 2026-08-15, and by nothing before that. The closing step said "Google or
+    // GitHub" and printed one address, so whoever picked GitHub registered a
+    // Google callback and met `redirect_uri_mismatch` at the provider, which is
+    // the drop-off the auth skill calls the biggest one in onboarding.
+    //
+    // The two differ only in the last segment, which is why reading the output
+    // does not catch it and walking it does.
+    const h = harness();
+    await runCreate([], h.write, PLAIN, h.host);
+    const text = h.text();
+
+    const offered = [...text.matchAll(/Create an OAuth app with ([^.]+)\./g)]
+      .flatMap((m) => (m[1] ?? '').split(/\s+or\s+|,\s*/))
+      .map((name) => name.trim().toLowerCase())
+      .filter((name) => name.length > 0);
+
+    // The step has to offer something, or this test would pass by checking nothing.
+    expect(offered.length).toBeGreaterThan(1);
+
+    for (const provider of offered) {
+      expect(text).toContain(`/api/auth/callback/${provider}`);
+    }
+  });
+
   it('runs every step the plan lists, in the plan order', async () => {
     // The plan is the document a reader argues with. Two copies of an ordering is how
     // an ordering drifts, and three of these orderings are load-bearing.
