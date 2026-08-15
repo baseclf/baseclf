@@ -101,12 +101,23 @@ for (let round = 1; round <= samples; round++) {
   // is as idle as it was when the script started.
   if (round > 1) await sleep(gapSeconds * 1000);
 
+  // 🔴 The order rotates, and the first version of this script did not do that.
+  //
+  // Only the first request of a round meets a cold isolate; the ones behind it are
+  // milliseconds later and warm. With a fixed order, the path is perfectly confounded
+  // with the position, so the first run produced twelve cold samples of one path and
+  // zero of the other two. It read as "the D1 path is the slow one" when the data
+  // could not tell that apart from "whatever goes first is the slow one", and the
+  // control that was supposed to prove D1 was involved had never once been sampled
+  // cold. Rotating is what separates the two.
+  const order = PATHS.map((_, index) => PATHS[(index + round - 1) % PATHS.length]);
+
   const at = new Date().toISOString().slice(11, 19);
   const line = [];
 
-  for (const path of PATHS) {
+  for (const [position, path] of order.entries()) {
     const result = await sample(path);
-    results.push({ ...result, round });
+    results.push({ ...result, round, position });
     line.push(`${path} ${result.hung ? 'HUNG' : `${result.status ?? 'ERR'} ${result.ms}ms`}`);
   }
 
@@ -115,17 +126,22 @@ for (let round = 1; round <= samples; round++) {
 
 console.log('');
 
+// Reported per path AND per position, because those are the two explanations the
+// rotation exists to separate. If cold cost belongs to the path, the D1 paths stay
+// slow wherever they sit. If it belongs to the isolate, position zero is slow for
+// every path and the path column flattens.
 for (const path of PATHS) {
   const mine = results.filter((each) => each.path === path);
+  const cold = mine.filter((each) => each.position === 0);
   const hung = mine.filter((each) => each.hung).length;
-  // Anything past half a second is treated as a likely cold hit. A judgment, not a
-  // measurement: the warm path measured 180 to 210ms and the slow one 790 to 1250ms,
-  // so the gap between the two clusters is wide and the line sits in it.
-  const slow = mine.filter((each) => !each.hung && each.ms > 500).length;
-  const errors = mine.filter((each) => !each.hung && each.status === null).length;
+  const median = (of) =>
+    of.length === 0
+      ? 0
+      : [...of].map((each) => each.ms).sort((a, b) => a - b)[Math.floor(of.length / 2)];
 
   console.log(
-    `${path.padEnd(16)} n=${mine.length}  hung=${hung}  slow=${slow}  other-errors=${errors}`,
+    `${path.padEnd(16)} n=${mine.length}  hung=${hung}  ` +
+      `median_first=${median(cold)}ms  median_behind=${median(mine.filter((each) => each.position !== 0))}ms`,
   );
 }
 
