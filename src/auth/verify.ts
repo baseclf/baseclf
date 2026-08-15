@@ -28,7 +28,7 @@
  * with a loopback into the Worker, which is a faithful simulation of the one
  * thing that was broken. `_diagnose`, `doctor` and the JWKS endpoint all
  * reported healthy because all three ask from the outside, and outside was never
- * the broken side. See rules/02 §G14.
+ * the broken side. See rules/02 §I.
  *
  * So the source is now `config.readKeySet`, which reaches the issuer's own key
  * store without leaving the isolate. The failure mode is gone by construction:
