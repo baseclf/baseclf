@@ -71,6 +71,23 @@ const PATHS =
     ? ['/rest/v1/posts', '/_schema', '/health']
     : (args[pathsFlag + 1] ?? '').split(',').filter(Boolean);
 
+// 🔴 Refused rather than repaired, and the reason is what this check is for.
+//
+// Git Bash on Windows rewrites arguments that look like Unix paths, so `/rest/v1/posts`
+// arrived as `C:/Program Files/Git/rest/v1/posts`. The probe then requested a mangled
+// URL, got an error in 42ms, and printed eight rounds of it in the column where the
+// slowest path used to be. It reads as good news. Nothing in the output said the
+// measurement had stopped measuring anything.
+//
+// Set MSYS_NO_PATHCONV=1, or run it from PowerShell or cmd. This is the third time a
+// shell has broken a measurement in this project; see `rules/02` section C1.
+const mangled = PATHS.filter((path) => !path.startsWith('/'));
+if (mangled.length > 0) {
+  console.error(`refusing to probe paths that are not paths: ${mangled.join(', ')}`);
+  console.error('A shell rewrote these. Set MSYS_NO_PATHCONV=1, or use PowerShell or cmd.');
+  process.exit(2);
+}
+
 /** Everything one request produced, including the shape of its failure. */
 async function sample(path) {
   const started = Date.now();
