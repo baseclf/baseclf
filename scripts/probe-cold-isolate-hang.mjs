@@ -35,7 +35,9 @@ const args = process.argv.slice(2);
 const url = args.find((each) => !each.startsWith('--'));
 
 if (url === undefined) {
-  console.error('usage: node scripts/probe-cold-isolate-hang.mjs <url> [--samples N] [--gap S] [--timeout S]');
+  console.error(
+    'usage: node scripts/probe-cold-isolate-hang.mjs <url> [--samples N] [--gap S] [--timeout S]',
+  );
   process.exit(2);
 }
 
@@ -86,7 +88,9 @@ async function sample(path) {
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 console.log(`probing ${url}`);
-console.log(`${samples} samples, ${gapSeconds}s apart, ${timeoutSeconds}s timeout, ${PATHS.length} paths each`);
+console.log(
+  `${samples} samples, ${gapSeconds}s apart, ${timeoutSeconds}s timeout, ${PATHS.length} paths each`,
+);
 console.log(`expect this to take about ${Math.round((samples * gapSeconds) / 60)} minutes\n`);
 
 const results = [];
