@@ -59,8 +59,17 @@ const timeoutSeconds = flag('timeout', 25);
  * `/health` is here as the control. It is the one path that never touches D1, so if it
  * ever hangs too then the cause is not in the database path and this whole line of
  * investigation is pointed at the wrong place.
+ *
+ * Overridable, because the useful comparison changes as the answer narrows. The one
+ * that mattered most was adding a storage path: it shares `ensureEngineSchemaOnce`
+ * with the REST path and shares nothing else, so it separates the bootstrap from
+ * everything the REST path does on its own.
  */
-const PATHS = ['/rest/v1/posts', '/_schema', '/health'];
+const pathsFlag = args.indexOf('--paths');
+const PATHS =
+  pathsFlag === -1
+    ? ['/rest/v1/posts', '/_schema', '/health']
+    : (args[pathsFlag + 1] ?? '').split(',').filter(Boolean);
 
 /** Everything one request produced, including the shape of its failure. */
 async function sample(path) {
