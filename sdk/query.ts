@@ -292,13 +292,19 @@ export class QueryBuilder<Row = Record<string, unknown>> {
     const bookmark = this.#context.bookmark.read();
     if (bookmark !== null) headers['x-d1-bookmark'] = bookmark;
 
-    if (this.#body !== undefined) {
-      headers['content-type'] = 'application/json';
-      // Ask for the rows back. Without it a write answers 204 and the caller has to
-      // read again to find out what it did, which is a second round trip and a second
-      // policy evaluation.
+    // ⚠️ Two conditions, not one, and tying them together was a real bug. Asking for
+    // the rows back belongs to every write; declaring JSON belongs to the ones that
+    // carry a body. A delete has no body, so the single condition left it asking for
+    // nothing back, and a delete that reports what it removed is the only way a caller
+    // learns whether the row was theirs. Found by writing the test for it.
+    if (this.#method !== 'GET') {
+      // Without this a write answers with nothing and the caller reads again to find
+      // out what it did: another round trip, and a second policy evaluation of the
+      // same rows.
       headers['prefer'] = 'return=representation';
     }
+
+    if (this.#body !== undefined) headers['content-type'] = 'application/json';
 
     const init: RequestInit = { method: this.#method, headers };
     if (this.#body !== undefined) init.body = JSON.stringify(this.#body);

@@ -287,6 +287,21 @@ describe('the write path', () => {
     expect(seen.calls[1]?.prefer).toBeNull();
   });
 
+  it('asks for the rows back on a delete too, which has no body to hang it on', async () => {
+    // 🔴 This was wrong, and the authenticated test is what found it. Asking for the
+    // rows back was tied to carrying a body, so a delete asked for nothing and came
+    // back empty. A delete that reports what it removed is the only way a caller
+    // learns whether the row was theirs, which is the whole answer on this path.
+    const seen = recorder();
+    const writer = createClient(BASE_URL, { fetch: seen.fetch });
+
+    await writer.from('posts').eq('id', 'p_z').delete();
+
+    expect(seen.calls[0]?.prefer).toBe('return=representation');
+    // And still no content type, because there is still no body to describe.
+    expect(seen.calls[0]?.body).toBeNull();
+  });
+
   it('keeps the filters on an update, so it cannot become an unfiltered write', async () => {
     const builder = client.from('posts').eq('id', 'p_1').update({ title: 'b' });
 
