@@ -18,6 +18,7 @@ import { runMutations } from './mutation-runner.mjs';
 const QUERY = 'sdk/query.ts';
 const CLIENT = 'sdk/index.ts';
 const AUTH = 'sdk/auth.ts';
+const STORAGE = 'sdk/storage.ts';
 
 const MUTATIONS = [
   {
@@ -184,15 +185,49 @@ const MUTATIONS = [
     find: / {6}if \(given !== undefined\) return typeof given === 'function' \? given\(\) : given;/,
     replace: '      if (false) return null;',
   },
+  {
+    // 🔴 The length not declared. Without it the deployment answers 411, because a
+    // size limit has nothing to check against, and the caller is told their request
+    // was malformed for a header they never knew about.
+    name: 'the upload length never declared',
+    file: STORAGE,
+    expect: 'the declares-it and measures-a-string-in-bytes tests',
+    find: / {8}'content-length': String\(length\),/,
+    replace: '',
+  },
+  {
+    // A string measured in characters. Five accented characters are six bytes, and a
+    // length that disagrees with the body is refused by the runtime rather than
+    // trimmed, so this fails only for text that is not plain ASCII.
+    name: 'a string body measured in characters rather than bytes',
+    file: STORAGE,
+    expect: 'the measures-a-string-in-bytes test',
+    find: / {2}if \(typeof body === 'string'\) return new TextEncoder\(\)\.encode\(body\)\.byteLength;/,
+    replace: "  if (typeof body === 'string') return body.length;",
+  },
+  {
+    // A file name with a slash sent rather than refused. The engine answers 404,
+    // which reads as "no such bucket" to somebody who was asking for a folder.
+    name: 'a file name with a slash sent instead of refused',
+    file: STORAGE,
+    expect: 'the refuses-a-file-name-with-a-slash test',
+    find: / {4}if \(fileName\.includes\('\/'\)\) \{/,
+    replace: '    if (false) {',
+  },
 ];
 
 await runMutations({
-  files: [QUERY, CLIENT, AUTH],
+  files: [QUERY, CLIENT, AUTH, STORAGE],
   // ⚠️ Both, and leaving the second one out cost a false survivor. The anonymous role
   // can see exactly one row in the fixture, so the case where `single()` matches
   // several can only be written where an identity owns several, which is the other
   // file. A mutation runner pointed at half the tests reports the other half as
   // missing coverage.
-  suites: ['sdk/client.test.ts', 'sdk/authenticated.test.ts', 'sdk/auth.test.ts'],
+  suites: [
+    'sdk/client.test.ts',
+    'sdk/authenticated.test.ts',
+    'sdk/auth.test.ts',
+    'sdk/storage.test.ts',
+  ],
   mutations: MUTATIONS,
 });

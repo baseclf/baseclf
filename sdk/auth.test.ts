@@ -316,3 +316,72 @@ describe('a JWT that has aged out, which is the case a client cannot wait for', 
     expect(await signed.auth.getToken()).toBeNull();
   });
 });
+
+describe('the callback the browser comes back to, which this client never sees', () => {
+  /**
+   * 🔴 The gap `setSession` exists for, and it was the last unmeasured part of the
+   * flow. `signInWithOAuth` ends at a URL; the provider then sends the browser to a
+   * callback on the deployment, and whatever page handles that is the thing holding a
+   * session token. This client was not in the room for any of it.
+   *
+   * ⚠️ The provider half cannot be driven here: it needs Google or GitHub to answer.
+   * So what is proved is the half that belongs to us, which is that a session token
+   * obtained anywhere at all can be handed to a client and works. That is exactly what
+   * an application does after reading `set-auth-token` at its callback.
+   */
+  it('takes a session obtained elsewhere and signs requests with it', async () => {
+    // One client signs in and gets a session, standing in for the callback page.
+    const elsewhere = client();
+    await elsewhere.auth.signUp({ email: 'sam@example.test', password: PASSWORD, name: 'Sam' });
+    const session = elsewhere.auth.getSession();
+    expect(session).not.toBeNull();
+
+    // A different client, which never signed in, is handed that session.
+    const receiving = client();
+    expect(await receiving.auth.getToken()).toBeNull();
+
+    receiving.auth.setSession(session);
+
+    // It exchanges for a JWT and writes, which anonymous cannot do.
+    expect(await receiving.auth.getToken()).not.toBeNull();
+    const written = await receiving
+      .from('posts')
+      .insert({
+        id: 'p_sdk_callback',
+        title: 'Written after a handover',
+        body: 'body',
+        status: 'draft',
+        org_id: 'org_1',
+        created_at: '2026-08-16T00:00:00Z',
+      })
+      .single();
+
+    expect(written.error).toBeNull();
+  });
+
+  it('reports who it is, so an application can show a name after the redirect', async () => {
+    const elsewhere = client();
+    await elsewhere.auth.signUp({ email: 'tam@example.test', password: PASSWORD, name: 'Tam' });
+
+    const receiving = client();
+    receiving.auth.setSession(elsewhere.auth.getSession());
+
+    const { data, error } = await receiving.auth.getUser();
+
+    expect(error).toBeNull();
+    expect(data?.user?.email).toBe('tam@example.test');
+  });
+
+  it('refuses a session that is not one, rather than looking signed in', async () => {
+    // ⚠️ A callback that read the wrong header, or an expired value out of storage,
+    // hands over a string that is not a session. The client has to end up anonymous
+    // rather than appearing signed in and failing later on every data request.
+    const receiving = client();
+    receiving.auth.setSession('not-a-session-token');
+
+    expect(await receiving.auth.getToken()).toBeNull();
+
+    const { data, error } = await receiving.auth.getUser();
+    expect(error === null ? data?.user : null).toBeNull();
+  });
+});

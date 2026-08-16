@@ -30,10 +30,12 @@
 import { AuthClient } from './auth.js';
 import type { FetchLike } from './errors.js';
 import { QueryBuilder, type QueryContext } from './query.js';
+import { StorageClient } from './storage.js';
 
 export { AuthClient, type AuthResult, type AuthUser, type Provider } from './auth.js';
 export { BaseclfRequestError, type FetchLike } from './errors.js';
 export { MAX_PAGE_SIZE, QueryBuilder, type FilterOperator } from './query.js';
+export { type SizedBody, StorageBucket, StorageClient, type StoredObject } from './storage.js';
 
 export interface ClientOptions {
   /**
@@ -61,6 +63,8 @@ export interface ClientOptions {
 export class BaseclfClient {
   /** Signing in, and the two tokens. See `auth.ts`. */
   readonly auth: AuthClient;
+  /** Files. See `storage.ts` for the three shapes it refuses to send. */
+  readonly storage: StorageClient;
   readonly #context: QueryContext;
 
   constructor(url: string, options: ClientOptions = {}) {
@@ -83,6 +87,8 @@ export class BaseclfClient {
       if (given !== undefined) return typeof given === 'function' ? given() : given;
       return this.auth.getToken();
     };
+
+    this.storage = new StorageClient(trimmed, fetcher, token);
 
     let bookmark: string | null = null;
     const consistent = options.sessionConsistency !== false;
