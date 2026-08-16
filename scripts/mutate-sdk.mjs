@@ -17,6 +17,7 @@ import { runMutations } from './mutation-runner.mjs';
 
 const QUERY = 'sdk/query.ts';
 const CLIENT = 'sdk/index.ts';
+const AUTH = 'sdk/auth.ts';
 
 const MUTATIONS = [
   {
@@ -131,15 +132,67 @@ const MUTATIONS = [
     find: / {4}if \(result\.data !== null && result\.data\.length > 1\) \{/,
     replace: '    if (result.data !== null && result.data.length !== 1) {',
   },
+  {
+    // 🔴 The session never captured. Sign-in answers 200, the user is really signed
+    // in on the deployment, and the client has nothing to show for it. Every request
+    // after goes out anonymous, so the symptom is rows missing rather than an error.
+    name: 'the session token never taken off the header',
+    file: AUTH,
+    expect: 'the captures-the-session and signs-the-data-request tests',
+    find: / {6}this\.#session = token;/,
+    replace: '',
+  },
+  {
+    // The JWT kept past its life. Measured at 900 seconds, so this works for fifteen
+    // minutes and then every request is a 401 that reads as a policy refusal.
+    name: 'the JWT reused however old it is',
+    file: AUTH,
+    expect: 'the drops-the-session-and-the-JWT-with-it test',
+    find: / {6}this\.#jwtExpiresAt - now > REFRESH_MARGIN_SECONDS/,
+    replace: '      true',
+  },
+  {
+    // 🔴 The one that would be a leak rather than a bug: a client still holding the
+    // session of somebody who signed out, and still sending it.
+    name: 'the session kept after signing out',
+    file: AUTH,
+    expect: 'the drops-the-session test',
+    // Only the session line: the JWT is derived from it, so keeping the session is
+    // the half that matters and the half that is a leak.
+    find: / {4}this\.#session = null;/,
+    replace: '',
+  },
+  {
+    // A failed exchange keeping the stale token. The engine answers 401, which reads
+    // as a policy refusal rather than as a client that could not refresh.
+    name: 'a failed token exchange keeping the old token',
+    file: AUTH,
+    expect: 'the drops-the-session-and-the-JWT-with-it test',
+    // ⚠️ The whole branch, because a mutation that only changed the return would be a
+    // no-op: the two lines above it have just set the field to null, so returning it
+    // returns null anyway. The first version did exactly that and survived, and it
+    // survived for being harmless rather than for being uncaught.
+    find: / {6}this\.#jwt = null;\n {6}this\.#jwtExpiresAt = null;\n {6}return null;/,
+    replace: '      return this.#jwt;',
+  },
+  {
+    // The explicit token losing to a session picked up elsewhere. A server that
+    // verified a token already was being deliberate.
+    name: 'a signed-in session overriding the token the caller passed',
+    file: CLIENT,
+    expect: 'the explicit-token-wins test',
+    find: / {6}if \(given !== undefined\) return typeof given === 'function' \? given\(\) : given;/,
+    replace: '      if (false) return null;',
+  },
 ];
 
 await runMutations({
-  files: [QUERY, CLIENT],
+  files: [QUERY, CLIENT, AUTH],
   // ⚠️ Both, and leaving the second one out cost a false survivor. The anonymous role
   // can see exactly one row in the fixture, so the case where `single()` matches
   // several can only be written where an identity owns several, which is the other
   // file. A mutation runner pointed at half the tests reports the other half as
   // missing coverage.
-  suites: ['sdk/client.test.ts', 'sdk/authenticated.test.ts'],
+  suites: ['sdk/client.test.ts', 'sdk/authenticated.test.ts', 'sdk/auth.test.ts'],
   mutations: MUTATIONS,
 });

@@ -92,8 +92,14 @@ export interface SingleResult<Row> {
 export interface QueryContext {
   readonly url: string;
   readonly fetch: FetchLike;
-  /** The bearer token for this call, or null for the anonymous role. */
-  readonly token: () => string | null;
+  /**
+   * The bearer token for this call, or null for the anonymous role.
+   *
+   * ⚠️ Allowed to be async, because the honest implementation is: the JWT lasts 900
+   * seconds and getting a fresh one is a round trip. A synchronous accessor forces
+   * either a stale token or a refresh racing the request that needed it.
+   */
+  readonly token: () => string | null | Promise<string | null>;
   /** Read the session bookmark, and store the one the response carried. */
   readonly bookmark: {
     readonly read: () => string | null;
@@ -282,7 +288,7 @@ export class QueryBuilder<Row = Record<string, unknown>> {
   async run(): Promise<QueryResult<Row>> {
     const headers: Record<string, string> = { accept: 'application/json' };
 
-    const token = this.#context.token();
+    const token = await this.#context.token();
     if (token !== null) headers['authorization'] = `Bearer ${token}`;
 
     // ⭐ Read-your-writes, without the caller knowing the header exists. D1 hands a

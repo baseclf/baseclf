@@ -27,9 +27,11 @@
  * fourteen PostgREST filters that cannot mean anything on SQLite. See `query.ts`.
  */
 
+import { AuthClient } from './auth.js';
 import type { FetchLike } from './errors.js';
 import { QueryBuilder, type QueryContext } from './query.js';
 
+export { AuthClient, type AuthResult, type AuthUser, type Provider } from './auth.js';
 export { BaseclfRequestError, type FetchLike } from './errors.js';
 export { MAX_PAGE_SIZE, QueryBuilder, type FilterOperator } from './query.js';
 
@@ -52,9 +54,13 @@ export interface ClientOptions {
    * guarantees ordering.
    */
   readonly sessionConsistency?: boolean | undefined;
+  /** The clock `auth` ages tokens against. Injected so a test need not wait 900 seconds. */
+  readonly now?: (() => number) | undefined;
 }
 
 export class BaseclfClient {
+  /** Signing in, and the two tokens. See `auth.ts`. */
+  readonly auth: AuthClient;
   readonly #context: QueryContext;
 
   constructor(url: string, options: ClientOptions = {}) {
@@ -63,14 +69,20 @@ export class BaseclfClient {
       throw new TypeError(`A deployment URL has to start with http or https: got "${url}".`);
     }
 
-    const given = options.token;
-    const token = (): string | null => {
-      if (given === undefined) return null;
-      return typeof given === 'function' ? given() : given;
-    };
-
     const fetcher: FetchLike =
       options.fetch ?? ((target, init) => globalThis.fetch(target, init));
+
+    this.auth = new AuthClient(trimmed, fetcher, options.now);
+
+    // ⚠️ An explicit token wins over the signed-in session, and the order matters.
+    // A server handing this a token it already verified is being deliberate, and a
+    // session picked up somewhere else quietly overriding that would be a request
+    // going out as somebody other than the caller meant.
+    const given = options.token;
+    const token = (): string | null | Promise<string | null> => {
+      if (given !== undefined) return typeof given === 'function' ? given() : given;
+      return this.auth.getToken();
+    };
 
     let bookmark: string | null = null;
     const consistent = options.sessionConsistency !== false;
