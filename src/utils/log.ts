@@ -79,7 +79,50 @@ export interface StorageWriteEvent {
   readonly bytes: number;
 }
 
-export type LogEvent = QueryEvent | PolicyRefusalEvent | ErrorEvent | AuthEvent | StorageWriteEvent;
+/**
+ * Which per-isolate initialisation this is. A closed set, like every other field in
+ * this file, so the event cannot become somewhere a table name or a bucket lands.
+ */
+export type InitStep =
+  | 'catalogue'
+  | 'policy_registry'
+  | 'storage_registry'
+  | 'engine_schema'
+  | 'rate_limit_table';
+
+/**
+ * A per-isolate initialisation finished, and how long its round trips took.
+ *
+ * 🔴 **`ms` measures I/O, not work, and reading it as work gets the wrong answer.**
+ * A deployed Worker freezes the clock between I/O operations (`rules/02` section A2),
+ * so a step that only computes reports about zero however long it really took. Every
+ * step named above talks to D1, which is why they are the ones instrumented: their
+ * elapsed time is real. Anything CPU-bound has to come from GraphQL analytics
+ * instead, and mixing the two on one dashboard is how somebody concludes that
+ * building an expensive object is free.
+ *
+ * Emitted once per isolate per step, on success only. A failed load is already an
+ * error event, and a retry that reported a duration would make a deployment look
+ * slower the more it was failing.
+ *
+ * ⚠️ Measured from outside on 2026-08-15, a cold request on a data path costs 400ms
+ * to 3.8s while `/health` costs 235 to 378. This event exists to say which step
+ * inside that is spending it, because from outside the whole init is one number.
+ */
+export interface IsolateInitEvent {
+  readonly event: 'isolate_init';
+  readonly step: InitStep;
+  /** Round trip time for this step's queries. See the warning above. */
+  readonly ms: number;
+}
+
+export type LogEvent =
+  | QueryEvent
+  | PolicyRefusalEvent
+  | ErrorEvent
+  | AuthEvent
+  | StorageWriteEvent
+  | IsolateInitEvent;
 
 export function logEvent(event: LogEvent): void {
   console.log(JSON.stringify(event));

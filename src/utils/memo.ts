@@ -55,6 +55,8 @@
  * improved: it is the behaviour every caller already had.
  */
 
+import { type InitStep, logEvent } from './log.js';
+
 /**
  * How long a loaded registry may go without being read again.
  *
@@ -92,6 +94,16 @@ export interface MemoOptions {
   readonly maxAgeMs?: number;
   /** The clock, injected so a test can observe the window without waiting for it. */
   readonly now?: () => number;
+  /**
+   * Report how long each successful load took, under this name.
+   *
+   * Absent means silent, which is what a memo in a test wants. Present is how a
+   * deployment answers "which part of a cold request is the slow part", a question
+   * that from outside is one number covering every step at once.
+   *
+   * ⚠️ What it reports is round trip time, not work. See `IsolateInitEvent`.
+   */
+  readonly label?: InitStep;
 }
 
 export interface IsolateMemo<T> {
@@ -101,9 +113,38 @@ export interface IsolateMemo<T> {
   reset(): void;
 }
 
+/**
+ * Say how long a per-isolate load took, once it has landed.
+ *
+ * ⚠️ Attached to the promise rather than wrapped around an await, so the caller
+ * being timed is the one that started the load. A second caller arriving part way
+ * through a shared attempt would otherwise report a shorter load than happened,
+ * and the reading that follows is that the step gets faster under load.
+ *
+ * ⚠️ Success only. A failure is already an error event, and a duration reported on
+ * every retry would make a deployment look slower the more it was failing.
+ *
+ * Returns nothing and swallows the rejection it observes, because the caller owns
+ * that promise. Handling it here as well would be a second handler on one failure.
+ */
+export function reportInitDuration(
+  step: InitStep,
+  attempt: Promise<unknown>,
+  startedAt: number,
+  now: () => number = (): number => Date.now(),
+): void {
+  void attempt.then(
+    () => {
+      logEvent({ event: 'isolate_init', step, ms: now() - startedAt });
+    },
+    () => {},
+  );
+}
+
 export function isolateMemo<T>(options: MemoOptions = {}): IsolateMemo<T> {
   const maxAgeMs = options.maxAgeMs;
   const now = options.now ?? ((): number => Date.now());
+  const label = options.label;
 
   let cached: Promise<T> | null = null;
   let loadStartedAt = 0;
@@ -136,6 +177,13 @@ export function isolateMemo<T>(options: MemoOptions = {}): IsolateMemo<T> {
       });
 
       cached = attempt;
+
+      // `loadStartedAt` is reassigned by the next load, and this is still safe to read
+      // here: it is a number passed by value at call time, so the report holds its own
+      // copy. A local capture was tried first and two mutations aimed at it both came
+      // out as no-ops, which is what showed it was defending nothing.
+      if (label !== undefined) reportInitDuration(label, attempt, loadStartedAt, now);
+
       return attempt;
     },
 

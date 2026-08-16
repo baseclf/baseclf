@@ -257,7 +257,7 @@ export async function introspect(executor: D1Executor): Promise<Catalogue> {
  * connection limit in `rules/02` section A. One transient error and the isolate can
  * never read a schema again. See `utils/memo.ts`.
  */
-const memo = isolateMemo<Catalogue>();
+const memo = isolateMemo<Catalogue>({ label: 'catalogue' });
 
 export function getCatalogue(executor: D1Executor): Promise<Catalogue> {
   return memo.get(() => introspect(executor));

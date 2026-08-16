@@ -74,8 +74,8 @@ const MUTATIONS = [
     name: 'the memo kept after a failure, so a transient error is remembered forever',
     file: INDEX,
     expect: 'nothing, and that is recorded rather than hidden',
-    find: / {4}engineSchemaReady = null;\n {4}throw error;/,
-    replace: '    throw error;',
+    find: / {6}engineSchemaReady = null;\n {6}throw error;/,
+    replace: '      throw error;',
     knownSurvivor:
       'no test makes applyEngineSchema fail transiently and then succeed. Doing it ' +
       'needs an executor that fails once, which means injecting one into the worker ' +

@@ -159,6 +159,16 @@ const MUTATIONS = [
       },
     ],
   },
+  {
+    // Reporting a duration on a failed load would make a deployment look slower the
+    // more it was failing, which is the reading that sends somebody after a
+    // performance problem when what they have is an outage.
+    name: 'the load duration reported even when the load failed',
+    file: MEMO,
+    expect: 'the says-nothing-when-the-load-failed test',
+    find: / {4}\(\) => \{\},/,
+    replace: "    () => { logEvent({ event: 'isolate_init', step, ms: now() - startedAt }); },",
+  },
 ];
 
 await runMutations({

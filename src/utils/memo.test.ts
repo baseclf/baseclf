@@ -235,3 +235,111 @@ describe('a memo that forgets a failure', () => {
     expect(script.calls()).toBe(1);
   });
 });
+
+describe('a memo that says how long its load took', () => {
+  /** Every `isolate_init` line a body of work wrote, parsed back out of the log. */
+  async function initLines(body: () => Promise<unknown>): Promise<{ step: string; ms: number }[]> {
+    const written: { step: string; ms: number }[] = [];
+    const real = console.log;
+
+    console.log = (line: unknown): void => {
+      const parsed: unknown = typeof line === 'string' ? JSON.parse(line) : null;
+      if (
+        parsed !== null &&
+        typeof parsed === 'object' &&
+        (parsed as { event?: unknown }).event === 'isolate_init'
+      ) {
+        written.push(parsed as { step: string; ms: number });
+      }
+    };
+
+    try {
+      await body();
+      // The report is attached to the promise rather than awaited by the caller, so
+      // it lands a microtask later. Without this the assertions race it.
+      await Promise.resolve();
+      await Promise.resolve();
+    } finally {
+      console.log = real;
+    }
+
+    return written;
+  }
+
+  it('says nothing at all when no label was given', async () => {
+    // The control. A memo in a test, or one whose timing nobody wants, has to be
+    // silent, otherwise every suite in the project starts writing this event.
+    const memo = isolateMemo<string>();
+    const lines = await initLines(() => memo.get(() => Promise.resolve('value')));
+
+    expect(lines).toEqual([]);
+  });
+
+  it('reports the labelled step once, with the time the load took', async () => {
+    let clock = 1000;
+    const memo = isolateMemo<string>({ label: 'catalogue', now: () => clock });
+
+    const lines = await initLines(async () => {
+      await memo.get(() => {
+        clock += 250;
+        return Promise.resolve('value');
+      });
+    });
+
+    expect(lines).toEqual([{ event: 'isolate_init', step: 'catalogue', ms: 250 }]);
+  });
+
+  it('does not report again when the value is served from the memo', async () => {
+    // Otherwise the number stops meaning "what a cold isolate paid" and starts
+    // meaning "how many requests this isolate served", which is a different metric
+    // wearing the same name.
+    const memo = isolateMemo<string>({ label: 'catalogue', now: () => 0 });
+
+    const lines = await initLines(async () => {
+      await memo.get(() => Promise.resolve('value'));
+      await memo.get(() => Promise.resolve('value'));
+      await memo.get(() => Promise.resolve('value'));
+    });
+
+    expect(lines).toHaveLength(1);
+  });
+
+  it('times the load rather than the wait of whoever arrived second', async () => {
+    // 🔴 The one worth writing. Callers two and three join an attempt already in
+    // flight, so timing them would report a load shorter than the one that happened,
+    // and the reading that follows is that the step gets faster under load.
+    let clock = 0;
+    let land = (_: string): void => {};
+    const memo = isolateMemo<string>({ label: 'policy_registry', now: () => clock });
+
+    const lines = await initLines(async () => {
+      const first = memo.get(
+        () =>
+          new Promise<string>((resolve) => {
+            land = resolve;
+          }),
+      );
+
+      clock = 900;
+      const second = memo.get(() => Promise.resolve('unused'));
+
+      clock = 1000;
+      land('value');
+      await Promise.all([first, second]);
+    });
+
+    expect(lines).toEqual([{ event: 'isolate_init', step: 'policy_registry', ms: 1000 }]);
+  });
+
+  it('says nothing when the load failed', async () => {
+    // A failure is already an error event. A duration on every retry would make a
+    // deployment look slower the more it was failing.
+    const memo = isolateMemo<string>({ label: 'storage_registry', now: () => 0 });
+
+    const lines = await initLines(async () => {
+      await memo.get(() => Promise.reject(new Error('no'))).catch(() => undefined);
+    });
+
+    expect(lines).toEqual([]);
+  });
+});

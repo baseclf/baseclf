@@ -418,6 +418,7 @@ export function setRegistryClock(clock?: () => number): void {
 const memo = isolateMemo<Registry>({
   maxAgeMs: MAX_REGISTRY_AGE_MS,
   now: () => registryClock(),
+  label: 'policy_registry',
 });
 
 export function getRegistry(executor: D1Executor): Promise<Registry> {

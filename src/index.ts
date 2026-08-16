@@ -49,6 +49,7 @@ import { getStorageRegistry } from './storage/registry.js';
 import { deleteObject, downloadObject, uploadObject } from './storage/router.js';
 import { BaseclfError } from './utils/errors.js';
 import { logError } from './utils/log.js';
+import { reportInitDuration } from './utils/memo.js';
 import {
   checkRateLimit,
   cleanupRateLimits,
@@ -361,10 +362,14 @@ function rateLimitFor(pathname: string): { bucket: string; rule: RateLimitRule }
 let rateLimitTableReady: Promise<void> | null = null;
 
 async function ensureRateLimitTableOnce(db: D1Database): Promise<void> {
-  rateLimitTableReady ??= ensureRateLimitTable(db).catch((error: unknown) => {
-    rateLimitTableReady = null;
-    throw error;
-  });
+  if (rateLimitTableReady === null) {
+    const startedAt = Date.now();
+    rateLimitTableReady = ensureRateLimitTable(db).catch((error: unknown) => {
+      rateLimitTableReady = null;
+      throw error;
+    });
+    reportInitDuration('rate_limit_table', rateLimitTableReady, startedAt);
+  }
   await rateLimitTableReady;
 }
 
@@ -396,10 +401,14 @@ export function resetRateLimitTableMemo(): void {
 let engineSchemaReady: Promise<void> | null = null;
 
 async function ensureEngineSchemaOnce(db: D1Database): Promise<void> {
-  engineSchemaReady ??= applyEngineSchema(db).catch((error: unknown) => {
-    engineSchemaReady = null;
-    throw error;
-  });
+  if (engineSchemaReady === null) {
+    const startedAt = Date.now();
+    engineSchemaReady = applyEngineSchema(db).catch((error: unknown) => {
+      engineSchemaReady = null;
+      throw error;
+    });
+    reportInitDuration('engine_schema', engineSchemaReady, startedAt);
+  }
   await engineSchemaReady;
 }
 

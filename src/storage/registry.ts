@@ -206,6 +206,7 @@ const memo = isolateMemo<StorageRegistry>({
   // can describe in one sentence.
   maxAgeMs: MAX_REGISTRY_AGE_MS,
   now: () => storageClock(),
+  label: 'storage_registry',
 });
 
 export function getStorageRegistry(executor: D1Executor): Promise<StorageRegistry> {
