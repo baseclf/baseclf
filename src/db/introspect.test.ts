@@ -207,3 +207,125 @@ describe('getCatalogue', () => {
     expect(catalogue.hasTable('articles')).toBe(true);
   });
 });
+
+describe('reading the PRAGMAs in one batch', () => {
+  /**
+   * The same catalogue, built with `batch` taken away.
+   *
+   * Wrapping the real database rather than faking one: what is being compared is two
+   * paths through the same D1, and a stand-in would be comparing the loader against a
+   * model of D1 rather than against D1.
+   */
+  function withoutBatch(executor: D1Executor): D1Executor {
+    return {
+      prepare: (sql: string) => executor.prepare(sql),
+      batch: () => {
+        throw new Error('batch is not available here');
+      },
+    };
+  }
+
+  it('gives every table its own columns, indexes and foreign keys', async () => {
+    // 🔴 The one that matters. Results come back matched to statements by position,
+    // three statements per table, so an off-by-one hands one table another table's
+    // columns. That is not a display bug: `rules/00` §I6 rests on the catalogue being
+    // exact, and DQS means a column that does not exist is answered with a string
+    // rather than an error.
+    //
+    // Asserted on the columns each table does NOT have as well as the ones it does,
+    // because a swap produces a plausible catalogue and only the absences catch it.
+    // ⚠️ `id` and `body` are in both fixtures, so neither can carry this. `title` and
+    // `author_id` are articles only, `article_id` is comments only.
+    const catalogue = await introspect(env.DB);
+
+    const articles = catalogue.tables.get('articles');
+    const comments = catalogue.tables.get('comments');
+
+    const articleColumns = [...(articles?.columns.keys() ?? [])];
+    const commentColumns = [...(comments?.columns.keys() ?? [])];
+
+    expect(articleColumns).toEqual(expect.arrayContaining(['title', 'author_id', 'status']));
+    expect(articleColumns).not.toContain('article_id');
+    expect(commentColumns).toEqual(expect.arrayContaining(['article_id', 'body']));
+    expect(commentColumns).not.toContain('title');
+    expect(commentColumns).not.toContain('author_id');
+
+    // Indexes and foreign keys are the other two statements of each table's three, so
+    // they catch a shift the columns would not.
+    //
+    // ⚠️ Filtered to the ones with names of our own. A `TEXT PRIMARY KEY` makes SQLite
+    // add `sqlite_autoindex_<table>_1`, so both fixtures carry one and an exact list
+    // would be asserting SQLite's naming rather than this loader's mapping.
+    const named = (table: typeof articles): string[] =>
+      (table?.indexes ?? [])
+        .map((each) => each.name)
+        .filter((name) => !name.startsWith('sqlite_'))
+        .sort();
+
+    expect(named(articles)).toEqual(['articles_author_id', 'articles_title']);
+    expect(named(comments)).toEqual([]);
+    expect(comments?.foreignKeys.map((each) => each.referencesTable)).toEqual(['articles']);
+    expect(articles?.foreignKeys).toEqual([]);
+  });
+
+  it('reads each index its own members rather than the previous one is', async () => {
+    // The second batch is keyed off the first, one entry per index across every table,
+    // so its positions drift independently of the table positions.
+    const catalogue = await introspect(env.DB);
+    const byName = new Map(
+      (catalogue.tables.get('articles')?.indexes ?? []).map((each) => [each.name, each]),
+    );
+
+    expect(byName.get('articles_author_id')?.columns).toEqual(['author_id']);
+    expect(byName.get('articles_title')?.columns).toEqual(['title']);
+    expect(byName.get('articles_title')?.unique).toBe(true);
+    expect(byName.get('articles_author_id')?.unique).toBe(false);
+  });
+
+  it('builds the identical catalogue when the batch is refused', async () => {
+    // ⚠️ The fallback is not decoration. `batch` containing PRAGMA is measured in
+    // workerd and through the REST transport on real D1, and neither of those is
+    // `batch` through the binding on real D1, which nothing can measure without
+    // deploying. If it is refused there this path runs, and a catalogue that came out
+    // smaller would mean every identifier is unknown and the deployment refuses
+    // everything.
+    const batched = await introspect(env.DB);
+    const oneAtATime = await introspect(withoutBatch(env.DB));
+
+    const shape = (catalogue: Awaited<ReturnType<typeof introspect>>) =>
+      [...catalogue.tables.entries()].map(([name, table]) => ({
+        name,
+        columns: [...table.columns.keys()],
+        indexes: table.indexes.map((each) => ({ ...each, columns: [...each.columns] })),
+        foreignKeys: table.foreignKeys.map((each) => ({ ...each })),
+        isSystem: table.isSystem,
+      }));
+
+    expect(shape(oneAtATime)).toEqual(shape(batched));
+    expect(oneAtATime.tables.size).toBeGreaterThan(0);
+  });
+
+  it('refuses a batch that answers with the wrong number of result sets', async () => {
+    // Everything downstream indexes by position, so a short answer would shift every
+    // table after the gap rather than lose one. It has to stop instead of be walked.
+    // ⚠️ Drops the FIRST result rather than the last, and the difference is the whole
+    // test. Dropping the last one loses a tail and shifts nothing, so a loader that
+    // walked the short answer regardless still answered correctly about every table
+    // before it, and this test passed while proving nothing. A mutation removing the
+    // count check survived it. Dropping the first shifts every table.
+    const short: D1Executor = {
+      prepare: (sql: string) => env.DB.prepare(sql),
+      batch: async <T>(statements: D1PreparedStatement[]) => {
+        const all = await env.DB.batch<T>(statements);
+        return all.slice(1);
+      },
+    };
+
+    // It falls back rather than throwing, which is the deliberate part: a wrong count
+    // is a reason to stop trusting the batch, not a reason to refuse every request.
+    const catalogue = await introspect(short);
+
+    expect(catalogue.tables.get('articles')?.columns.has('title')).toBe(true);
+    expect(catalogue.tables.get('comments')?.columns.has('body')).toBe(true);
+  });
+});

@@ -15,6 +15,7 @@
  */
 
 import { BaseclfError } from '../utils/errors.js';
+import { logError } from '../utils/log.js';
 import { isolateMemo } from '../utils/memo.js';
 import type { D1Executor } from './dialect.js';
 import { assertExecutable } from './guards.js';
@@ -158,6 +159,80 @@ async function pragma<R>(executor: D1Executor, statement: string): Promise<R[]> 
 }
 
 /**
+ * How many PRAGMAs the fallback path runs at once.
+ *
+ * Three, which is what the per-table loop used to do, and well under the six
+ * concurrent D1 connections a Worker gets (`rules/02` section A). Firing all forty
+ * at once would queue at that ceiling and turn a fallback into a worse one.
+ */
+const FALLBACK_CONCURRENCY = 3;
+
+/**
+ * Read many PRAGMAs, in one round trip when D1 allows it.
+ *
+ * 🔴 **The whole point is the round trip count, and it was measured before it was
+ * built.** Inside a deployed Worker on 2026-08-16, a warm D1 round trip is 5 to 11ms
+ * and a catalogue load took 312 to 443ms, which is this many statements multiplied by
+ * that. `rules/01` §G14 has the numbers and §G15 has the arithmetic.
+ *
+ * 🔴 **Results are matched to statements by position, and getting that wrong is a
+ * security bug rather than a display bug.** A catalogue that gives one table another
+ * table's columns says a column exists where it does not, and `rules/00` §I6 is built
+ * on the catalogue being exact: DQS is on, so a wrong column name is answered with a
+ * string instead of an error. So the count is asserted rather than assumed, and the
+ * tests use tables whose columns differ so a swap cannot pass.
+ *
+ * ⚠️ **The fallback exists because the batch is not fully measured.** `batch()`
+ * containing PRAGMA is confirmed in workerd and confirmed through the REST transport
+ * on real D1, and neither of those is `batch()` through the binding on real D1, which
+ * nothing can measure without deploying. If it is refused there, this drops to reading
+ * them one at a time, loudly, rather than returning a catalogue that is missing
+ * things. An empty catalogue is not a degraded catalogue: it means every identifier is
+ * unknown, so the deployment refuses every request.
+ */
+async function readPragmas<R>(executor: D1Executor, statements: readonly string[]): Promise<R[][]> {
+  if (statements.length === 0) return [];
+
+  for (const statement of statements) {
+    assertExecutable({ sql: statement, parameters: [] });
+  }
+
+  try {
+    const results = await executor.batch<R>(statements.map((sql) => executor.prepare(sql)));
+
+    // ⚠️ Not a formality. Everything below indexes into this by position, so a batch
+    // that answered with a different number of result sets has to stop here rather
+    // than be walked. Fewer results silently shifts every table after the gap.
+    if (results.length !== statements.length) {
+      throw new BaseclfError('D1_QUERY_FAILED', 500, {
+        message: 'Could not read the database schema.',
+        detail: `A batch of ${statements.length} PRAGMA statements answered with ${results.length} result sets.`,
+      });
+    }
+
+    return results.map((result) => result.results ?? []);
+  } catch (cause) {
+    // Loud, because the alternative is a deployment quietly paying forty round trips
+    // per cold isolate forever while the number that would show it sits in a log
+    // nobody reads. The reads themselves still happen.
+    logError({
+      event: 'error',
+      code: 'D1_QUERY_FAILED',
+      detail: `PRAGMA batch refused, reading ${statements.length} statements one at a time: ${
+        cause instanceof Error ? cause.message : String(cause)
+      }`,
+    });
+
+    const rows: R[][] = [];
+    for (let at = 0; at < statements.length; at += FALLBACK_CONCURRENCY) {
+      const slice = statements.slice(at, at + FALLBACK_CONCURRENCY);
+      rows.push(...(await Promise.all(slice.map((sql) => pragma<R>(executor, sql)))));
+    }
+    return rows;
+  }
+}
+
+/**
  * PRAGMA takes an identifier, not a bound parameter, so the table name is
  * interpolated. It only ever comes from `PRAGMA table_list` on the line above,
  * never from a request. Quoting is belt and braces.
@@ -180,17 +255,41 @@ export async function introspect(executor: D1Executor): Promise<Catalogue> {
 
   const tables = new Map<string, TableInfo>();
 
-  for (const entry of tableList) {
-    if (entry.type !== 'table') continue;
-    if (INTERNAL_TABLE_PATTERN.test(entry.name)) continue;
+  // Named rather than filtered inline, because everything below indexes into the
+  // batch results by position and that only holds while this list is the one the
+  // statements were built from.
+  const wanted = tableList.filter(
+    (entry) => entry.type === 'table' && !INTERNAL_TABLE_PATTERN.test(entry.name),
+  );
 
+  // Three statements per table, in a fixed order, flattened. Table `i` owns entries
+  // `3i`, `3i + 1` and `3i + 2`, which is the arithmetic the reads below rely on.
+  const perTable: string[] = [];
+  for (const entry of wanted) {
     const quoted = quoteIdentifier(entry.name);
+    perTable.push(
+      `PRAGMA table_info(${quoted})`,
+      `PRAGMA index_list(${quoted})`,
+      `PRAGMA foreign_key_list(${quoted})`,
+    );
+  }
 
-    const [columnRows, indexRows, fkRows] = await Promise.all([
-      pragma<PragmaTableInfoRow>(executor, `PRAGMA table_info(${quoted})`),
-      pragma<PragmaIndexListRow>(executor, `PRAGMA index_list(${quoted})`),
-      pragma<PragmaForeignKeyListRow>(executor, `PRAGMA foreign_key_list(${quoted})`),
-    ]);
+  const tableRows = await readPragmas<
+    PragmaTableInfoRow | PragmaIndexListRow | PragmaForeignKeyListRow
+  >(executor, perTable);
+
+  // The index members need the index names, so they cannot be asked for until the
+  // answer above has landed. Two round trips rather than one, and not forty.
+  const indexLists = wanted.map((_, at) => (tableRows[at * 3 + 1] ?? []) as PragmaIndexListRow[]);
+  const indexStatements = indexLists.flatMap((rows) =>
+    rows.map((row) => `PRAGMA index_info(${quoteIdentifier(row.name)})`),
+  );
+  const indexRows = await readPragmas<PragmaIndexInfoRow>(executor, indexStatements);
+
+  let indexAt = 0;
+  for (const [at, entry] of wanted.entries()) {
+    const columnRows = (tableRows[at * 3] ?? []) as PragmaTableInfoRow[];
+    const fkRows = (tableRows[at * 3 + 2] ?? []) as PragmaForeignKeyListRow[];
 
     const columns = new Map<string, ColumnInfo>();
     for (const row of columnRows) {
@@ -204,11 +303,9 @@ export async function introspect(executor: D1Executor): Promise<Catalogue> {
     }
 
     const indexes: IndexInfo[] = [];
-    for (const row of indexRows) {
-      const members = await pragma<PragmaIndexInfoRow>(
-        executor,
-        `PRAGMA index_info(${quoteIdentifier(row.name)})`,
-      );
+    for (const row of indexLists[at] ?? []) {
+      const members = indexRows[indexAt] ?? [];
+      indexAt += 1;
       indexes.push({
         name: row.name,
         unique: row.unique === 1,
