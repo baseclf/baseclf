@@ -1,14 +1,24 @@
 # BaseCLF
 
 **Real row-level security for Cloudflare D1.**
-`supabase-js` works unchanged. Runs in your own Cloudflare account.
+PostgREST-shaped queries, on your own Cloudflare account.
 
 > **Status: pre-alpha.** Reads and writes both work: policies compile into the
 > query, and a write cannot move a row out of the caller's own reach. Sign-in with
 > Google or GitHub works, tokens are ES256, and file uploads land in R2 under a key
 > the server builds rather than one the caller sends. A policy is a JSON document
-> you store with one command. There is no admin UI, no client SDK and no migration
-> tooling yet. Nothing here is usable in production. See the roadmap below.
+> you store with one command. There is a client library in this repository, not yet
+> published to npm. There is no admin UI and no migration tooling. Nothing here is
+> usable in production. See the roadmap below.
+
+> **This is not a drop-in for `supabase-js`, and an earlier version of this line
+> said it was.** The query grammar is the same shape, and several things people
+> reach for in that client do not exist here at all: there is no anonymous key, no
+> `upsert`, no bulk insert, no relationship embeds, and fourteen PostgREST filters
+> are refused because SQLite has no regular expressions, arrays or ranges. Each
+> refusal names its reason. The full list is in
+> [Where BaseCLF differs from PostgREST](#where-baseclf-differs-from-postgrest),
+> and the client in `sdk/` refuses the same things before sending them.
 
 ---
 
@@ -526,14 +536,33 @@ These were measured against a real D1 database, not read from documentation.
 | **V3** | Auth: Google, GitHub, JWT | shipped |
 | **V4** | Storage on R2 | shipped |
 | **V5** | One-command deploy | shipped |
-| **V6** | MCP server | **five read tools live, including the policy simulator** ← **you are here** |
+| **V6** | MCP server | five tools live on a deployment, including the policy simulator |
 | V7 | Studio | |
-| V8 | SDK, docs, sample application | |
+| **V8** | SDK, docs, sample application | **client library in `sdk/`: queries, writes and sign-in. Not published** ← **you are here** |
 
 What "shipped" means here: it runs, it has tests, and V5 was proved by
 provisioning a deployment onto an empty Cloudflare account with one command and
 then asking it whether it worked. It does not mean anybody other than the author
 has used it.
+
+### What the client library does and does not have
+
+It is in `sdk/`, it is not on npm, and its surface was read off the engine rather
+than off a familiar client. So it has `from().select()` with the ten filters this
+backend can run, `insert`, `update`, `delete`, and sign-in with a provider or a
+password.
+
+It does not have `upsert`, bulk insert, embeds, or the fourteen refused filters,
+because none of those exist on the server either, and a client whose most
+familiar calls produce requests the server rejects is worse than no client: it
+turns "this product does not do that" into "this product is broken".
+
+One thing it has that the client it resembles does not: it threads D1's session
+bookmark, so a read after a write sees that write without anybody asking for it.
+
+Its tests run against the real Worker rather than a stand-in, because the job of
+a client is to emit requests the server accepts, and a test that checks a URL
+against a model of the grammar only tests the model.
 
 ## Development
 
