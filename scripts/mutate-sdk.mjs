@@ -111,10 +111,35 @@ const MUTATIONS = [
     find: / {4}if \(!response\.ok\) \{/,
     replace: '    if (!response.ok) {\n      throw new Error("refused");',
   },
+  {
+    // single() picking the first of many. The caller said one, the filter matched
+    // several, and the row they get depends on an ordering nobody wrote. It is a
+    // plausible answer to a question they did not ask.
+    name: 'single() answering with the first of many rows',
+    file: QUERY,
+    expect: 'the refuses-when-more-than-one test',
+    find: / {4}if \(result\.data !== null && result\.data\.length > 1\) \{/,
+    replace: '    if (false) {',
+  },
+  {
+    // The other direction: an empty result treated as an error. The engine answers
+    // "no such row" and "not yours" identically on purpose, so raising on empty
+    // invents a distinction the server refuses to make.
+    name: 'single() treating an empty result as an error',
+    file: QUERY,
+    expect: 'the gives-null-and-no-error-when-nothing-matched test',
+    find: / {4}if \(result\.data !== null && result\.data\.length > 1\) \{/,
+    replace: '    if (result.data !== null && result.data.length !== 1) {',
+  },
 ];
 
 await runMutations({
   files: [QUERY, CLIENT],
-  suites: ['sdk/client.test.ts'],
+  // ⚠️ Both, and leaving the second one out cost a false survivor. The anonymous role
+  // can see exactly one row in the fixture, so the case where `single()` matches
+  // several can only be written where an identity owns several, which is the other
+  // file. A mutation runner pointed at half the tests reports the other half as
+  // missing coverage.
+  suites: ['sdk/client.test.ts', 'sdk/authenticated.test.ts'],
   mutations: MUTATIONS,
 });

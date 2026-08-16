@@ -132,18 +132,47 @@ describe('writing with an identity the deployment issued', () => {
   });
 
   it('cannot edit somebody else row, and cannot tell that from a missing one', async () => {
-    // 🔴 Invariant I5 from the client's side. `p_1` belongs to another author, and the
-    // answer is the same NOT_FOUND a row that does not exist would give, so a client
-    // cannot walk ids to find out which ones are real.
-    const { data, error } = await asDana()
+    // 🔴 Invariant I5 from the client's side, and the pair is what makes it mean
+    // anything. `p1` exists and belongs to `u_ann`; `p_nonexistent` does not exist at
+    // all. Both answer the same, which is the invariant: a client cannot walk ids to
+    // find out which ones are real.
+    //
+    // ⚠️ The first version of this test asked for `p_1`, which is not an id in the
+    // fixture. It passed, and it proved the wrong half: "a row that is not there is
+    // refused" rather than "a row that is not yours is refused". The two are
+    // indistinguishable by design, which is exactly why the real row has to be used.
+    const other = await asDana()
       .from('posts')
-      .eq('id', 'p_1')
+      .eq('id', 'p1')
       .update({ title: 'not mine' })
       .single();
 
-    expect(data).toBeNull();
-    expect(error?.status).toBe(404);
-    expect(error?.code).toBe('NOT_FOUND');
+    const missing = await asDana()
+      .from('posts')
+      .eq('id', 'p_nonexistent')
+      .update({ title: 'not there' })
+      .single();
+
+    expect(other.data).toBeNull();
+    expect(other.error?.status).toBe(404);
+    expect(other.error?.code).toBe('NOT_FOUND');
+
+    // The row that exists and the row that does not answer identically.
+    expect(missing.error?.status).toBe(other.error?.status);
+    expect(missing.error?.code).toBe(other.error?.code);
+    expect(missing.error?.message).toBe(other.error?.message);
+  });
+
+  it('leaves the row it was refused exactly as it was', async () => {
+    // The refusal above is only worth having if nothing changed behind it. Read `p1`
+    // back as the role that can see it, and check the title the fixture wrote.
+    const { data } = await createClient(BASE_URL, { fetch: intoWorker })
+      .from('posts')
+      .select('id,title')
+      .eq('id', 'p1')
+      .single();
+
+    expect(data?.['title']).toBe('Published by Ann');
   });
 
   it('🔴 cannot hand its own row to somebody else', async () => {
@@ -208,5 +237,45 @@ describe('the difference an identity makes to a read', () => {
 
     expect(asOwner.data?.map((row) => row['id'])).toEqual(['p_sdk_draft']);
     expect(asAnyone.data).toEqual([]);
+  });
+});
+
+describe('single() when the caller can see more than one row', () => {
+  it('refuses rather than picking one, because the filter did not narrow', async () => {
+    // 🔴 The half that cannot be tested anonymously: the fixture shows the anonymous
+    // role exactly one published row, so "more than one" needs an identity that owns
+    // several. Dana writes two, then asks for one.
+    //
+    // Returning the first would answer a question the caller did not ask, and which
+    // row they got would depend on an ordering nobody wrote.
+    const client = asDana();
+
+    for (const id of ['p_sdk_many_a', 'p_sdk_many_b']) {
+      const written = await client
+        .from('posts')
+        .insert({
+          id,
+          title: 'One of several',
+          body: 'body',
+          status: 'draft',
+          org_id: 'org_1',
+          created_at: '2026-08-16T00:00:00Z',
+        })
+        .single();
+      expect(written.error).toBeNull();
+    }
+
+    const many = await client.from('posts').select('id').in('id', ['p_sdk_many_a', 'p_sdk_many_b']);
+    expect(many.data).toHaveLength(2);
+
+    const { data, error } = await client
+      .from('posts')
+      .select('id')
+      .in('id', ['p_sdk_many_a', 'p_sdk_many_b'])
+      .single();
+
+    expect(data).toBeNull();
+    expect(error?.code).toBe('NOT_SINGLE');
+    expect(error?.message).toMatch(/Narrow the filter/);
   });
 });

@@ -363,6 +363,32 @@ export class QueryBuilder<Row = Record<string, unknown>> {
    */
   async single(): Promise<SingleResult<Row>> {
     const result = await this.run();
+
+    // 🔴 More than one row is an error, and zero is not. The asymmetry is the whole
+    // decision, and both halves come from the server rather than from taste.
+    //
+    // Zero is not an error because the engine answers "no such row" and "not yours"
+    // with the same empty result on purpose (invariant I5, so nobody can probe for
+    // which). A client that raised on empty would be inventing a distinction the
+    // server refuses to make.
+    //
+    // More than one is an error because the caller said "one" and the filter did not
+    // narrow to one, which is a bug in their query. Returning the first would be a
+    // plausible answer to a question they did not ask, and the row they got would
+    // depend on an ordering nobody specified.
+    if (result.data !== null && result.data.length > 1) {
+      return {
+        data: null,
+        rowsRead: result.rowsRead,
+        error: new BaseclfRequestError(
+          `single() asked for one row and the filter matched ${result.data.length}. ` +
+            'Narrow the filter, or use the plain query and read the array.',
+          'NOT_SINGLE',
+          result.data.length,
+        ),
+      };
+    }
+
     return {
       data: result.data === null ? null : (result.data[0] ?? null),
       error: result.error,

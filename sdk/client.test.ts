@@ -308,3 +308,31 @@ describe('the write path', () => {
     expect(builder.toURL()).toContain('id=eq.p_1');
   });
 });
+
+describe('single(), where zero and many are not the same kind of answer', () => {
+  it('gives the row when the filter matched exactly one', async () => {
+    // `p1` is the one published row in the fixture, which is the whole of what the
+    // anonymous role can see here. The many-rows case needs an identity that owns
+    // more than one, so it lives in `authenticated.test.ts`.
+    const { data, error } = await client.from('posts').select('id').eq('id', 'p1').single();
+
+    expect(error).toBeNull();
+    expect(data?.['id']).toBe('p1');
+  });
+
+  it('gives null and no error when nothing matched', async () => {
+    // 🔴 Not an error, and that is the server's decision rather than a preference.
+    // The engine answers "no such row" and "not yours" with the same empty result on
+    // purpose (I5), so a client that raised on empty would be inventing a distinction
+    // the server goes to the trouble of refusing to make.
+    const { data, error } = await client
+      .from('posts')
+      .select('id')
+      .eq('id', 'no_such_post')
+      .single();
+
+    expect(data).toBeNull();
+    expect(error).toBeNull();
+  });
+
+});
