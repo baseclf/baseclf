@@ -566,6 +566,10 @@ function describeDeployment(request: Request, env: Env): Response {
       trustedOrigins: config.trustedOrigins,
       providers: providerStatuses(env, config.baseURL),
       secretConfigured: config.secretConfigured,
+      // Read off `env` rather than off the built auth instance, for the reason this
+      // endpoint exists: `authSettings` throws when the secret is missing, and a
+      // diagnostic that dies on a broken deployment is the one that was needed most.
+      emailPasswordEnabled: env.BETTER_AUTH_EMAIL_PASSWORD?.trim().toLowerCase() === 'true',
       // Read off the live `env`, which is the only thing that knows. The type
       // declares both as required and non-optional, so a deployment built from a
       // config missing one of them typechecks, deploys, reports success, and is

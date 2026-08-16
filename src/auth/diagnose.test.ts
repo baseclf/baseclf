@@ -70,6 +70,7 @@ function report(overrides: Partial<DiagnoseInput> = {}): DiagnoseReport {
     trustedOrigins: ['https://app.example.com'],
     providers: providerStatuses(CREDENTIALS, baseUrlConfig),
     secretConfigured: true,
+    emailPasswordEnabled: false,
     cors: NO_ORIGIN_ALLOWED,
     bindings: ALL_BOUND,
     ...overrides,
@@ -245,6 +246,7 @@ describe('the redirect URI an operator has to paste', () => {
       requestUrl: `${CONFIGURED_URL}/api/auth/_diagnose`,
       requestOrigin: null,
       baseUrlConfig: CONFIGURED_URL,
+      emailPasswordEnabled: false,
       trustedOrigins: [],
       providers: providerStatuses(
         { GOOGLE_CLIENT_ID: 'id', GOOGLE_CLIENT_SECRET: 's' },
@@ -444,5 +446,41 @@ describe('⭐ a deployment built from a config that forgot a binding', () => {
 
     expect(result.warnings.filter((line) => line.includes('env.DB'))).toHaveLength(1);
     expect(result.warnings.filter((line) => line.includes('env.BUCKET'))).toHaveLength(1);
+  });
+});
+
+describe('the email and password path, which the free plan cannot run', () => {
+  it('says nothing when it is off, which is what provisioning writes', () => {
+    // The control. Every deployment `create` makes has this off, so a warning here
+    // would fire on all of them and teach people to stop reading the list.
+    const result = report({ emailPasswordEnabled: false });
+
+    expect(result.email_password_enabled).toBe(false);
+    expect(result.warnings.join(' ')).not.toMatch(/password/i);
+  });
+
+  it('reports it either way, so the field is not one that only exists when broken', () => {
+    expect(report({ emailPasswordEnabled: true }).email_password_enabled).toBe(true);
+    expect(report({ emailPasswordEnabled: false }).email_password_enabled).toBe(false);
+  });
+
+  it('gives both numbers rather than a verdict, because it cannot see the plan', () => {
+    // 🔴 The measured pair is the whole point. 58ms of CPU to hash one password
+    // against a 10ms ceiling is what makes this unrunnable on a free plan, and the
+    // symptom is a request the platform kills with nothing in it naming a password.
+    // A deployment cannot see its own plan, so it states the numbers and leaves the
+    // judgment where the answer lives.
+    const warning = report({ emailPasswordEnabled: true }).warnings.find((each) =>
+      /password/i.test(each),
+    );
+
+    expect(warning).toContain('58ms');
+    expect(warning).toContain('10ms');
+    expect(warning).toContain('cannot see which plan');
+    expect(warning).toContain('BETTER_AUTH_EMAIL_PASSWORD');
+  });
+
+  it('counts against ok, because on the plan that matters it is broken', () => {
+    expect(report({ emailPasswordEnabled: true }).ok).toBe(false);
   });
 });

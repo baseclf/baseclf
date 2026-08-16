@@ -92,6 +92,27 @@ const MUTATIONS = [
     find: / {4}return entry\.trim\(\)\.replace\(\/\\\/\+\$\/, ''\) !== asOrigin;/,
     replace: '    return entry.trim() !== asOrigin;',
   },
+  {
+    // The warning removed, so a deployment that cannot run sign-in at all reports
+    // itself healthy. Hashing one password costs 58ms of CPU against a 10ms ceiling
+    // on the free plan, and the request is killed with nothing in it naming a
+    // password, so this is the only surface that would ever say why.
+    name: 'the email and password cost never mentioned',
+    file: DIAGNOSE,
+    expect: 'the gives-both-numbers and counts-against-ok tests',
+    find: / {2}if \(!enabled\) return;/,
+    replace: '  if (true) return;',
+  },
+  {
+    // The other direction, and it is the one that gets ignored rather than missed:
+    // a warning on every deployment `create` makes teaches people to stop reading
+    // the list, and the list is where the real ones live.
+    name: 'the cost warning fired even when the path is off',
+    file: DIAGNOSE,
+    expect: 'the says-nothing-when-it-is-off test',
+    find: / {2}if \(!enabled\) return;/,
+    replace: '  if (false) return;',
+  },
 ];
 
 await runMutations({

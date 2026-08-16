@@ -89,6 +89,12 @@ export interface DiagnoseInput {
   readonly providers: readonly ProviderStatus[];
   /** Whether `BETTER_AUTH_SECRET` is set. Never anything about its value. */
   readonly secretConfigured: boolean;
+  /**
+   * Whether `BETTER_AUTH_EMAIL_PASSWORD` turned on the email and password path.
+   *
+   * Off unless somebody set it, and off is what provisioning writes.
+   */
+  readonly emailPasswordEnabled: boolean;
   readonly cors: CorsFacts;
   /**
    * Which of the engine's bindings are actually present on this deployment.
@@ -151,6 +157,22 @@ export interface DiagnoseReport {
    * sends people looking in the wrong place.
    */
   readonly secret_configured: boolean;
+  /**
+   * Whether the email and password path is on.
+   *
+   * ⚠️ Reported whichever way it is, on the same argument as `bindings` below: a
+   * field that only appears in the bad case is a field nobody knows to look for.
+   *
+   * 🔴 It warns when it is on, and that is deliberate even though "on" is a choice
+   * rather than a fault. Hashing one password with the parameters Better Auth ships
+   * costs **58 ms of CPU**, measured in `src/auth/password-cost.test.ts`, and the
+   * free plan allows **10 ms per request**. So on a free plan every sign-in is
+   * killed by the platform, and the symptom arrives as a request that dies with
+   * nothing in it naming a password. **This deployment cannot see which plan it is
+   * on**, so the warning states the two numbers and leaves the judgment where the
+   * answer actually lives, rather than picking a side and being wrong half the time.
+   */
+  readonly email_password_enabled: boolean;
   /** `BETTER_AUTH_URL` reduced to its origin. Empty when it is not a URL. */
   readonly base_url_config: string;
   /** The origin that served this request. Origin only, never the path. */
@@ -472,11 +494,37 @@ function checkBindings(bindings: readonly BindingPresence[], warnings: string[])
   }
 }
 
+/**
+ * Say what the email and password path costs, when it is switched on.
+ *
+ * ⚠️ Not a plan check, and dropping the plan check was the decision here. The
+ * obvious version asks Cloudflare which plan the account is on, and it is aimed at
+ * the wrong surface: provisioning writes this setting `false` and never asks about
+ * it, so by the time somebody turns it on there is no provisioning run left to warn
+ * them. The place the state changes is a config edit, and the place it is read is
+ * here.
+ *
+ * So this reports the two measured numbers instead of a verdict. A deployment
+ * cannot see its own plan, and a reader always can.
+ */
+function checkEmailPassword(enabled: boolean, warnings: string[]): void {
+  if (!enabled) return;
+
+  warnings.push(
+    'Email and password sign-in is on. Hashing one password costs about 58ms of CPU, ' +
+      'and the free plan allows 10ms per request, so on a free plan every sign-in is ' +
+      'killed by the platform and nothing in the failure names a password. This ' +
+      'deployment cannot see which plan it is on. On a paid plan there is nothing to ' +
+      'do; on a free one, unset BETTER_AUTH_EMAIL_PASSWORD and use a social provider.',
+  );
+}
+
 export function diagnose(input: DiagnoseInput): DiagnoseReport {
   const warnings: string[] = [];
   const actual = originOf(input.requestUrl);
 
   checkSecret(input.secretConfigured, warnings);
+  checkEmailPassword(input.emailPasswordEnabled, warnings);
   checkBaseUrlIsAbsolute(input.baseUrlConfig, warnings);
   const matches = checkBaseUrlMatches(input.baseUrlConfig, actual, warnings);
   checkBaseUrlIsBareOrigin(input.baseUrlConfig, warnings);
@@ -498,6 +546,7 @@ export function diagnose(input: DiagnoseInput): DiagnoseReport {
   return Object.freeze({
     ok: warnings.length === 0,
     secret_configured: input.secretConfigured,
+    email_password_enabled: input.emailPasswordEnabled,
     // The origin, never the raw value. See the note on disclosure above.
     base_url_config: originOf(input.baseUrlConfig) ?? '',
     base_url_actual: actual ?? '',
