@@ -95,6 +95,17 @@ describe('reading through the client', () => {
     expect(data).toEqual([]);
   });
 
+  it('asks for nothing when the "in" list is empty, rather than for everything', async () => {
+    // The direction matters more than the answer. An empty list means the caller named
+    // no acceptable values, so the row set is empty; a client that dropped the filter
+    // instead would answer with everything the policy allows, which reads as a working
+    // query and is the opposite of what was asked.
+    const { data, error } = await client.from('posts').select('id').in('id', []);
+
+    expect(error).toBeNull();
+    expect(data).toEqual([]);
+  });
+
   it('sends a value that opens with a quote as that text', async () => {
     // The same family as the "in" case above, through the other door. The parser
     // unquotes a value that is wrapped in quotes, so an unescaped `"Published by Ann"`
