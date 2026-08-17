@@ -1,0 +1,31 @@
+// The client SDK compiled for publication, which is the only build in this repository
+// that emits anything TypeScript-shaped.
+//
+// ⚠️ `tsc` rather than esbuild, and the reason is the types. The CLI is bundled because
+// nobody imports it, but a client library ships declarations, and a bundled `index.js`
+// beside per-file declarations that still say `./query.js` is a package whose types
+// point at files it does not carry. `tsc` emits both halves from the same graph, and
+// the source already writes specifiers with a `.js` extension, which is exactly what
+// ESM output needs. The SDK has no dependencies, so bundling would save nothing.
+//
+// ⚠️ Tests are excluded, and not for tidiness: `sdk/*.test.ts` imports from `src/` so
+// it can drive the real Worker, and a declaration build that followed those imports
+// would compile the engine into the client package.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "declaration": true,
+    "declarationMap": false,
+    "sourceMap": false,
+    "removeComments": false,
+    "rootDir": "sdk",
+    "outDir": "dist-publish/baseclf-js/dist",
+    // The published surface targets browsers as well as Node and Workers, so the
+    // library types have to be here rather than inherited from a Node-only list.
+    "lib": ["ES2022", "DOM"],
+    "types": []
+  },
+  "include": ["sdk/**/*.ts"],
+  "exclude": ["sdk/**/*.test.ts"]
+}

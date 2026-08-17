@@ -8,7 +8,7 @@ can carry a stronger licence.
 | Component | Licence | Why |
 |---|---|---|
 | **Core engine** (`src/`) | Apache-2.0 | The policy engine, the REST layer, auth, storage. This is the product and it is open source. Apache adds an express patent grant that MIT lacks. |
-| **Client SDKs** (`@baseclf/js` and friends) | MIT | These are compiled into your application. Anything less permissive creates a licence-compatibility problem for your users, which is a real adoption cost for zero benefit. |
+| **Client SDKs** (`baseclf-js` and friends) | MIT | These are compiled into your application. Anything less permissive creates a licence-compatibility problem for your users, which is a real adoption cost for zero benefit. |
 | **CLI** | Apache-2.0 | A tool you run, not a dependency you ship. |
 | **MCP server** | Apache-2.0, no feature gates | No licence-key checks in publicly readable code. That model is trivially bypassed and has ended badly for everyone who tried it. |
 | **Hosted control plane** | Not published | If it is ever built, its value is that we run it, not that you can read it. |

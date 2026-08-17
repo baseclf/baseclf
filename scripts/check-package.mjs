@@ -24,24 +24,57 @@
  * that forgets to exclude something should not be expressible. This script is the
  * proof that the allowlist says what it means.
  *
- *   node scripts/check-package.mjs
+ * ## Three packages, one set of rules
+ *
+ * `create-baseclf` and `baseclf` are the same bytes under two names. `baseclf-js` is
+ * the client library, which is different bytes, a different licence and no
+ * dependencies. All three go through here, because the reason this file exists does
+ * not get weaker for the package nobody has published yet.
+ *
+ *   node scripts/check-package.mjs                          # this repository
+ *   node scripts/check-package.mjs dist-publish/baseclf-js  # a staged package
  */
 
 import { execSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
-/** Artifacts without which the package does not work. Paths as npm reports them. */
-const REQUIRED = [
-  // The entry point `npx create-baseclf` resolves to. npm force-includes whatever
-  // `bin` points at, so this one is hard to lose, and listing it is what makes the
-  // check fail loudly if `bin` itself is ever renamed.
-  'dist-cli/create-baseclf.mjs',
-  'dist-cli/baseclf.mjs',
-  // The Worker itself. Absent for the entire life of the package before this check.
-  'dist-cli/worker.js',
+/** Where to look. A staged package is a directory with its own manifest. */
+const TARGET = process.argv[2] ?? '.';
+
+/**
+ * Artifacts without which a package does not work, by name. Paths as npm reports them.
+ *
+ * Keyed rather than shared, because the three packages carry different things and a
+ * union would pass a package that shipped none of its own. Entry points named in the
+ * manifest are checked separately and for every package, so this list is only for
+ * files that nothing points at.
+ */
+const REQUIRED_BY_NAME = {
+  'create-baseclf': [
+    // The entry point `npx create-baseclf` resolves to. npm force-includes whatever
+    // `bin` points at, so this one is hard to lose, and listing it is what makes the
+    // check fail loudly if `bin` itself is ever renamed.
+    'dist-cli/create-baseclf.mjs',
+    'dist-cli/baseclf.mjs',
+    // The Worker itself. Absent for the entire life of the package before this check.
+    // Nothing in the manifest points at it: the CLI reads it at run time, so it is
+    // invisible to every check except this one.
+    'dist-cli/worker.js',
+  ],
+  // The alias carries the same files under a different name.
+  baseclf: ['dist-cli/create-baseclf.mjs', 'dist-cli/baseclf.mjs', 'dist-cli/worker.js'],
+  // The client ships one thing, and `exports` already names it, so the entry point
+  // check below covers it. Listed empty rather than omitted: a package with no entry
+  // in this map is a package nobody decided about, and that is worth failing on.
+  'baseclf-js': [],
+};
+
+/** Required of every package, whatever it ships. */
+const REQUIRED_ALWAYS = [
   'package.json',
   // npm adds this on its own, so losing it takes deleting the file. Listed anyway:
-  // `package.json` claims Apache-2.0, and a package that says so while shipping no
+  // each manifest claims a licence, and a package that says so while shipping no
   // licence text is the kind of thing nobody notices until somebody's legal team does.
   'LICENSE',
 ];
@@ -92,7 +125,10 @@ function tarballFiles() {
   // DEP0190: with a shell, an argument array is concatenated rather than escaped, so
   // it reads as safe and is not. Nothing here comes from outside, and a fixed string
   // through the documented path leaves nothing to reason about.
-  const raw = execSync('npm pack --dry-run --json --ignore-scripts', { encoding: 'utf8' });
+  const raw = execSync('npm pack --dry-run --json --ignore-scripts', {
+    encoding: 'utf8',
+    cwd: TARGET,
+  });
 
   const parsed = JSON.parse(raw);
   const entry = Array.isArray(parsed) ? parsed[0] : parsed;
@@ -121,7 +157,18 @@ const problems = [];
  * installs a command that is not there. npm does not check this, and the reader finds
  * out when the command they were told to run does nothing.
  */
-const manifest = JSON.parse(readFileSync('package.json', 'utf8'));
+const manifest = JSON.parse(readFileSync(join(TARGET, 'package.json'), 'utf8'));
+
+const REQUIRED = REQUIRED_BY_NAME[manifest.name];
+if (REQUIRED === undefined) {
+  console.error('');
+  console.error('  PUBLISH BLOCKED by scripts/check-package.mjs');
+  console.error('');
+  console.error(`    ${manifest.name} is not a package this check knows about.`);
+  console.error('    Add it to REQUIRED_BY_NAME, naming what it cannot ship without.');
+  console.error('');
+  process.exit(1);
+}
 
 for (const [command, target] of Object.entries(manifest.bin ?? {})) {
   if (target.startsWith('./')) {
@@ -140,9 +187,39 @@ for (const [command, target] of Object.entries(manifest.bin ?? {})) {
   }
 }
 
-for (const required of REQUIRED) {
+for (const required of [...REQUIRED, ...REQUIRED_ALWAYS]) {
   if (!files.includes(required)) {
     problems.push(`missing: ${required}. The package does not work without it.`);
+  }
+}
+
+/**
+ * Every path the manifest points at, checked against what the tarball carries.
+ *
+ * The `bin` case above is one instance of this and it is the one that was measured.
+ * A library states its entry points in `main`, `types` and `exports` instead, where
+ * the same mistake is quieter: `npm i` succeeds, the import fails at the reader's
+ * build step, and the message names a file inside somebody else's package.
+ */
+function entryPaths(node, trail) {
+  if (typeof node === 'string') return node.startsWith('.') ? [[trail, node]] : [];
+  if (node === null || typeof node !== 'object') return [];
+  return Object.entries(node).flatMap(([key, value]) => entryPaths(value, `${trail}.${key}`));
+}
+
+const declared = [
+  ...entryPaths(manifest.main, 'main'),
+  ...entryPaths(manifest.types, 'types'),
+  ...entryPaths(manifest.exports, 'exports'),
+];
+
+for (const [where, target] of declared) {
+  const normalised = target.replace(/^\.\//, '');
+  if (!files.includes(normalised)) {
+    problems.push(
+      `${where} points at ${normalised}, which is not in the tarball. That installs ` +
+        'a package whose entry point is missing.',
+    );
   }
 }
 
@@ -174,6 +251,7 @@ if (problems.length > 0) {
 }
 
 console.log(
-  `package: ${files.length} files, ${(size / 1024 / 1024).toFixed(2)} MiB packed, ` +
-    `${(unpacked / 1024 / 1024).toFixed(2)} MiB unpacked. Both artifacts present, nothing private.`,
+  `package: ${manifest.name}@${manifest.version}, ${files.length} files, ` +
+    `${(size / 1024 / 1024).toFixed(2)} MiB packed, ${(unpacked / 1024 / 1024).toFixed(2)} MiB ` +
+    'unpacked. Everything it claims is present, nothing private.',
 );

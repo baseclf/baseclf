@@ -583,7 +583,7 @@ These were measured against a real D1 database, not read from documentation.
 | **V5** | One-command deploy | shipped |
 | **V6** | MCP server | five tools live on a deployment, including the policy simulator |
 | V7 | Studio | |
-| **V8** | SDK, docs, sample application | **client library in `sdk/`: queries, writes and sign-in. Not published** ← **you are here** |
+| **V8** | SDK, docs, sample application | **client library in `sdk/`: queries, writes, sign-in and files. Packages as `baseclf-js`, not published yet** ← **you are here** |
 
 What "shipped" means here: it runs, it has tests, and V5 was proved by
 provisioning a deployment onto an empty Cloudflare account with one command and
@@ -592,10 +592,11 @@ has used it.
 
 ### What the client library does and does not have
 
-It is in `sdk/` and it is not on npm yet. It has `from().select()` with the ten
+It is in `sdk/`, it publishes as `baseclf-js` under MIT rather than the engine's
+Apache-2.0, and it is not on npm yet. It has `from().select()` with the ten
 filters this backend can run, `not` and `or` over those same ten, `insert`,
 `update`, `delete`, sign-in with a provider or a password, and uploads and
-downloads.
+downloads. It declares no dependencies, because it imports none.
 
 Everything it does not have, and every place it behaves differently from the
 client it resembles, is in
