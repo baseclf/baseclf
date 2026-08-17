@@ -83,7 +83,14 @@ const staged = JSON.parse(readFileSync(join(OUT, 'package.json'), 'utf8'));
 
 console.log(`staged ${staged.name}@${staged.version} in dist-publish/baseclf, both binaries run.`);
 console.log('');
-console.log('Publish both, one command at a time:');
+// ⚠️ The session check comes first because npm answers an expired one with E404 and a
+// sentence about the package rather than about the login. Measured twice, on 2026-08-14
+// and 2026-08-18.
+console.log('Publish both, session first, one command at a time:');
 console.log('');
+console.log('  npm whoami');
 console.log('  npm publish');
 console.log('  npm publish ./dist-publish/baseclf');
+console.log('');
+console.log('An E401 from whoami means log in again. An E404 from publish means the same');
+console.log('thing, said less helpfully.');

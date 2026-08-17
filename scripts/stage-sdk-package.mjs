@@ -158,6 +158,15 @@ execFileSync('node', [join(ROOT, 'scripts', 'check-package.mjs'), OUT], {
 const bytes = statSync(join(OUT, 'dist', 'index.js')).size;
 console.log(`staged ${NAME}@${manifest.version} in dist-publish/${NAME}, entry ${bytes} bytes.`);
 console.log('');
-console.log('Publish it:');
+// ⚠️ The session check comes first because npm answers an expired one with E404 and
+// a sentence about the package: "'name@version' could not be found or you do not have
+// permission to access it". It is the same refusal this project serves on purpose for
+// rows nobody may read, met from the other side, and it sends the reader to look at
+// their package rather than at their login. Twice now.
+console.log('Publish it, session first:');
 console.log('');
+console.log('  npm whoami');
 console.log(`  npm publish ./dist-publish/${NAME}`);
+console.log('');
+console.log('An E401 from whoami means log in again. An E404 from publish means the same');
+console.log('thing, said less helpfully.');
