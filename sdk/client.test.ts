@@ -80,6 +80,110 @@ describe('reading through the client', () => {
     expect(Array.isArray(data)).toBe(true);
   });
 
+  it('sends one "in" value as one value when it contains the separator', async () => {
+    // 🔴 The dividing case, and it divides cleanly. No row has the id `p1,p2`, so the
+    // right answer is empty. An unquoted list splits on the comma, which turns one id
+    // into two, and `p1` is the one published row, so the wrong answer is one row.
+    //
+    // Neither answer is an error, which is why this needs a row count rather than a
+    // status code: the engine parses both, and only one of them asks the question the
+    // caller asked. Invariant I3 still holds either way, so this is a wrong result
+    // rather than a wider one.
+    const { data, error } = await client.from('posts').select('id').in('id', ['p1,p2']);
+
+    expect(error).toBeNull();
+    expect(data).toEqual([]);
+  });
+
+  it('sends a value that opens with a quote as that text', async () => {
+    // The same family as the "in" case above, through the other door. The parser
+    // unquotes a value that is wrapped in quotes, so an unescaped `"Published by Ann"`
+    // arrives as `Published by Ann` and matches the one published row. No row has a
+    // title with the quotes in it, so the right answer is empty and the wrong answer
+    // is p1.
+    const { data, error } = await client
+      .from('posts')
+      .select('id')
+      .eq('title', '"Published by Ann"');
+
+    expect(error).toBeNull();
+    expect(data).toEqual([]);
+  });
+
+  it('negates one filter, and still only narrows', async () => {
+    // A pair, because anonymous sees exactly one row. Negating away the id it can see
+    // has to empty the result, and negating away an id it never had has to leave it,
+    // and a `not` that did nothing at all would pass the first half on its own.
+    const excluded = await client.from('posts').select('id').not('id', 'eq', 'p1');
+    expect(excluded.error).toBeNull();
+    expect(excluded.data).toEqual([]);
+
+    const kept = await client.from('posts').select('id').not('id', 'eq', 'no_such_id');
+    expect(kept.error).toBeNull();
+    expect(kept.data).toEqual([{ id: 'p1' }]);
+  });
+
+  it('sends an or group the engine applies rather than ignores', async () => {
+    // 🔴 The negative half is the one that carries this. Anonymous sees only p1, so an
+    // or group naming p1 returns it whether the group was applied or dropped on the
+    // floor. Naming two rows it cannot see is the case that tells those apart: applied
+    // means empty, ignored means p1.
+    const invisible = await client
+      .from('posts')
+      .select('id')
+      .or([
+        { column: 'id', operator: 'eq', value: 'p2' },
+        { column: 'id', operator: 'eq', value: 'p3' },
+      ]);
+    expect(invisible.error).toBeNull();
+    expect(invisible.data).toEqual([]);
+
+    const visible = await client
+      .from('posts')
+      .select('id')
+      .or([
+        { column: 'id', operator: 'eq', value: 'p1' },
+        { column: 'id', operator: 'eq', value: 'no_such_id' },
+      ]);
+    expect(visible.error).toBeNull();
+    expect(visible.data).toEqual([{ id: 'p1' }]);
+  });
+
+  it('quotes a value inside an or group rather than letting it split the group', async () => {
+    // Unquoted, `id.eq.p1,p2` is two entries and the second has no operator, so this
+    // would come back a refusal rather than an empty result. Either way it is not the
+    // question that was asked.
+    const { data, error } = await client
+      .from('posts')
+      .select('id')
+      .or([{ column: 'id', operator: 'eq', value: 'p1,p2' }]);
+
+    expect(error).toBeNull();
+    expect(data).toEqual([]);
+  });
+
+  it('carries a negation inside an or group', async () => {
+    const { data, error } = await client
+      .from('posts')
+      .select('id')
+      .or([
+        { column: 'id', operator: 'eq', value: 'no_such_id' },
+        { column: 'id', operator: 'eq', value: 'p1', negated: true },
+      ]);
+
+    expect(error).toBeNull();
+    expect(data).toEqual([]);
+  });
+
+  it('refuses an unsupported operator inside not and or, before sending', async () => {
+    // Both doors reach the same refusal, and neither reaches the network.
+    expect(() => client.from('posts').not('title', 'match' as never, 'x')).toThrow(/REGEXP/);
+    expect(() =>
+      client.from('posts').or([{ column: 'title', operator: 'cs' as never, value: 'x' }]),
+    ).toThrow(/array or range/);
+    expect(() => client.from('posts').or([])).toThrow(/at least one condition/);
+  });
+
   it('reports a refusal as an error with the engine code, not as an exception', async () => {
     const { data, error } = await client.from('posts').select('id,no_such_column');
 

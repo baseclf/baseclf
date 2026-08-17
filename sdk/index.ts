@@ -34,7 +34,13 @@ import { StorageClient } from './storage.js';
 
 export { AuthClient, type AuthResult, type AuthUser, type Provider } from './auth.js';
 export { BaseclfRequestError, type FetchLike } from './errors.js';
-export { MAX_PAGE_SIZE, QueryBuilder, type FilterOperator } from './query.js';
+export {
+  MAX_PAGE_SIZE,
+  QueryBuilder,
+  type FilterOperator,
+  type FilterValue,
+  type OrCondition,
+} from './query.js';
 export { type SizedBody, StorageBucket, StorageClient, type StoredObject } from './storage.js';
 
 export interface ClientOptions {

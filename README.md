@@ -516,7 +516,8 @@ or refuse locally with the reason, before a request goes out.
 | `.upsert()` | Supported | **Not here.** Nothing in the engine compiles `ON CONFLICT`. |
 | `.insert([...])` with many rows | Supported | **Refused before sending**, for the reason in the table above. |
 | `.rpc()` | Calls a Postgres function | **Not here.** SQLite has no stored procedures. A route in the Worker is the replacement. |
-| `.or()`, `.not()` | Supported | **Not in the client yet, though the server does take them.** `or=(...)`, `and=(...)` and a `not.` prefix all parse on the URL. This one is a hole in the client rather than a refusal by the engine, and it is the only row here of that kind. |
+| `.or('id.eq.1,name.eq.x')` | Takes the group as a raw string | **Takes conditions as objects**, `{column, operator, value, negated}`, so an operator this backend does not have is refused while the line is being written rather than at the round trip. Flat only: the server parses a nested `or(a,and(b,c))` and the builder does not emit one. |
+| `.not(column, operator, value)` | Supported | **Same shape.** On a column holding nulls it gives SQL's answer rather than the intuitive one: `NOT (col = 'x')` is null where the column is null, and a null predicate does not pass a `WHERE`, so those rows are in neither the filter nor its opposite. |
 | `.textSearch()`, `.contains()`, `.overlaps()`, the range filters | Supported | **Refused by name**, fourteen of them, each carrying its own reason. |
 | `.range(from, to)` | Supported | Use `.limit()` and `.offset()`. The server clamps to 1000 rather than refusing, so a larger number is not an error; it is a number that quietly does not mean what it says. |
 | `.single()` | Raises unless the result is exactly one row | **Raises on more than one, and not on zero.** Zero is not an error because the engine answers "no such row" and "not yours" identically on purpose, so raising on empty would invent a distinction the server refuses to make. |
@@ -592,8 +593,9 @@ has used it.
 ### What the client library does and does not have
 
 It is in `sdk/` and it is not on npm yet. It has `from().select()` with the ten
-filters this backend can run, `insert`, `update`, `delete`, sign-in with a
-provider or a password, and uploads and downloads.
+filters this backend can run, `not` and `or` over those same ten, `insert`,
+`update`, `delete`, sign-in with a provider or a password, and uploads and
+downloads.
 
 Everything it does not have, and every place it behaves differently from the
 client it resembles, is in

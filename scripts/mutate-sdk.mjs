@@ -101,8 +101,11 @@ const MUTATIONS = [
     name: 'a refused filter reported without its reason',
     file: QUERY,
     expect: 'the names-the-reason test',
-    find: / {8}: `The "\$\{operator\}" filter is not available on this backend\. \$\{reason\}`,/,
-    replace: '        : `The "${operator}" filter is not available on this backend.`,',
+    // ⚠️ Six spaces, not eight. The body moved from a method into a module-level
+    // `refuse` when `not` and `or` needed to reach it, and the runner aborted on the
+    // stale pattern rather than reporting a survivor. That abort is the feature.
+    find: / {6}: `The "\$\{operator\}" filter is not available on this backend\. \$\{reason\}`,/,
+    replace: '      : `The "${operator}" filter is not available on this backend.`,',
   },
   {
     // Errors thrown rather than returned. Every caller has to wrap, and the ones who
@@ -213,6 +216,39 @@ const MUTATIONS = [
     expect: 'the refuses-a-file-name-with-a-slash test',
     find: / {4}if \(fileName\.includes\('\/'\)\) \{/,
     replace: '    if (false) {',
+  },
+  {
+    // 🔴 The one this file exists for, and it shipped. Values went out bare, so a
+    // single `in` entry holding a comma became two entries, and a value wrapped in
+    // quotes was unquoted by the parser and looked for something shorter. Neither is
+    // an error at either end: both parse, both return rows, and only one of them is
+    // the question the caller asked. This is the exact code that was there before.
+    name: 'filter values sent bare rather than quoted when they carry a separator',
+    file: QUERY,
+    expect: 'the one-in-value, the opens-with-a-quote and the or-group-comma tests',
+    find: / {2}if \(!STRUCTURAL\.test\(text\)\) return text;/,
+    replace: '  return text;',
+  },
+  {
+    // A negation that quietly is not one. `not(id, eq, x)` becomes `id = x`, so the
+    // caller gets the complement of what they asked for, as rows rather than as an
+    // error. The pair of assertions is what catches it: a `not` that did nothing at
+    // all still empties a one-row fixture from one side.
+    name: 'a negated filter sent without its negation',
+    file: QUERY,
+    expect: 'the negates-one-filter test',
+    find: / {2}const prefix = negated \? 'not\.' : '';/,
+    replace: "  const prefix = '';",
+  },
+  {
+    // 🔴 An or group dropped on the floor. The request still succeeds and still
+    // returns rows the policy allows, so from the outside it reads as a filter that
+    // matched everything rather than as a filter that was never sent.
+    name: 'an or group never added to the request',
+    file: QUERY,
+    expect: 'the applies-rather-than-ignores test',
+    find: / {4}return this\.#add\('or', `\(\$\{rendered\.join\(','\)\}\)`\);/,
+    replace: '    return this;',
   },
 ];
 

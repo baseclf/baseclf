@@ -66,6 +66,111 @@ const UNSUPPORTED: Readonly<Record<string, string>> = Object.freeze({
   wfts: 'Full text search needs an FTS5 table, which is not exposed.',
 });
 
+/** What a filter can be given. `in` takes the list, `is` takes null or a boolean. */
+export type FilterValue = string | number | boolean | null | readonly (string | number)[];
+
+/** One condition inside an `or(...)` group. */
+export interface OrCondition {
+  readonly column: string;
+  readonly operator: FilterOperator;
+  readonly value: FilterValue;
+  /** Negate this one condition, the same as `not()` does at the top level. */
+  readonly negated?: boolean;
+}
+
+/**
+ * Characters the engine reads as structure rather than as text.
+ *
+ * 🔴 Leaving these bare does not produce an error, it produces a different question.
+ * `in.(p1,p2)` is two ids however many the caller passed, and a value that opens with
+ * a quote is unquoted by the parser, so `eq."x"` looks for `x`. Both answers parse,
+ * and only one of them is the one that was asked.
+ *
+ * ⭐ Quoting only when one of these appears is what keeps the meaning identical.
+ * A quoted value is always text on the server, so quoting everything would stop
+ * `true` and `false` binding as 1 and 0, and would make `is` a refusal. Neither of
+ * those words contains any character in this class, and neither does any number, so
+ * a value that needs quoting was never one the server would have coerced.
+ */
+const STRUCTURAL = /["\\,()]/;
+
+function renderValue(value: string | number | boolean): string {
+  const text = String(value);
+  if (!STRUCTURAL.test(text)) return text;
+  return `"${text.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
+/** Refuse a PostgREST filter this backend cannot mean, with the reason. */
+function refuse(operator: string): never {
+  const reason = UNSUPPORTED[operator];
+  throw new BaseclfRequestError(
+    reason === undefined
+      ? `"${operator}" is not a filter this backend has.`
+      : `The "${operator}" filter is not available on this backend. ${reason}`,
+    'UNSUPPORTED_QUERY',
+    0,
+  );
+}
+
+const FILTERS: ReadonlySet<string> = new Set<FilterOperator>([
+  'eq',
+  'neq',
+  'gt',
+  'gte',
+  'lt',
+  'lte',
+  'in',
+  'is',
+  'like',
+  'ilike',
+]);
+
+/**
+ * `[not.]operator.value`, the right hand side of one filter.
+ *
+ * The same text works at the top level and inside an `or(...)` group, because the
+ * engine parses both with the same routine. Written once for that reason: two
+ * renderers would be two chances to quote differently, and the one that got it wrong
+ * would return rows rather than raise.
+ */
+function renderOperand(operator: FilterOperator, value: FilterValue, negated: boolean): string {
+  if (!FILTERS.has(operator)) refuse(operator);
+  const prefix = negated ? 'not.' : '';
+
+  if (operator === 'in') {
+    if (!Array.isArray(value)) {
+      throw new BaseclfRequestError(
+        'An "in" filter takes an array of values.',
+        'UNSUPPORTED_QUERY',
+        0,
+      );
+    }
+    return `${prefix}in.(${(value as readonly (string | number)[]).map(renderValue).join(',')})`;
+  }
+
+  if (operator === 'is') {
+    // ⚠️ Unquoted on purpose. The server refuses a quoted `is`, because `is."null"`
+    // would be asking whether a column equals the word rather than whether it is unset.
+    if (value !== null && typeof value !== 'boolean') {
+      throw new BaseclfRequestError(
+        'An "is" filter takes null, true or false.',
+        'UNSUPPORTED_QUERY',
+        0,
+      );
+    }
+    return `${prefix}is.${value === null ? 'null' : String(value)}`;
+  }
+
+  if (value === null || Array.isArray(value)) {
+    throw new BaseclfRequestError(
+      `The "${operator}" filter takes a single value.`,
+      'UNSUPPORTED_QUERY',
+      0,
+    );
+  }
+  return `${prefix}${operator}.${renderValue(value as string | number | boolean)}`;
+}
+
 /**
  * The largest page the engine will return, whatever is asked for.
  *
@@ -169,39 +274,78 @@ export class QueryBuilder<Row = Record<string, unknown>> {
    * there is no filter that widens what a caller may see, and one that names a column
    * they may not read is a refusal rather than a wider result.
    */
-  filter(column: string, operator: FilterOperator, value: string | number | boolean): this {
-    return this.#add(column, `${operator}.${String(value)}`) as this;
+  filter(column: string, operator: FilterOperator, value: FilterValue): this {
+    return this.#add(column, renderOperand(operator, value, false)) as this;
   }
 
   eq(column: string, value: string | number | boolean): QueryBuilder<Row> {
-    return this.#add(column, `eq.${String(value)}`);
+    return this.#add(column, renderOperand('eq', value, false));
   }
   neq(column: string, value: string | number | boolean): QueryBuilder<Row> {
-    return this.#add(column, `neq.${String(value)}`);
+    return this.#add(column, renderOperand('neq', value, false));
   }
   gt(column: string, value: string | number): QueryBuilder<Row> {
-    return this.#add(column, `gt.${String(value)}`);
+    return this.#add(column, renderOperand('gt', value, false));
   }
   gte(column: string, value: string | number): QueryBuilder<Row> {
-    return this.#add(column, `gte.${String(value)}`);
+    return this.#add(column, renderOperand('gte', value, false));
   }
   lt(column: string, value: string | number): QueryBuilder<Row> {
-    return this.#add(column, `lt.${String(value)}`);
+    return this.#add(column, renderOperand('lt', value, false));
   }
   lte(column: string, value: string | number): QueryBuilder<Row> {
-    return this.#add(column, `lte.${String(value)}`);
+    return this.#add(column, renderOperand('lte', value, false));
   }
   like(column: string, pattern: string): QueryBuilder<Row> {
-    return this.#add(column, `like.${pattern}`);
+    return this.#add(column, renderOperand('like', pattern, false));
   }
   ilike(column: string, pattern: string): QueryBuilder<Row> {
-    return this.#add(column, `ilike.${pattern}`);
+    return this.#add(column, renderOperand('ilike', pattern, false));
   }
   is(column: string, value: null | boolean): QueryBuilder<Row> {
-    return this.#add(column, `is.${value === null ? 'null' : String(value)}`);
+    return this.#add(column, renderOperand('is', value, false));
   }
   in(column: string, values: readonly (string | number)[]): QueryBuilder<Row> {
-    return this.#add(column, `in.(${values.map((each) => String(each)).join(',')})`);
+    return this.#add(column, renderOperand('in', values, false));
+  }
+
+  /**
+   * The negation of one filter: `not(column, 'eq', x)` is every row where it is not x.
+   *
+   * ⚠️ On a column that holds nulls this is SQL's answer rather than the intuitive
+   * one. `NOT (col = 'x')` is null for a null column, and a null predicate does not
+   * pass a `WHERE`, so those rows are absent from both this and its opposite. The
+   * policy DSL refuses `_not` over a nullable column for exactly this reason; a filter
+   * is allowed to because it can only narrow, so the surprise costs rows rather than
+   * leaking them.
+   */
+  not(column: string, operator: FilterOperator, value: FilterValue): QueryBuilder<Row> {
+    return this.#add(column, renderOperand(operator, value, true));
+  }
+
+  /**
+   * A group of conditions, any one of which is enough.
+   *
+   * ⚠️ The group as a whole is still ANDed onto the policy, so this widens what the
+   * caller asked for and never what they may see. Invariant I3 is a property of the
+   * engine, not of this method.
+   *
+   * Flat only: the engine parses `or(a,and(b,c))` and this does not emit it. A nesting
+   * this cannot express is one somebody has to write by hand, which is a smaller
+   * problem than a builder that emits a shape the depth limit rejects at runtime.
+   */
+  or(conditions: readonly OrCondition[]): QueryBuilder<Row> {
+    if (conditions.length === 0) {
+      throw new BaseclfRequestError(
+        'An "or" group needs at least one condition.',
+        'UNSUPPORTED_QUERY',
+        0,
+      );
+    }
+    const rendered = conditions.map(
+      (each) => `${each.column}.${renderOperand(each.operator, each.value, each.negated === true)}`,
+    );
+    return this.#add('or', `(${rendered.join(',')})`);
   }
 
   /**
@@ -212,14 +356,7 @@ export class QueryBuilder<Row = Record<string, unknown>> {
    * while they are still writing the line rather than while reading a log.
    */
   unsupported(operator: string): never {
-    const reason = UNSUPPORTED[operator];
-    throw new BaseclfRequestError(
-      reason === undefined
-        ? `"${operator}" is not a filter this backend has.`
-        : `The "${operator}" filter is not available on this backend. ${reason}`,
-      'UNSUPPORTED_QUERY',
-      0,
-    );
+    return refuse(operator);
   }
 
   order(
