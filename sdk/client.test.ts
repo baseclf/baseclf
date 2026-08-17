@@ -123,6 +123,19 @@ describe('reading through the client', () => {
     expect(kept.data).toEqual([{ id: 'p1' }]);
   });
 
+  it('negates a list filter too, which is where the two renderings meet', async () => {
+    // The one shape where the negation prefix and the parenthesised list have to
+    // come out in the right order: `not.in.(...)`. A renderer that put them the other
+    // way round would be refused, and one that dropped the prefix would return p1.
+    const excluded = await client.from('posts').select('id').not('id', 'in', ['p1']);
+    expect(excluded.error).toBeNull();
+    expect(excluded.data).toEqual([]);
+
+    const kept = await client.from('posts').select('id').not('id', 'in', ['no_such_id']);
+    expect(kept.error).toBeNull();
+    expect(kept.data).toEqual([{ id: 'p1' }]);
+  });
+
   it('sends an or group the engine applies rather than ignores', async () => {
     // 🔴 The negative half is the one that carries this. Anonymous sees only p1, so an
     // or group naming p1 returns it whether the group was applied or dropped on the
