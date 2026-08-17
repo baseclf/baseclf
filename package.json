@@ -59,7 +59,8 @@
     "mutate:mcp-auth": "node scripts/mutate-mcp-auth.mjs",
     "mutate:reserved-tables": "node scripts/mutate-reserved-tables.mjs",
     "mutate:mcp-tools": "node scripts/mutate-mcp-tools.mjs",
-    "mutate:registry-isolation": "node scripts/mutate-registry-isolation.mjs"
+    "mutate:registry-isolation": "node scripts/mutate-registry-isolation.mjs",
+    "verify:published": "node scripts/verify-published.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "2.0.0",
