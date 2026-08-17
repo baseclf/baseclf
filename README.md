@@ -16,9 +16,11 @@ PostgREST-shaped queries, on your own Cloudflare account.
 > reach for in that client do not exist here at all: there is no anonymous key, no
 > `upsert`, no bulk insert, no relationship embeds, and fourteen PostgREST filters
 > are refused because SQLite has no regular expressions, arrays or ranges. Each
-> refusal names its reason. The full list is in
-> [Where BaseCLF differs from PostgREST](#where-baseclf-differs-from-postgrest),
-> and the client in `sdk/` refuses the same things before sending them.
+> refusal names its reason. There are two lists, because they answer two
+> questions: [Where BaseCLF differs from PostgREST](#where-baseclf-differs-from-postgrest)
+> is about the URL grammar and applies to anything that calls the API, and
+> [Where the client differs from supabase-js](#where-the-client-differs-from-supabase-js)
+> is about the client in `sdk/`, which refuses the same things before sending them.
 
 ---
 
@@ -496,6 +498,48 @@ matters, and none of them is a bug we plan to fix.
 | `Prefer: return=representation` | Returns rows subject to the SELECT policy | Returns the primary key plus the columns the write touched. SQLite's `RETURNING` takes no `WHERE`, so a read policy cannot be applied to it; rather than approximate that, the result is narrowed to what the caller already supplied. |
 | Several policies on one write | `USING` clauses OR'd, `WITH CHECK` clauses OR'd separately | Each policy's `using` is paired with its own `check`, and the pairs are OR'd. A write has to be permitted end to end by one policy. Stricter, and it means a refusal can name the policy. |
 
+## Where the client differs from supabase-js
+
+The table above is about the URL grammar, so it applies to anything that calls the
+API, `curl` included. This one is about the client in `sdk/`, for people arriving
+with the other client in their fingers.
+
+Its surface was read off this engine rather than off that client, which is why the
+list is this long. A client whose most familiar calls produce requests the server
+rejects is worse than no client: it turns "this product does not do that" into
+"this product is broken". So the calls below either exist and behave differently,
+or refuse locally with the reason, before a request goes out.
+
+| Call | On supabase-js | Here |
+|---|---|---|
+| `createClient(url, anonKey)` | The second argument is an anonymous key | **There is no anonymous key anywhere in this product.** The second argument is options. Identity is a bearer JWT, and no token is the `anon` role. Prefer passing `token` as a function: tokens last fifteen minutes, so a client holding one from construction works all through development and starts failing in production for a reason nothing reports. |
+| `.upsert()` | Supported | **Not here.** Nothing in the engine compiles `ON CONFLICT`. |
+| `.insert([...])` with many rows | Supported | **Refused before sending**, for the reason in the table above. |
+| `.rpc()` | Calls a Postgres function | **Not here.** SQLite has no stored procedures. A route in the Worker is the replacement. |
+| `.or()`, `.not()` | Supported | **Not in the client yet, though the server does take them.** `or=(...)`, `and=(...)` and a `not.` prefix all parse on the URL. This one is a hole in the client rather than a refusal by the engine, and it is the only row here of that kind. |
+| `.textSearch()`, `.contains()`, `.overlaps()`, the range filters | Supported | **Refused by name**, fourteen of them, each carrying its own reason. |
+| `.range(from, to)` | Supported | Use `.limit()` and `.offset()`. The server clamps to 1000 rather than refusing, so a larger number is not an error; it is a number that quietly does not mean what it says. |
+| `.single()` | Raises unless the result is exactly one row | **Raises on more than one, and not on zero.** Zero is not an error because the engine answers "no such row" and "not yours" identically on purpose, so raising on empty would invent a distinction the server refuses to make. |
+| `.maybeSingle()` | Returns null for zero rows | **Not here.** `.single()` already does this for the zero case. |
+| `.select('author:users(name)')` | Embeds the related table | **Refused before sending.** |
+| `.auth.signInWithOAuth()` | One call, and the library redirects | **Three steps.** It returns `{url}` and the caller navigates. The callback lands somewhere this client never sees, so the application reads the session there and hands it back with `setSession`. |
+| `.auth.signInWithPassword()`, `.auth.signUp()` | On by default | **Off on most deployments, deliberately.** Hashing one password costs about 58 ms of CPU against a free plan's 10 ms per request, so it stays off unless somebody switched it on. A refusal here is usually that rather than a wrong password. |
+| `.auth.getSession()` | Asks the server and returns a session object | **Returns the session token this client is holding**, without a request. |
+| `.auth.onAuthStateChange()` | Supported | **Not here.** |
+| `.auth.refreshSession()` | Supported | **Not here, and not needed.** `getToken()` mints a fresh fifteen-minute JWT from the session when the one it holds is close to expiring. |
+| Providers | Many | **Google and GitHub.** |
+| `.storage.from().upload(path, file)` | The caller chooses the path | **The caller sends a file name and the server builds the key**, from a prefix template resolved against claims it verified. So `upload` returns the key instead of accepting one, and a traversal is not expressible rather than checked for. |
+| `.storage.from().list()` | Supported | **Not here.** There is no list operation on the server either, and it is the place a slightly wide prefix leaks the most at once. |
+| `.createSignedUrl()`, `.getPublicUrl()` | Supported | **Not here, and this one is a decision rather than a gap.** A signed URL is a capability handed out in advance: once issued it cannot be reconsidered, and nothing about the request that redeems it reaches the policy engine. R2 egress through the Worker is free, so the proxy costs nothing the signature would save. |
+| `.storage.from().remove([paths])` | Takes a list | **One file per call.** |
+| The content type on an upload | | **A declaration, not an inspection.** Nothing reads the bytes to confirm it. |
+| `.channel()` and realtime subscriptions | Supported | **Not here, and not planned on D1.** There is no change data capture, no logical replication and no LISTEN/NOTIFY, so there is nothing to subscribe to. Any change event would have to be produced by the Worker that made the change. |
+| `.functions.invoke()` | Supported | **Not here.** Write a route in the Worker. |
+
+One thing it has that the other client does not: it threads D1's session bookmark
+through every request, so a read after a write sees that write without anybody
+asking for it. Turn it off with `sessionConsistency: false`.
+
 ## Constraints worth knowing before you commit
 
 These were measured against a real D1 database, not read from documentation.
@@ -547,18 +591,13 @@ has used it.
 
 ### What the client library does and does not have
 
-It is in `sdk/`, it is not on npm, and its surface was read off the engine rather
-than off a familiar client. So it has `from().select()` with the ten filters this
-backend can run, `insert`, `update`, `delete`, and sign-in with a provider or a
-password.
+It is in `sdk/` and it is not on npm yet. It has `from().select()` with the ten
+filters this backend can run, `insert`, `update`, `delete`, sign-in with a
+provider or a password, and uploads and downloads.
 
-It does not have `upsert`, bulk insert, embeds, or the fourteen refused filters,
-because none of those exist on the server either, and a client whose most
-familiar calls produce requests the server rejects is worse than no client: it
-turns "this product does not do that" into "this product is broken".
-
-One thing it has that the client it resembles does not: it threads D1's session
-bookmark, so a read after a write sees that write without anybody asking for it.
+Everything it does not have, and every place it behaves differently from the
+client it resembles, is in
+[Where the client differs from supabase-js](#where-the-client-differs-from-supabase-js).
 
 Its tests run against the real Worker rather than a stand-in, because the job of
 a client is to emit requests the server accepts, and a test that checks a URL
