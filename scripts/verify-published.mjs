@@ -115,6 +115,7 @@ console.log('    query, quoting, not, or and the refusals all work');
 `,
   'create-baseclf': `
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 
 for (const [binary, expected] of [
   ['package/dist-cli/create-baseclf.mjs', 'npx create-baseclf'],
@@ -123,7 +124,33 @@ for (const [binary, expected] of [
   const printed = execFileSync(process.execPath, [binary, '--help'], { encoding: 'utf8' });
   if (!printed.includes(expected)) throw new Error(binary + ' did not print ' + expected);
 }
-console.log('    both binaries run and print their own help');
+
+// The Worker the CLI deploys. Nothing in the manifest points at it, the CLI only
+// reads it at run time, and it was absent from the package for its whole life before
+// anybody checked. So it is checked here rather than assumed.
+const manifest = JSON.parse(readFileSync('package/package.json', 'utf8'));
+const worker = readFileSync('package/dist-cli/worker.js', 'utf8');
+
+if (!/export\\s*\\{[^}]*as default|export default/.test(worker)) {
+  throw new Error('the worker has no default export, so it is not a module Worker');
+}
+
+// ⭐ The version is compiled into the bundle, because /health reads it from the
+// manifest at build time rather than from a literal. So its presence is evidence the
+// Worker was built from this release rather than carried over from an older one,
+// which is the drift a version number cannot show: both packages would still report
+// the number they claim.
+//
+// ⚠️ What it proves and no more: the tree that built this bundle had this version in
+// its manifest. It says nothing about the rest of the code matching.
+if (!worker.includes(JSON.stringify(manifest.version))) {
+  throw new Error(
+    'the worker bundle does not carry ' + manifest.version + ', so it was built from a ' +
+      'tree claiming some other version',
+  );
+}
+
+console.log('    both binaries run, and the worker is a module carrying this version');
 `,
 };
 PROBES.baseclf = PROBES['create-baseclf'];
