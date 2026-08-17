@@ -232,7 +232,7 @@ function fingerprint(settings: AuthSettings, env: AuthEnv): string {
     settings.secret,
     settings.baseURL,
     Object.keys(socialProviders(env)).sort().join('+'),
-  ].join(' ');
+  ].join('\u0000');
 }
 
 let cached: { readonly fingerprint: string; readonly instance: AuthInstance } | null = null;

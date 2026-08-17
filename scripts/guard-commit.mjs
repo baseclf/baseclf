@@ -109,6 +109,35 @@ const GENERATED = /^(worker-configuration\.d\.ts|.*\.min\.(js|css)|dist\/|.*\.lo
 
 const TEXT_EXT = /\.(ts|tsx|js|jsx|mjs|cjs|json|jsonc|md|css|html|yml|yaml|toml|txt|sh|sql)$/;
 
+/**
+ * A NUL byte in a source file, which makes the file invisible to the tools used to
+ * read this repository.
+ *
+ * 🔴 Found in `src/auth/index.ts` on 2026-08-18, where a fingerprint separator was
+ * written as a raw NUL rather than as an escape. Two things followed from one byte,
+ * and the second is worse than the first:
+ *
+ *   1. `grep` and ripgrep classify the whole file as binary and answer "binary file
+ *      matches" instead of the lines. An audit that greps for a symbol there is told
+ *      nothing is found, which reads as absence. That happened: a search for
+ *      `definePayload` in a file containing it twice came back empty.
+ *   2. Editors and file readers render it as a **space**, so the line read as
+ *      `join(' ')`. A space separator would be wrong, because a secret or a URL can
+ *      contain one and two different inputs would then share a fingerprint. Nobody
+ *      reading the source could tell which of the two it was.
+ *
+ * ⚠️ Deliberately narrow. Escape is left alone: `cli/output.ts` writes ANSI colour
+ * codes and an escape does not make a file invisible to anything. This is the only
+ * control character that does, and after the fix above the repository contains none,
+ * measured across all 214 tracked text files rather than assumed.
+ *
+ * ⚠️ A plain string rather than a regular expression, and not for style. The linter
+ * refuses a control character inside a regex, which is the right rule to have and the
+ * wrong one to silence here, because matching one is the entire job. `includes` needs
+ * no exception and says the same thing.
+ */
+const NUL_BYTE = '\u0000';
+
 /* ---------------------------------------------------------------- run --- */
 function stagedFiles() {
   const cmd = ALL ? 'git ls-files' : 'git diff --cached --name-only --diff-filter=ACMR';
@@ -151,6 +180,18 @@ for (const file of files) {
     continue;
   }
   const lines = body.split('\n');
+
+  const nul = lines.findIndex((l) => l.includes(NUL_BYTE));
+  if (nul !== -1) {
+    failures.push({
+      file,
+      kind: 'NUL BYTE',
+      detail:
+        `line ${nul + 1}. Every tool reading this repository goes blind on the file: ` +
+        'grep answers "binary file matches" instead of the lines, and an editor draws ' +
+        'it as a space. Write it as an escape instead.',
+    });
+  }
 
   for (const { name, re } of SECRET_PATTERNS) {
     const idx = lines.findIndex((l) => re.test(l));
