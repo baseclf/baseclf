@@ -1,0 +1,119 @@
+/* Layout only. Every colour, size, radius and border below is a token from
+   theme.css, and there is not one hex value in this file. If a value here needs a
+   colour that theme.css does not define, that is a gap in the design system rather
+   than a licence to invent one, and it belongs in tokens.json. */
+
+.page {
+  /* min-height rather than height: DESIGN.md section 10 asks for dvh so the iOS
+     address bar cannot make the page jump. */
+  min-height: 100dvh;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+}
+
+.bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: var(--border-hairline) solid var(--border-default);
+}
+
+.bar__name {
+  font-weight: var(--weight-semibold);
+  letter-spacing: -0.011em;
+}
+
+.bar__who {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: var(--text-xs);
+  color: var(--ink-secondary);
+}
+
+/* The signed-in identity is machine output, so it is mono. DESIGN.md section 4:
+   anything the machine produced is monospaced, never decoratively. */
+.bar__id {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--ink-primary);
+}
+
+.main {
+  width: 100%;
+  /* 34rem is the prose measure DESIGN.md section 4 asks for, and the panel column
+     is wider because a post carries a badge and a byline beside its title. */
+  max-width: 44rem;
+  margin: 0 auto;
+  padding: var(--space-6) var(--space-4);
+  display: grid;
+  gap: var(--space-5);
+}
+
+.lede {
+  color: var(--ink-secondary);
+  max-width: 34rem;
+}
+
+.posts {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.post {
+  padding: var(--space-4);
+  display: grid;
+  gap: var(--space-2);
+}
+
+.post__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.post__title {
+  font-size: var(--text-lg);
+  font-weight: var(--weight-medium);
+  letter-spacing: -0.011em;
+}
+
+.post__meta {
+  font-family: var(--font-mono);
+  font-size: var(--text-micro);
+  color: var(--ink-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.post__body {
+  color: var(--ink-secondary);
+}
+
+/* An empty result is not an error here. The engine answers "no such row" and "not
+   yours" identically on purpose, so this text says what is true and does not guess
+   which one happened. */
+.empty {
+  padding: var(--space-6) var(--space-4);
+  text-align: center;
+  color: var(--ink-tertiary);
+}
+
+.foot {
+  padding: var(--space-4);
+  border-top: var(--border-hairline) solid var(--border-default);
+  color: var(--ink-tertiary);
+  font-size: var(--text-xs);
+}
+
+.foot a {
+  color: inherit;
+}
+
+.row {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+}

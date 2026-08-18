@@ -1,0 +1,33 @@
+<!doctype html>
+<!--
+  data-density="comfortable" because this is a reading surface rather than a Studio
+  table. Studio sets "compact" so a developer sees twenty rows; a reader wants prose.
+  No data-surface: that attribute exists to unlock motion on the landing page, and
+  DESIGN.md section 7 keeps everything else still.
+
+  No data-theme either, so the page follows the operating system. theme.css defines
+  both, and picking one here would override a preference the reader already made.
+
+  The stylesheets are imported from main.ts rather than linked here, so the page
+  consumes _design_system/theme.css itself instead of a copy that would drift.
+-->
+<html lang="en" data-density="comfortable">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Notes, on BaseCLF</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <!-- theme.css says to self-host in production. An example is not production,
+         and checking two font families into the repository to prove a point about
+         row-level security would be the wrong trade. -->
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap"
+    />
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
