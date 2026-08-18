@@ -151,6 +151,55 @@ function authOptions(env: AuthEnv, settings: AuthSettings) {
     baseURL: settings.baseURL,
     trustedOrigins: [...settings.trustedOrigins],
     emailAndPassword: { enabled: settings.emailAndPassword },
+    account: {
+      /**
+       * 🔴 A security trade, made deliberately, and the reason it is made is that
+       * without it OAuth cannot complete at all for the front end this product is
+       * built around.
+       *
+       * Better Auth stores the OAuth state twice: a row in `verification`, and a
+       * signed cookie named `state`. The callback checks both. The sign-in that
+       * created them was a cross-origin POST from the application, and this Worker
+       * does not return `Access-Control-Allow-Credentials`, so the browser never
+       * stored that cookie. At the callback there is nothing to compare against and
+       * the reader is sent to `/api/auth/error?error=state_mismatch`, having just
+       * authorised the application at the provider. Measured on a live deployment.
+       *
+       * ## What the cookie was protecting, and what is left
+       *
+       * It bound the callback to the same browser that began the flow. Without it,
+       * login CSRF is possible in principle: an attacker starts a sign-in, obtains a
+       * `code` and `state` for their own account, and gets a victim to load that
+       * callback. The victim ends up signed in as the attacker, so whatever they
+       * write next lands in the attacker's account.
+       *
+       * What still stands in the way:
+       *
+       *   - `state` is 32 random characters, and the verification row holding it is
+       *     deleted the first time it is used, so a callback works exactly once
+       *   - the row expires after ten minutes
+       *   - `callbackURL` is validated against `trustedOrigins` when the sign-in is
+       *     accepted, measured on a live deployment: `https://evil.example.com/steal`,
+       *     `//evil.example.com/`, `/\/evil.example.com` and `https:/\/evil...` are
+       *     each refused with 403 INVALID_CALLBACK_URL, so the redirect cannot be
+       *     aimed anywhere the operator did not list
+       *
+       * ## Why this rather than the alternatives
+       *
+       * Better Auth makes the same trade itself: its `oauth-proxy` plugin passes
+       * `skipStateCookieCheck: true` while keeping the origin check, for a situation
+       * with the same shape. Allowing credentials instead would work today and bets
+       * on third-party cookies, which browsers are removing. Serving the application
+       * from this Worker's own origin needs no flag and no trade, and is the right
+       * answer for anybody who can do it.
+       *
+       * ⚠️ This is a documented caveat, not a solved problem. The design that gives
+       * the binding back without a cookie is a single use code exchanged over POST,
+       * and that is the thing to build if this product ever carries something worth
+       * more than a blog post.
+       */
+      skipStateCookieCheck: true,
+    },
     // Only the providers whose id and secret are both present. Half a provider
     // is not offered, and `_diagnose` says which half is missing rather than
     // leaving somebody to work out why a button is not on the page.

@@ -450,6 +450,31 @@ advertises its strengths is not one you should trust.
 BaseCLF enforces policy at the query layer. It cannot enforce anything about a
 connection it is not part of. Scope your API tokens accordingly.
 
+### One trade made in the sign-in flow, stated rather than buried
+
+Signing in with a provider does not check the OAuth state cookie. It checks the
+state itself, which is a random value stored in a row that is deleted the first time
+it is used and expires after ten minutes, and it refuses any `callbackURL` that is
+not one of your `trustedOrigins`. It does not additionally check that the callback
+arrives in the same browser that started the flow.
+
+That check is a cookie, and a cookie cannot survive the flow this product is built
+for: your application is on another origin, the sign-in that would set it is a
+cross-origin request, and BaseCLF does not return
+`Access-Control-Allow-Credentials` because bearer tokens are the transport. With the
+check on, every provider sign-in from a separate front end failed at the callback,
+after the reader had already authorised your application.
+
+**What it costs.** Login CSRF is possible in principle: somebody starts a sign-in,
+gets a callback URL for their own account, and persuades one of your users to open
+it. That user ends up signed in as the attacker, so what they write next goes to the
+attacker's account. It cannot be used to read anything of theirs, and the link works
+once and for ten minutes.
+
+**How to avoid it entirely.** Serve your front end from the same origin as your
+Worker. Then cookies work, and none of this applies. Better Auth makes the same
+trade in its own `oauth-proxy` plugin for the same reason.
+
 ## What is rate limited, and what is not
 
 Counters live in D1, so every instance of your Worker shares them. Over the limit is
