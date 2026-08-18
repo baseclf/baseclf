@@ -58,7 +58,7 @@ const MUTATIONS = [
     file: HANDOVER,
     expect: 'the puts-it-in-the-fragment-rather-than-the-query test',
     find: / {2}target\.hash = existing === '' \? handed : `\$\{existing\}&\$\{handed\}`;/,
-    replace: '  target.search = existing === \'\' ? handed : `${existing}&${handed}`;',
+    replace: "  target.search = existing === '' ? handed : `${existing}&${handed}`;",
   },
   {
     // The application's own fragment overwritten. It signs somebody in on the wrong
