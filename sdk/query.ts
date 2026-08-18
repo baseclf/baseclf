@@ -539,7 +539,16 @@ export class QueryBuilder<Row = Record<string, unknown>> {
     };
   }
 
-  /** So `await builder` works without calling `.run()`. */
+  /**
+   * So `await builder` works without calling `.run()`.
+   *
+   * ⚠️ Deliberately thenable, which is the one shape the linter asks about by name.
+   * Its own message allows it for a class that intends to be awaited, and this one
+   * does: the builder is the value callers await, and requiring `.run()` would make
+   * the common line longer for no gain. The risk the rule guards against is a plain
+   * object accidentally acting like a promise; here it is the whole interface.
+   */
+  // biome-ignore lint/suspicious/noThenProperty: the builder is awaited by design, see above.
   then<T1 = QueryResult<Row>, T2 = never>(
     onFulfilled?: ((value: QueryResult<Row>) => T1 | PromiseLike<T1>) | null,
     onRejected?: ((reason: unknown) => T2 | PromiseLike<T2>) | null,

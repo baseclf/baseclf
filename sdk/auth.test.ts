@@ -61,11 +61,7 @@ describe('starting a social sign-in', () => {
     // Taken out rather than set to undefined, because the type says they are strings
     // and half a provider is no provider: `src/auth/providers.ts` withholds one that
     // is missing either variable, so nothing is registered to start.
-    const {
-      GITHUB_CLIENT_ID: _id,
-      GITHUB_CLIENT_SECRET: _secret,
-      ...withoutGithub
-    } = configured;
+    const { GITHUB_CLIENT_ID: _id, GITHUB_CLIENT_SECRET: _secret, ...withoutGithub } = configured;
 
     const bare = createClient(BASE_URL, {
       fetch: (url, init) => worker.fetch(new Request(url, init), withoutGithub as Env),

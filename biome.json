@@ -2,7 +2,14 @@
   "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
   "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
   "files": {
-    "includes": ["src/**/*.ts", "cli/**/*.ts", "scripts/**/*.mjs", "vitest.config.ts"]
+    "includes": [
+      "src/**/*.ts",
+      "cli/**/*.ts",
+      "sdk/**/*.ts",
+      "examples/**/*.ts",
+      "scripts/**/*.mjs",
+      "vitest.config.ts"
+    ]
   },
   "formatter": {
     "enabled": true,
@@ -47,7 +54,7 @@
       }
     },
     {
-      "includes": ["src/**/*.test.ts", "scripts/**/*.mjs"],
+      "includes": ["src/**/*.test.ts", "sdk/**/*.test.ts", "scripts/**/*.mjs"],
       "linter": {
         "rules": {
           "suspicious": { "noConsole": "off" },

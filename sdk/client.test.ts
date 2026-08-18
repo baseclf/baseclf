@@ -243,8 +243,9 @@ describe('what the client refuses before sending anything', () => {
   it('refuses a bulk insert, and says why a partial write is worse', () => {
     const builder = client.from('posts');
 
-    expect(() => builder.insert([{ id: 'a' }, { id: 'b' }] as unknown as Record<string, unknown>))
-      .toThrow(/one at a time/);
+    expect(() =>
+      builder.insert([{ id: 'a' }, { id: 'b' }] as unknown as Record<string, unknown>),
+    ).toThrow(/one at a time/);
   });
 });
 
@@ -462,5 +463,4 @@ describe('single(), where zero and many are not the same kind of answer', () => 
     expect(data).toBeNull();
     expect(error).toBeNull();
   });
-
 });

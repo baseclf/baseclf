@@ -35,11 +35,11 @@ import { StorageClient } from './storage.js';
 export { AuthClient, type AuthResult, type AuthUser, type Provider } from './auth.js';
 export { BaseclfRequestError, type FetchLike } from './errors.js';
 export {
-  MAX_PAGE_SIZE,
-  QueryBuilder,
   type FilterOperator,
   type FilterValue,
+  MAX_PAGE_SIZE,
   type OrCondition,
+  QueryBuilder,
 } from './query.js';
 export { type SizedBody, StorageBucket, StorageClient, type StoredObject } from './storage.js';
 
@@ -79,8 +79,7 @@ export class BaseclfClient {
       throw new TypeError(`A deployment URL has to start with http or https: got "${url}".`);
     }
 
-    const fetcher: FetchLike =
-      options.fetch ?? ((target, init) => globalThis.fetch(target, init));
+    const fetcher: FetchLike = options.fetch ?? ((target, init) => globalThis.fetch(target, init));
 
     this.auth = new AuthClient(trimmed, fetcher, options.now);
 

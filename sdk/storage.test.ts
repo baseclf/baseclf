@@ -45,9 +45,33 @@ beforeAll(async () => {
       ' mime_types) VALUES (?, ?, ?, ?, ?, ?, ?)',
   );
   await env.DB.batch([
-    insert.bind('avatars', 'upload_own', 'upload', '["authenticated"]', 'avatars/$auth.uid/', 1024, '["image/png"]'),
-    insert.bind('avatars', 'read_own', 'download', '["authenticated"]', 'avatars/$auth.uid/', null, null),
-    insert.bind('avatars', 'delete_own', 'delete', '["authenticated"]', 'avatars/$auth.uid/', null, null),
+    insert.bind(
+      'avatars',
+      'upload_own',
+      'upload',
+      '["authenticated"]',
+      'avatars/$auth.uid/',
+      1024,
+      '["image/png"]',
+    ),
+    insert.bind(
+      'avatars',
+      'read_own',
+      'download',
+      '["authenticated"]',
+      'avatars/$auth.uid/',
+      null,
+      null,
+    ),
+    insert.bind(
+      'avatars',
+      'delete_own',
+      'delete',
+      '["authenticated"]',
+      'avatars/$auth.uid/',
+      null,
+      null,
+    ),
   ]);
 
   resetCatalogue();

@@ -73,7 +73,9 @@ export class StorageBucket {
    * misleading: the route takes exactly two segments, so `a/b.png` produces a 404
    * that reads as "no such bucket" to somebody who was asking for a folder.
    */
-  #path(fileName: string): { url: string; error: null } | { url: null; error: BaseclfRequestError } {
+  #path(
+    fileName: string,
+  ): { url: string; error: null } | { url: null; error: BaseclfRequestError } {
     if (fileName === '') {
       return {
         url: null,

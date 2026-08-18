@@ -191,11 +191,7 @@ describe('writing with an identity the deployment issued', () => {
   });
 
   it('deletes a row it owns, and reports the row it removed', async () => {
-    const { data, error } = await asDana()
-      .from('posts')
-      .eq('id', 'p_sdk_rye')
-      .delete()
-      .single();
+    const { data, error } = await asDana().from('posts').eq('id', 'p_sdk_rye').delete().single();
 
     expect(error).toBeNull();
     expect(data?.['id']).toBe('p_sdk_rye');

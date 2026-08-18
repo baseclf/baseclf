@@ -149,7 +149,9 @@ describe('reading and ending a session', () => {
     const response = await call('/api/auth/get-session');
     const text = await response.text();
 
-    console.log(`  get-session with no session answers ${response.status}, body ${text || '(empty)'}`);
+    console.log(
+      `  get-session with no session answers ${response.status}, body ${text || '(empty)'}`,
+    );
     expect(response.status).toBe(200);
   });
 
