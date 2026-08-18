@@ -74,6 +74,24 @@ describe('a preflight from an origin on the list', () => {
     expect(exposed).toContain('retry-after');
   });
 
+  it('lets the browser read the header a session arrives in', async () => {
+    // 🔴 Signing in from a browser did not work without this, and nothing said so.
+    // The session token comes back as `set-auth-token`, the client reads it with
+    // `response.headers.get`, and a browser hides every response header that is
+    // neither safelisted nor named here. So sign-in answered 200, the client took
+    // null, and every request after it went out anonymous. Rows missing, no error.
+    //
+    // ⚠️ This assertion is weaker than the bug it guards, and the gap is worth
+    // stating. Tests here drive the worker in-process, where nothing enforces CORS,
+    // so the header was readable in this suite the whole time it was invisible in a
+    // browser. What can be checked here is that the name is on the list. The browser
+    // half was measured by hand, on a page at an allowed origin, which could see
+    // exactly the safelist plus this list and nothing else.
+    const exposed = (await call('/health')).headers.get('access-control-expose-headers') ?? '';
+
+    expect(exposed).toContain('set-auth-token');
+  });
+
   it('matches a configured value written with a trailing slash', async () => {
     // Both sides go through URL.origin. Comparing raw strings would turn one
     // stray character into a frontend that cannot reach its own backend.

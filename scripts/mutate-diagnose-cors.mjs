@@ -113,6 +113,22 @@ const MUTATIONS = [
     find: / {2}if \(!enabled\) return;/,
     replace: '  if (false) return;',
   },
+  {
+    // 🔴 The one that shipped. Without `set-auth-token` on the expose list a browser
+    // hides it, so a cross-origin sign-in answers 200, the client captures null, and
+    // every request after it goes out anonymous. The symptom is rows missing rather
+    // than an error, on a path that reports success at every step.
+    //
+    // ⚠️ Weaker than it looks, and the note is the point. This suite runs the worker
+    // in-process where nothing enforces CORS, so the mutation cannot reproduce the
+    // browser behaviour; it can only be caught by a test that reads the list. That is
+    // why the list is asserted rather than the outcome.
+    name: 'the session header dropped from what a browser may read',
+    file: INDEX,
+    expect: 'the reads-the-header-a-session-arrives-in test',
+    find: /, retry-after, set-auth-token';/,
+    replace: ", retry-after';",
+  },
 ];
 
 await runMutations({

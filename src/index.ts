@@ -118,8 +118,28 @@ const ALLOWED_REQUEST_HEADERS = 'authorization, content-type, prefer, x-d1-bookm
  *
  * Without this the bookmark is invisible to a cross-origin client, and read
  * after write stops working for exactly the callers that need it most.
+ *
+ * 🔴 `set-auth-token` is here because signing in did not work in a browser without
+ * it, and nothing said so. The session token is delivered as that header, the client
+ * reads it with `response.headers.get('set-auth-token')`, and a browser hides every
+ * response header that is not safelisted or named here. So a cross-origin sign-in
+ * answered 200, the client captured null, and every later request went out
+ * anonymous: rows missing rather than an error.
+ *
+ * Measured in a real browser rather than reasoned about. JavaScript on an allowed
+ * origin could see exactly `content-length`, `content-type`, `x-baseclf-rows-read`
+ * and `x-d1-bookmark`, which is the safelist plus this list, and nothing else.
+ *
+ * ⚠️ The tests could not have found it. They drive the worker in-process through
+ * `worker.fetch`, where no browser is enforcing CORS, so the header was always
+ * readable there. Same shape as the JWKS fetch in `rules/02` section I: the harness
+ * was more honest than a mock at everything except the one thing that was broken.
+ *
+ * Exposing it hands nothing to anybody new. The response already went to an origin
+ * that passed the allowlist; this only decides whether that origin's own script may
+ * read what its own browser already received, which is what bearer transport is.
  */
-const EXPOSED_RESPONSE_HEADERS = 'x-d1-bookmark, x-baseclf-rows-read, retry-after';
+const EXPOSED_RESPONSE_HEADERS = 'x-d1-bookmark, x-baseclf-rows-read, retry-after, set-auth-token';
 
 /**
  * What a browser may ask for.

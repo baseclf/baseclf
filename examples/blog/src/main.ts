@@ -57,6 +57,32 @@ if (URL_FROM_ENV === undefined || URL_FROM_ENV === '') {
 
 const client = createClient(URL_FROM_ENV);
 
+/** Set just before leaving for the provider, read when the browser comes back. */
+const RETURNING = 'baseclf-example-returning';
+
+/**
+ * A session the reader supplied by hand, which is the only way to see the signed-in
+ * half of this example today.
+ *
+ * 🔴 The reason is measured, not assumed. Better Auth ends its OAuth callback with
+ * `setSessionCookie` and a redirect, so the session arrives as a cookie on the
+ * deployment's origin. This page is a different origin: it cannot read that cookie,
+ * and BaseCLF deliberately does not send `Access-Control-Allow-Credentials`, so it
+ * cannot send one either. The redirect carries no token in its URL. The bearer plugin
+ * does put `set-auth-token` on the response, but a browser following a redirect never
+ * gives that response to a page.
+ *
+ * So a cross-origin single page application cannot finish the OAuth flow yet. Paste a
+ * session token here to see what a signed-in reader sees. The README says where an
+ * operator gets one, and what the open decision is.
+ */
+const PASTED_SESSION = new URLSearchParams(window.location.hash.slice(1)).get('session');
+if (PASTED_SESSION !== null) {
+  client.auth.setSession(PASTED_SESSION);
+  window.history.replaceState({}, '', window.location.pathname);
+  sessionStorage.removeItem(RETURNING);
+}
+
 /* -------------------------------------------------------------- rendering --- */
 
 /**
@@ -150,14 +176,29 @@ async function render(): Promise<void> {
     return;
   }
 
+  // Came back from the provider and still has nothing. Say what happened, because a
+  // page that silently looks signed out after a successful sign-in is the worst
+  // version of this: the reader blames their GitHub account.
+  const stranded =
+    user === null && sessionStorage.getItem(RETURNING) === '1'
+      ? `<div class="panel empty">
+           <p>GitHub signed you in and the session did not reach this page. That is
+              expected today and it is not your account: the deployment sets a cookie
+              on its own origin, and a page on another origin can neither read it nor
+              send it. See the README for the open decision and how to paste a session
+              in the meantime.</p>
+         </div>`
+      : '';
+
   const posts = data ?? [];
   const inner =
-    posts.length === 0
+    stranded +
+    (posts.length === 0
       ? `<div class="panel empty">
            <p>No posts you can read. Either there are none, or none of them are yours.
               The engine answers both the same way on purpose.</p>
          </div>`
-      : `<div class="posts">${posts.map(postCard).join('')}</div>`;
+      : `<div class="posts">${posts.map(postCard).join('')}</div>`);
 
   root.innerHTML = shell(inner, who);
 
@@ -167,6 +208,9 @@ async function render(): Promise<void> {
       callbackURL: window.location.origin,
     });
     if (failed !== null || started === null) return;
+    // Marks that the provider is about to send the browser back here, so the page
+    // can tell "returned from GitHub with nothing" apart from "never went".
+    sessionStorage.setItem(RETURNING, '1');
     window.location.href = started.url;
   });
 
@@ -174,20 +218,6 @@ async function render(): Promise<void> {
     await client.auth.signOut();
     await render();
   });
-}
-
-/**
- * The callback half of signing in.
- *
- * The provider sends the reader back here with a session token, and the client never
- * saw that round trip, so the application hands it over. A string that is not a
- * session leaves the client anonymous rather than looking signed in and failing on
- * every later request.
- */
-const returned = new URLSearchParams(window.location.search).get('token');
-if (returned !== null) {
-  client.auth.setSession(returned);
-  window.history.replaceState({}, '', window.location.pathname);
 }
 
 await render();

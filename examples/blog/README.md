@@ -59,6 +59,44 @@ which reads like the API is down rather than like a list needing one more line.
 **Whichever port you use has to be the origin your deployment knows.** Change one and
 change the other.
 
+## Signing in does not finish yet, and here is exactly why
+
+The sign-in button starts the flow correctly and GitHub really does sign you in. The
+session then does not reach this page, and that is a gap in BaseCLF rather than
+anything about your account or this example.
+
+Measured, in this order:
+
+1. `sign-in/social` answers with a URL. That half works from any allowed origin.
+2. GitHub redirects to the deployment, and Better Auth ends its callback with
+   `setSessionCookie` and a redirect. The session is a **cookie on the deployment's
+   origin**.
+3. This page is a different origin. It cannot read that cookie.
+4. It cannot send one either. BaseCLF deliberately does not return
+   `Access-Control-Allow-Credentials`, because bearer tokens are the transport and
+   ambient cookies are the thing that design avoids.
+5. The redirect carries no token in its URL, and putting one there would write a
+   session into browser history, referrer headers and every log along the way.
+6. Better Auth's bearer plugin does add `set-auth-token` to the response, but a
+   browser following a redirect never hands that response to a page.
+
+So the flow needs one more decision on the server side, and it is a real decision
+rather than an oversight. Until then, paste a session token into the address bar to
+see the signed-in half:
+
+```
+http://localhost:4321/#session=YOUR_SESSION_TOKEN
+```
+
+An operator gets one from a sign-in made outside a browser, where the header is
+readable.
+
+**One thing this did fix.** `set-auth-token` was not in the deployment's
+`Access-Control-Expose-Headers`, so even a password sign-in could not have worked
+from a browser: the response arrives, the client reads the header, and the browser
+hands back `null`. Rows missing, no error. It is on the list now, which needs a
+redeploy of your Worker to take effect.
+
 ## Two things worth copying, and one worth not
 
 **Copy:** every value that comes out of the database is rendered through a small
@@ -67,10 +105,9 @@ the caller makes, not a check the client performs. This example declared
 `created_at` a string, the column is an integer, and the first render threw. A
 renderer that trusts the interface is trusting itself.
 
-**Copy:** the sign-in flow is three steps rather than one. `signInWithOAuth` returns
-a URL, the application navigates to it, and the provider sends the reader back to a
-callback this client never saw. The application reads the session there and hands it
-over with `setSession`.
+**Copy:** the page says what happened when sign-in comes back empty, instead of
+looking signed out. A reader who just authorised an application on GitHub and lands
+on a signed-out page blames their account. The measured explanation costs six lines.
 
 **Do not copy:** the visual language. This uses `_design_system/theme.css` from the
 repository, which is BaseCLF's own, because building it was how we found out whether
