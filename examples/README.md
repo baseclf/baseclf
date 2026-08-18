@@ -21,11 +21,21 @@ What it grants:
 | Role | May read | May write |
 |---|---|---|
 | `anon` | rows whose `status` is `published` | nothing |
-| `authenticated` | published rows, plus their own | `title`, `body`, `status` on their own rows |
+| `authenticated` | published rows, plus their own | new rows, and `title`, `body`, `status` on their own |
 
 `author_id` is absent from the `update_own` columns, so a caller cannot move a row out
-of their own reach by rewriting its owner. Nobody has an `insert` or `delete` policy, and
-a table with no policy for an operation refuses it rather than allowing it.
+of their own reach by rewriting its owner. It is absent from `write_own` too, and there
+it is written by the engine instead: `"set": { "author_id": "$auth.uid" }` fills it from
+the verified token, so a caller cannot create a row belonging to somebody else, and
+sending an `author_id` in the body changes nothing.
+
+Nobody has a `delete` policy, and a table with no policy for an operation refuses it
+rather than allowing it.
+
+⚠️ `write_own` is here because `examples/blog` needs it: signing in only visibly
+changes what you can see if you own something, and the seeded rows belong to nobody
+who can sign in. Applying this document gives your deployment a write path. Remove
+that policy if you did not want one.
 
 The table it expects:
 

@@ -124,6 +124,39 @@ function postCard(post: Post): string {
     </article>`;
 }
 
+/**
+ * Writing a draft, which is the half that makes the point visible.
+ *
+ * Signed out, the reader sees published posts. Signed in they see the same published
+ * posts, because the fixture's drafts belong to somebody else. Only a draft of their
+ * own shows the difference, so the example has to be able to make one.
+ *
+ * ⚠️ There is no author field here, and that is the interesting absence. `author_id`
+ * is not in the policy's column list, so a caller cannot write it at all; the engine
+ * fills it from the verified token. Sending one anyway changes nothing.
+ */
+function composer(): string {
+  return `
+    <form class="panel post" id="compose">
+      <div class="post__head">
+        <h2 class="post__title">Write a draft</h2>
+        <span class="verdict verdict--attention">only you will see it</span>
+      </div>
+      <label class="field">
+        <span class="field__label">Title</span>
+        <input class="input" name="title" required maxlength="120" />
+      </label>
+      <label class="field">
+        <span class="field__label">Body</span>
+        <input class="input" name="body" required maxlength="400" />
+      </label>
+      <div class="row">
+        <button class="btn btn--primary" type="submit">Save draft</button>
+        <span class="post__meta" id="compose-said"></span>
+      </div>
+    </form>`;
+}
+
 function shell(inner: string, who: string): string {
   return `
     <div class="page">
@@ -192,6 +225,7 @@ async function render(): Promise<void> {
   const posts = data ?? [];
   const inner =
     stranded +
+    (user === null ? '' : composer()) +
     (posts.length === 0
       ? `<div class="panel empty">
            <p>No posts you can read. Either there are none, or none of them are yours.
@@ -216,6 +250,32 @@ async function render(): Promise<void> {
   document.querySelector('#sign-out')?.addEventListener('click', async () => {
     await client.auth.signOut();
     await render();
+  });
+
+  document.querySelector('#compose')?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget as HTMLFormElement;
+    const said = document.querySelector('#compose-said');
+    const fields = new FormData(form);
+
+    // 🔴 No author_id. The policy's column list does not include it, so the engine
+    // writes it from the token instead. Adding one here would be ignored, which is
+    // the point of `set` in the policy document rather than a quirk of this form.
+    const { error: refused } = await client.from('posts').insert({
+      id: crypto.randomUUID(),
+      title: String(fields.get('title') ?? ''),
+      body: String(fields.get('body') ?? ''),
+      status: 'draft',
+      created_at: Date.now(),
+    });
+
+    if (said !== null) {
+      // A refusal here is the engine saying no, and the message it gives is the same
+      // one it gives for a row that does not exist. Saying which would be a way to
+      // ask the database questions it declines to answer.
+      said.textContent = refused === null ? '' : `refused: ${refused.message}`;
+    }
+    if (refused === null) await render();
   });
 }
 

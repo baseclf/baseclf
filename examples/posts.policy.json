@@ -27,6 +27,15 @@
       "using": { "$bind": "isAuthor" },
       "check": { "$bind": "isAuthor" },
       "columns": ["title", "body", "status"]
+    },
+    {
+      "name": "write_own",
+      "for": "insert",
+      "to": ["authenticated"],
+      "using": true,
+      "check": { "$bind": "isAuthor" },
+      "columns": ["id", "title", "body", "status", "created_at"],
+      "set": { "author_id": "$auth.uid" }
     }
   ]
 }

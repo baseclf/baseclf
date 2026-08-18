@@ -81,10 +81,15 @@ describe('the documents a reader copies', () => {
 
     expect(definition.table).toBe('posts');
     expect(definition.enabled).toBe(true);
+    // ⚠️ A literal list rather than a count, and it earns its keep: adding `write_own`
+    // for the sample application broke this, which is how the prose in
+    // `examples/README.md` got corrected in the same change. That file said nobody
+    // had an insert policy, and it would have gone on saying so.
     expect(definition.policies.map((policy) => policy.name)).toEqual([
       'read_published',
       'read_own_or_published',
       'update_own',
+      'write_own',
     ]);
   });
 

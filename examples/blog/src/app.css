@@ -124,3 +124,21 @@
   gap: var(--space-2);
   align-items: center;
 }
+
+/* A field is a label above its control. DESIGN.md section 4: a placeholder is not a
+   label, so every input gets a real one. The 4px inside against 20px between comes
+   from section 6: vertical rhythm inside a group is tighter than the gap between
+   groups, which is what makes a form scan as fields rather than as a list of boxes. */
+.field {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.field__label {
+  font-size: var(--text-xs);
+  color: var(--ink-secondary);
+}
+
+.field .input {
+  width: 100%;
+}
