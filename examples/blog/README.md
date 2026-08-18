@@ -59,43 +59,43 @@ which reads like the API is down rather than like a list needing one more line.
 **Whichever port you use has to be the origin your deployment knows.** Change one and
 change the other.
 
-## Signing in does not finish yet, and here is exactly why
+## How the session gets here, and why it took two fixes
 
-The sign-in button starts the flow correctly and GitHub really does sign you in. The
-session then does not reach this page, and that is a gap in BaseCLF rather than
-anything about your account or this example.
+Building this found that signing in could not work from another origin at all. Two
+separate things, both in BaseCLF rather than in this example.
 
-Measured, in this order:
+**The session arrives in the URL fragment.** Better Auth ends its OAuth callback with
+a cookie on the deployment's origin and a redirect. This page is a different origin:
+it cannot read that cookie, and BaseCLF deliberately does not return
+`Access-Control-Allow-Credentials`, so it cannot send one either. The deployment now
+appends the session to the fragment of the redirect it makes, and the page takes it
+and clears it:
 
-1. `sign-in/social` answers with a URL. That half works from any allowed origin.
-2. GitHub redirects to the deployment, and Better Auth ends its callback with
-   `setSessionCookie` and a redirect. The session is a **cookie on the deployment's
-   origin**.
-3. This page is a different origin. It cannot read that cookie.
-4. It cannot send one either. BaseCLF deliberately does not return
-   `Access-Control-Allow-Credentials`, because bearer tokens are the transport and
-   ambient cookies are the thing that design avoids.
-5. The redirect carries no token in its URL, and putting one there would write a
-   session into browser history, referrer headers and every log along the way.
-6. Better Auth's bearer plugin does add `set-auth-token` to the response, but a
-   browser following a redirect never hands that response to a page.
-
-So the flow needs one more decision on the server side, and it is a real decision
-rather than an oversight. Until then, paste a session token into the address bar to
-see the signed-in half:
-
-```
-http://localhost:4321/#session=YOUR_SESSION_TOKEN
+```ts
+const handed = new URLSearchParams(location.hash.slice(1)).get('session');
+if (handed) {
+  client.auth.setSession(handed);
+  history.replaceState({}, '', location.pathname);
+}
 ```
 
-An operator gets one from a sign-in made outside a browser, where the header is
-readable.
+A fragment is the one part of a URL a browser sends nowhere: not to the server it
+fetches, not in a `Referer`, not into a proxy log. It is still in this browser's
+history until that `replaceState` runs, which is why it runs on load.
 
-**One thing this did fix.** `set-auth-token` was not in the deployment's
-`Access-Control-Expose-Headers`, so even a password sign-in could not have worked
-from a browser: the response arrives, the client reads the header, and the browser
-hands back `null`. Rows missing, no error. It is on the list now, which needs a
-redeploy of your Worker to take effect.
+The next release of `baseclf-js` has `client.auth.captureFromRedirect()`, which is
+those four lines. This example installs from npm like anybody else, so it uses what
+is published.
+
+**`set-auth-token` was invisible to browsers.** It is the header a session comes back
+in, the client reads it with `headers.get`, and a browser hides every response header
+that is not on `Access-Control-Expose-Headers`. So a cross-origin sign-in answered
+200, the client captured `null`, and every request after it went out anonymous. Rows
+missing, no error anywhere.
+
+**Both need a redeploy of your Worker to take effect.** A deployment created before
+them will start the flow, sign you in at the provider, and land you back here with
+nothing. The page says so rather than looking signed out.
 
 ## Two things worth copying, and one worth not
 

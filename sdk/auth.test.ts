@@ -380,4 +380,43 @@ describe('the callback the browser comes back to, which this client never sees',
     const { data, error } = await receiving.auth.getUser();
     expect(error === null ? data?.user : null).toBeNull();
   });
+
+  it('takes the session out of the fragment the deployment redirects with', () => {
+    // The other half of `src/auth/handover.ts`. The deployment puts the session in the
+    // fragment because a cookie on its origin is unreadable from another one, and a
+    // query string would put a live session into history, referrers and proxy logs.
+    //
+    // ⚠️ Deliberately not a real session. This method parses a fragment and hands the
+    // result to `setSession`, and whether a session works is what the tests above
+    // already prove. An earlier version signed up here to be thorough and made the
+    // suite fail: the auth rate limiter counts every sign-up in the file against one
+    // address, and three more tipped it over. It passed alone and failed together,
+    // which is the worst way for a test to be wrong.
+    const receiving = client();
+    const token = 'sess_.with-url_unsafe/chars+here';
+
+    const took = receiving.auth.captureFromRedirect(`#session=${encodeURIComponent(token)}`);
+
+    expect(took).toBe(true);
+    expect(receiving.auth.getSession()).toBe(token);
+  });
+
+  it('leaves a fragment that carries no session alone, and says so', async () => {
+    // 🔴 The return value is what an application keys its history rewrite off. Saying
+    // true here would make a page clear a fragment it was routing on.
+    const receiving = client();
+
+    expect(receiving.auth.captureFromRedirect('#/inbox')).toBe(false);
+    expect(receiving.auth.captureFromRedirect('')).toBe(false);
+    expect(receiving.auth.captureFromRedirect('#session=')).toBe(false);
+    expect(receiving.auth.getSession()).toBeNull();
+  });
+
+  it('finds the session beside a route the application put in the same fragment', async () => {
+    // The deployment appends rather than overwrites, so both are there.
+    const receiving = client();
+
+    expect(receiving.auth.captureFromRedirect('#/inbox&session=sess_from_redirect')).toBe(true);
+    expect(receiving.auth.getSession()).toBe('sess_from_redirect');
+  });
 });

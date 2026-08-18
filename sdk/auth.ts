@@ -69,6 +69,20 @@ function expiryOf(jwt: string): number | null {
   }
 }
 
+/**
+ * The current URL fragment, where there is one.
+ *
+ * ⚠️ Read through a declared shape rather than from a DOM type, because this package
+ * does not assume a browser anywhere else: `fetch` is injected, the clock is
+ * injected, and the tests run in a Worker. A hard dependency on `location` here would
+ * make the whole client fail to typecheck in the environments it is meant to run in.
+ * Callers with a hash of their own pass it and this is never reached.
+ */
+function currentHash(): string {
+  const host = globalThis as { readonly location?: { readonly hash?: string } };
+  return host.location?.hash ?? '';
+}
+
 export class AuthClient {
   readonly #url: string;
   readonly #fetch: FetchLike;
@@ -198,11 +212,35 @@ export class AuthClient {
   }
 
   /**
+   * Take the session out of the fragment the deployment sent the reader back with,
+   * and return whether there was one.
+   *
+   * The OAuth flow ends at a callback this client never sees. The deployment puts the
+   * session in the fragment of the redirect it makes, `#session=...`, which is the
+   * one part of a URL a browser sends nowhere: not to the server it fetches, not in a
+   * `Referer`, not into a proxy log.
+   *
+   * ⚠️ It is in that browser's history until something replaces it, so call this on
+   * load and clear the fragment:
+   *
+   *     if (client.auth.captureFromRedirect()) {
+   *       history.replaceState({}, '', location.pathname);
+   *     }
+   *
+   * Anything else in the fragment is left alone, because the application may be
+   * routing on it.
+   */
+  captureFromRedirect(hash?: string): boolean {
+    const token = new URLSearchParams((hash ?? currentHash()).replace(/^#/, '')).get('session');
+    if (token === null || token === '') return false;
+    this.setSession(token);
+    return true;
+  }
+
+  /**
    * Take a session token the application obtained for itself.
    *
-   * The browser half of the OAuth flow ends at a callback this client never sees, so
-   * an application that read `set-auth-token` there hands it back here. Passing null
-   * is how it forgets one.
+   * Passing null is how it forgets one. `captureFromRedirect` is the usual caller.
    */
   setSession(sessionToken: string | null): void {
     this.#session = sessionToken;

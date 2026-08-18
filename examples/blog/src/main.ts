@@ -61,24 +61,23 @@ const client = createClient(URL_FROM_ENV);
 const RETURNING = 'baseclf-example-returning';
 
 /**
- * A session the reader supplied by hand, which is the only way to see the signed-in
- * half of this example today.
+ * The other half of signing in, and the only line an application needs for it.
  *
- * 🔴 The reason is measured, not assumed. Better Auth ends its OAuth callback with
- * `setSessionCookie` and a redirect, so the session arrives as a cookie on the
- * deployment's origin. This page is a different origin: it cannot read that cookie,
- * and BaseCLF deliberately does not send `Access-Control-Allow-Credentials`, so it
- * cannot send one either. The redirect carries no token in its URL. The bearer plugin
- * does put `set-auth-token` on the response, but a browser following a redirect never
- * gives that response to a page.
+ * The deployment puts the session in the fragment of the redirect it sends the reader
+ * back with, because a cookie on its origin is unreadable from this one and a token
+ * in a query string would land in history, referrers and logs. A fragment goes
+ * nowhere but here.
  *
- * So a cross-origin single page application cannot finish the OAuth flow yet. Paste a
- * session token here to see what a signed-in reader sees. The README says where an
- * operator gets one, and what the open decision is.
+ * Clearing it immediately matters: until this runs, a live session is sitting in the
+ * address bar and in this browser's history.
  */
-const PASTED_SESSION = new URLSearchParams(window.location.hash.slice(1)).get('session');
-if (PASTED_SESSION !== null) {
-  client.auth.setSession(PASTED_SESSION);
+// ⚠️ Written out rather than calling `client.auth.captureFromRedirect()`, which does
+// exactly this and ships in the release after 0.4.6. This example installs the client
+// from npm like anybody else would, so it can only use what is published, and that
+// constraint is the reason it is worth having.
+const handed = new URLSearchParams(window.location.hash.slice(1)).get('session');
+if (handed !== null && handed !== '') {
+  client.auth.setSession(handed);
   window.history.replaceState({}, '', window.location.pathname);
   sessionStorage.removeItem(RETURNING);
 }

@@ -33,6 +33,7 @@
 import { version as BASECLF_VERSION } from '../package.json';
 import { ensureAuthSchema } from './auth/bootstrap.js';
 import { diagnose } from './auth/diagnose.js';
+import { handOverSession } from './auth/handover.js';
 import { type AuthEnv, authConfig, getAuth, isAuthPath, verifierConfig } from './auth/index.js';
 import { providerStatuses } from './auth/providers.js';
 import { authenticate } from './auth/verify.js';
@@ -889,7 +890,10 @@ async function respond(request: Request, env: Env): Promise<Response> {
       // while everything else reports a healthy deployment.
       await ensureAuthSchemaOnce(env);
 
-      return await getAuth(env).handler(request);
+      // The handler's answer, plus the one thing it cannot do for a front end on
+      // another origin: give it the session. See `auth/handover.ts` for what the
+      // callback delivers instead and why none of it reaches a cross-origin page.
+      return handOverSession(request, await getAuth(env).handler(request));
     }
 
     // Before the table router, for the same reason the auth prefix is: a table called
