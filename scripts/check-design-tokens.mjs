@@ -165,7 +165,16 @@ for (const signal of ['allow', 'deny', 'attention']) {
   PAIRS.push([`${signal}-text`, 'surface', 4.5]);
 }
 for (const surface of SURFACES) PAIRS.push(['focus-ring', surface, 3]);
+// The primary button, at rest and hovered. `ink-primary` is its background at
+// rest and `ink-secondary` when hovered, and neither is one of the six surfaces
+// the loop above walks, so a button label is only covered by naming it here.
+//
+// ⚠️ The hover pair was added on 2026-08-18 with the `.btn` block itself, which
+// had been specified in `components.md` and never generated. A hover state that
+// changes the background changes the contrast, and DESIGN section 10 asks for a
+// label check against the button's own background rather than against the page.
 PAIRS.push(['ink-inverse', 'ink-primary', 4.5]);
+PAIRS.push(['ink-inverse', 'ink-secondary', 4.5]);
 
 for (const theme of ['light', 'dark']) {
   for (const [fg, bg, need] of PAIRS) {

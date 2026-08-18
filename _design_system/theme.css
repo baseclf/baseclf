@@ -360,6 +360,56 @@ hr {
   border-radius: var(--radius-sm);
 }
 
+/* Button. Four variants, and none of them is green or red as an intent: the
+   signals are verdicts, so a button that merely submits a form does not get to
+   claim one. Primary is ink. Destructive is outlined rather than filled, because
+   a wall of red fill makes people stop reading warnings.
+
+   ⚠️ This block was missing until 2026-08-18, while two rules further down
+   already scoped .btn:active to the landing surface. So the modifier shipped
+   without the thing it modifies, and nothing noticed because nothing in the
+   repository had used the design system yet. */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  height: var(--control-height);
+  padding: 0 var(--space-3);
+  border: var(--border-hairline) solid transparent;
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+  font-size: var(--body-size);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+  /* No transform anywhere by default. These are pressed two hundred times a day
+     in Studio, and only the landing surface opts into movement. */
+  background: var(--surface);
+  color: var(--ink-primary);
+  border-color: var(--border-default);
+}
+.btn--primary {
+  background: var(--ink-primary);
+  color: var(--ink-inverse);
+  border-color: transparent;
+}
+.btn--ghost {
+  background: transparent;
+  color: var(--ink-secondary);
+  border-color: transparent;
+}
+.btn--destructive {
+  background: var(--surface);
+  color: var(--deny-text);
+  border-color: var(--deny-border);
+}
+.btn:hover:not(:disabled) { background: var(--surface-hover); }
+.btn--primary:hover:not(:disabled) { background: var(--ink-secondary); }
+.btn:active:not(:disabled) { background: var(--surface-active); }
+.btn--primary:active:not(:disabled) { background: var(--ink-secondary); }
+/* No opacity trick: it muddies the border as well as the label. */
+.btn:disabled { color: var(--ink-disabled); cursor: not-allowed; }
+
 /* Form controls carry border-control, the one border held to 3:1. For an input
    the border is the boundary that identifies the control, which WCAG 1.4.11
    covers. Row separators are not, so they stay hairline. */
