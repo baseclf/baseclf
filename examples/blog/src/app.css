@@ -50,6 +50,13 @@
   padding: var(--space-6) var(--space-4);
   display: grid;
   gap: var(--space-5);
+  /* ⚠️ Without this the rows stretch. This grid is the `1fr` row of `.page`, so on a
+     tall window it gets height its content does not need, and `align-content` defaults
+     to a value that shares the surplus between the rows. The result is a growing hole
+     between the opening paragraph and the first post, wider the taller the window.
+     Measured rather than guessed: in a short viewport the gap read 20px, exactly the
+     declared one, which is why the numbers looked right and a screenshot did not. */
+  align-content: start;
 }
 
 .lede {
