@@ -164,8 +164,8 @@ export function parseOptions(argv: readonly string[]): Options | { readonly erro
   return { project, confirm, rest };
 }
 
-/** Open the database this project deployed to, or explain why not. */
-async function endpointFor(
+/** Open the database this project deployed to, or explain why not. Shared with `user.ts`. */
+export async function endpointFor(
   host: PolicyHost,
   credentials: D1Credentials,
   project: string,

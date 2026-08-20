@@ -30,6 +30,7 @@ import {
   SECRET_USAGE,
   type SecretOutcome,
 } from './secret.js';
+import { runUser, USER_FIXED_TEXT } from './user.js';
 
 export type Writer = (text: string) => void;
 export type { LoginHost } from './login.js';
@@ -66,6 +67,7 @@ const USAGE = [
   '  login              Log in to Cloudflare, and say which account you landed on',
   '  create             Create the resources and deploy the engine to your account',
   '  policy <verb>      Expose a table, list what is exposed, or stop exposing one',
+  '  user set-app       Store server-set claims for one user, readable as $auth.app.*',
   '  doctor <url>       Ask a deployment what is wrong with it, and what to do about it',
   '  secret set <KEY>   Set one secret on a deployed Worker, reading the value from stdin',
   '',
@@ -148,6 +150,16 @@ export async function main(
     return OUTCOME_EXIT[await runPolicy(rest, write, style, policyHost)];
   }
 
+  // The same host as `policy`, because it needs exactly the same reach: a file,
+  // a credential, and the deployment's database over the REST API.
+  if (command === 'user') {
+    if (policyHost === undefined) {
+      write('baseclf user needs a runtime that can reach the network and read files.');
+      return EXIT.usage;
+    }
+    return OUTCOME_EXIT[await runUser(rest, write, style, policyHost)];
+  }
+
   if (command === 'create') {
     if (createHost === undefined) {
       // Nothing to run it with means nothing was provisioned, and saying so beats a
@@ -213,6 +225,7 @@ export const FIXED_TEXT: readonly string[] = Object.freeze([
   ...CREATE_FIXED_TEXT,
   ...LOGIN_FIXED_TEXT,
   ...POLICY_FIXED_TEXT,
+  ...USER_FIXED_TEXT,
 ]);
 
 /** The voice rules, over everything in `FIXED_TEXT`. Used by the tests. */
