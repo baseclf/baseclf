@@ -31,6 +31,17 @@ HANDOFF-STATUS.md
 Baas With CLF.md
 baas-cloudflare-mvp-plan.md
 AGENTS.md
+INTEGRATION_PLAN.md
+
+# --- The site's internal papers, private for the same reason. ---------------
+#     The handoff is Vietnamese; the plan and the review are strategy notes;
+#     `design clone/` documents another company's design; `.openai/` carries a
+#     real hosting project id. The site's own source stays public.
+site/DESIGN_HANDOFF.md
+site/uxpland.md
+site/cli-example-review.md
+site/design clone/
+site/.openai/
 
 # --- Agent config. Vietnamese, and rule 04 A bans that from public surfaces.
 #     Three names for one thing: other tools mirror the same skills under their own

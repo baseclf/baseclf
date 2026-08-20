@@ -34,6 +34,16 @@ const PRIVATE_PATHS = [
   /^AGENTS\.md$/,
   /^Baas With CLF\.md$/,
   /^baas-cloudflare-mvp-plan\.md$/,
+  /^INTEGRATION_PLAN\.md$/,
+  // The site's internal papers. The design handoff is Vietnamese, the plan and the
+  // review are strategy notes, `design clone/` documents another company's design,
+  // and `.openai/` carries a real hosting project id that the id patterns below
+  // cannot see (it sits behind a word-character prefix, so \b never fires).
+  /^site\/DESIGN_HANDOFF\.md$/,
+  /^site\/uxpland\.md$/,
+  /^site\/cli-example-review\.md$/,
+  /^site\/design clone\//,
+  /^site\/\.openai\//,
   // Three names for one thing. Agent tooling mirrors the same material under its own
   // directory: `.agents/skills/` was byte for byte identical to `.claude/skills/`.
   // ⚠️ A fourth tool means a fourth name here, and nothing catches that but reading
@@ -97,6 +107,15 @@ const CLOUDFLARE_ID =
 const VIETNAMESE = /[àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ]/i;
 /** Files that ship to the public and must therefore be English only. */
 const ENGLISH_ONLY = /^(src\/|docs\/|examples\/|README|LICENS|CONTRIBUTING|CHANGELOG|packages\/)/;
+/**
+ * The site ships publicly too, so the language rule covers it. It is a separate
+ * scope rather than part of ENGLISH_ONLY because only the language check runs
+ * there: the long-dash ban came from the retired design system, and the site's
+ * copy was approved as delivered, dashes included (decision of 2026-08-21).
+ * Measured before writing this: the dash appears in 30+ site files; Vietnamese
+ * appears in exactly one, and that one is on the private list above.
+ */
+const ENGLISH_ONLY_SITE = /^site\//;
 
 /**
  * Em-dash and en-dash. The design system calls this ban binary and it applies to
@@ -225,7 +244,7 @@ for (const file of files) {
     }
   }
 
-  if (ENGLISH_ONLY.test(file)) {
+  if (ENGLISH_ONLY.test(file) || ENGLISH_ONLY_SITE.test(file)) {
     const idx = lines.findIndex((l) => VIETNAMESE.test(l));
     if (idx !== -1) {
       failures.push({
