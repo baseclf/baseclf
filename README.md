@@ -374,6 +374,24 @@ The complete versions of both documents, one accepted and one refused, are in
 [`examples/`](examples/), along with the table they expect. Both were run against a
 live deployment.
 
+### Claims a policy may trust
+
+`$auth.uid` and `$auth.email` come from the verified token. For anything else a
+policy needs, `$auth.app.*` reads server-set metadata:
+
+```bash
+npx baseclf user set-app <user-id> claims.json --project your-project
+```
+
+where `claims.json` is one JSON object, such as `{ "plan": "pro" }`. The record
+lands in an engine table nothing on the HTTP surface can write, rides inside the
+next JWT the user is minted (tokens live fifteen minutes, so within that), and a
+policy reads it as `{ "tier": { "_eq": "$auth.app.plan" } }`.
+
+The user-editable counterpart, `user_metadata`, is refused when a policy
+document is saved: a claim the end user can write is a role they can grant
+themselves.
+
 ## The problem
 
 Cloudflare gives you every piece of infrastructure a backend needs, cheaper and

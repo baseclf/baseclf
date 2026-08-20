@@ -50,6 +50,7 @@
  * an operator who has been told what it will do.
  */
 
+import { APP_METADATA_SCHEMA } from '../auth/app-metadata.js';
 import { POLICY_SCHEMA } from '../policy/schema.js';
 import { STORAGE_SCHEMA } from '../storage/schema.js';
 import { BaseclfError } from '../utils/errors.js';
@@ -57,7 +58,7 @@ import type { D1Executor } from './dialect.js';
 import { assertExecutable, type CompiledStatement } from './guards.js';
 
 /**
- * Every statement, policy tables before storage tables.
+ * Every statement, policy tables before storage tables, claims store last.
  *
  * The order is not load-bearing today, since nothing here has a foreign key into
  * anything else here, and it is fixed anyway so that two deployments applying the
@@ -66,6 +67,7 @@ import { assertExecutable, type CompiledStatement } from './guards.js';
 export const ENGINE_SCHEMA: readonly string[] = Object.freeze([
   ...POLICY_SCHEMA,
   ...STORAGE_SCHEMA,
+  ...APP_METADATA_SCHEMA,
 ]);
 
 /**

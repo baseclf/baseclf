@@ -30,6 +30,8 @@ import { getMigrations } from 'better-auth/db/migration';
 import { bearer, jwt } from 'better-auth/plugins';
 
 import { BaseclfError } from '../utils/errors.js';
+import { logEvent } from '../utils/log.js';
+import { readAppMetadata } from './app-metadata.js';
 import { type ProviderEnv, socialProviders } from './providers.js';
 import type { VerifierConfig } from './verify.js';
 
@@ -136,6 +138,28 @@ export function authSettings(env: AuthEnv): AuthSettings {
 }
 
 /**
+ * The claims a token mint reads for this user, or an empty object.
+ *
+ * A failed read is logged and answered with no claims rather than a failed
+ * token. Absent claims only narrow what a `$auth.app.*` policy grants, so the
+ * failure direction is closed; refusing the mint would take every policy down
+ * with it. The log line is deliberate: silently missing claims is exactly how
+ * V3 shipped tokens without a role, and a silence that costs correctness must
+ * at least leave a trace.
+ */
+async function appClaims(env: AuthEnv, userId: string): Promise<Record<string, unknown>> {
+  try {
+    return await readAppMetadata(env.DB, userId);
+  } catch (error) {
+    logEvent({
+      event: 'app_metadata_unavailable',
+      reason: error instanceof Error ? error.name : 'unknown',
+    });
+    return {};
+  }
+}
+
+/**
  * The options, in one place.
  *
  * Separated from construction because the schema is derived from the options:
@@ -216,12 +240,14 @@ function authOptions(env: AuthEnv, settings: AuthSettings) {
         jwt: {
           // Nested here on purpose. At the top level this is accepted and
           // ignored, and the tokens come out without a role in them.
-          definePayload: ({ user }) => ({
+          definePayload: async ({ user }) => ({
             email: user.email,
             role: AUTHENTICATED_ROLE,
-            // Server-written only. `user_metadata` has no equivalent here and
-            // never will: rule 00 invariant I4.
-            app_metadata: {},
+            // Server-written only, from `_app_metadata`, which nothing on the
+            // HTTP surface can write: the operator sets it over their own
+            // credential with `baseclf user set-app`. `user_metadata` has no
+            // equivalent here and never will: rule 00 invariant I4.
+            app_metadata: await appClaims(env, user.id),
           }),
         },
       }),

@@ -116,11 +116,27 @@ export interface IsolateInitEvent {
   readonly ms: number;
 }
 
+/**
+ * The claims store answered the token mint with nothing.
+ *
+ * Absent claims only narrow what a `$auth.app.*` policy grants, so both of
+ * these fail closed and neither fails a request. That is exactly why they are
+ * logged: this line is the only way an operator learns their store is being
+ * ignored, and a silently missing claim is how V3 shipped tokens without a
+ * role. `reason` is open, unlike `AuthEvent`, because the unavailable case
+ * carries an error name the platform chose.
+ */
+export interface AppMetadataEvent {
+  readonly event: 'app_metadata_ignored' | 'app_metadata_unavailable';
+  readonly reason: string;
+}
+
 export type LogEvent =
   | QueryEvent
   | PolicyRefusalEvent
   | ErrorEvent
   | AuthEvent
+  | AppMetadataEvent
   | StorageWriteEvent
   | IsolateInitEvent;
 
