@@ -547,6 +547,48 @@ async function tokenFrom(
     .sign(key.privateKey);
 }
 
+describe('what a refusal carries with it', () => {
+  /**
+   * The whole error graph, serialised the way a careless log line would
+   * serialise it. Own properties at every level, cycles cut, so a payload
+   * parked anywhere in the wreckage shows up in the string.
+   */
+  function drained(error: unknown): string {
+    const seen = new Set<unknown>();
+    const walk = (value: unknown): unknown => {
+      if (typeof value !== 'object' || value === null) return value;
+      if (seen.has(value)) return '[circular]';
+      seen.add(value);
+      const out: Record<string, unknown> = {};
+      for (const key of Object.getOwnPropertyNames(value)) {
+        out[key] = walk((value as Record<string, unknown>)[key]);
+      }
+      return out;
+    };
+    return JSON.stringify(walk(error));
+  }
+
+  it('keeps the decoded payload out of the error it throws', async () => {
+    // A token that passes the signature check and fails a claim check, because
+    // that is the family of jose errors that carries the full decoded payload
+    // on a `payload` property (debt 22). The real token's claims include the
+    // account email, which is what this test hunts for in the wreckage.
+    const elsewhere: VerifierConfig = { ...config, audience: 'https://somebody-else.test' };
+
+    const refusal = await expectUnauthenticated(verifyToken(goodToken, elsewhere));
+
+    const everything = drained(refusal);
+    expect(everything).not.toContain('ann@example.test');
+    expect(everything).not.toContain(String(issuedPayload.sub));
+
+    // The debugging value survives: the name and the code, and nothing else.
+    const cause = refusal.cause as { name?: string; code?: string };
+    expect(cause.name).toBe('JWTClaimValidationFailed');
+    expect(cause.code).toBe('ERR_JWT_CLAIM_VALIDATION_FAILED');
+    expect(Object.getOwnPropertyNames(cause).sort()).toEqual(['code', 'name']);
+  });
+});
+
 describe('when the issuer rotates its signing key', () => {
   // No fetch interception here any more. Rotation is staged through the
   // scenario's own `readKeySet`, so the file-level interceptor stays in force

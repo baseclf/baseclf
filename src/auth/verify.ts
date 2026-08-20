@@ -127,6 +127,28 @@ function asKeySet(value: unknown): JSONWebKeySet | null {
   return { keys: keys as JWK[] };
 }
 
+/**
+ * The cause, reduced to its name and code before anything keeps it.
+ *
+ * jose's claim-validation and expiry errors carry the full decoded payload on a
+ * `payload` property, so attaching the error object itself would park a copy of
+ * every claim in the token, email included, on an object that outlives the
+ * request and that future logging code is one spread away from serialising.
+ * Nothing reads more than the code today, and this makes that the contract
+ * rather than a habit. Debt 22.
+ */
+function sanitizedCause(cause: unknown): { readonly name: string; readonly code?: string } {
+  const code =
+    typeof cause === 'object' && cause !== null && 'code' in cause
+      ? (cause as { code?: unknown }).code
+      : undefined;
+
+  return {
+    name: cause instanceof Error ? cause.name : typeof cause,
+    ...(typeof code === 'string' ? { code } : {}),
+  };
+}
+
 function unauthorized(detail: string, cause?: unknown): BaseclfError {
   // The message is deliberately the same for every failure. A caller learns
   // that the token was not accepted and nothing about why, because "expired"
@@ -134,7 +156,7 @@ function unauthorized(detail: string, cause?: unknown): BaseclfError {
   return new BaseclfError('UNAUTHENTICATED', 401, {
     message: 'Unauthenticated.',
     detail,
-    ...(cause === undefined ? {} : { cause }),
+    ...(cause === undefined ? {} : { cause: sanitizedCause(cause) }),
   });
 }
 
