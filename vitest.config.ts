@@ -25,4 +25,11 @@ export default defineConfig({
       },
     }),
   ],
+  test: {
+    // The site is its own workspace with its own runner: `site/tests` is written
+    // for `node --test` and runs via `npm test` inside site/. Under vitest its
+    // default import of node:test is not a function, so without this exclusion
+    // the engine suite fails on a file it was never meant to load.
+    exclude: ['**/node_modules/**', 'site/**', 'examples/**', 'dist/**'],
+  },
 });
