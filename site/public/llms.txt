@@ -1,10 +1,10 @@
 # BaseCLF
 
-BaseCLF is a Cloudflare-native backend toolkit designed around familiar Supabase-style workflows.
+BaseCLF is auto-REST plus real row-level security for Cloudflare D1, deployed into your own Cloudflare account with one command. The client library is `baseclf-js`; identity is a bearer JWT and no token means the anon role. There is no anonymous key.
 
 - [Documentation](/docs/index.md)
 - [Quickstart](/docs/quickstart.md)
 - [Policy DSL](/docs/policies.md)
 - [Compatibility](/docs/compatibility.md)
 
-All metrics, IDs, URLs, generated output, and example records in the current preview are mock data until product contracts are approved.
+Studio screens in the preview run on fixture data. The commands and API behavior in the documentation match the shipped engine.

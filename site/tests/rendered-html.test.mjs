@@ -35,7 +35,7 @@ test("server-renders every BaseCLF product surface", async () => {
     ["/studio/realtime", /Understand the channel/i],
     ["/studio/settings", /without exposing its secrets/i],
     ["/docs", /BaseCLF documentation/i],
-    ["/docs/quickstart", /empty Worker/i],
+    ["/docs/quickstart", /empty Cloudflare account/i],
     ["/docs/policies", /Policy rules/i],
     ["/docs/compatibility", /what carries over/i],
     ["/example", /One query/i],
@@ -51,7 +51,7 @@ test("server-renders every BaseCLF product surface", async () => {
   }
 });
 
-test("keeps product data labeled as mock and theme choice manual", async () => {
+test("keeps fixture surfaces labeled and the example wired to a real deployment", async () => {
   const [layout, themeToggle, studio, example] = await Promise.all([
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/ThemeToggle.tsx", import.meta.url), "utf8"),
@@ -64,8 +64,14 @@ test("keeps product data labeled as mock and theme choice manual", async () => {
   assert.match(themeToggle, /localStorage/);
   assert.match(studio, /Mock data/);
   assert.match(studio, /Fixture-backed preview/);
-  assert.match(example, /All records are mock data/);
-  assert.match(example, /supabase\.from/);
+  // The example talks to a real deployment through the published client. The
+  // address comes from the environment only: a hard-coded deployment URL in the
+  // public site is exactly what decision Q8 forbids.
+  assert.match(example, /VITE_BASECLF_URL/);
+  assert.match(example, /signInWithOAuth/);
+  assert.match(example, /client\.from\(/);
+  assert.doesNotMatch(example, /workers\.dev/);
+  assert.doesNotMatch(example, /mockExamplePosts/);
 });
 
 test("keeps unfinished product contracts explicit", async () => {

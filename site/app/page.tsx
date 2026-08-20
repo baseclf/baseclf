@@ -75,7 +75,7 @@ export default function Home() {
             <a className="button button-secondary" href="#product">See how it works <span>↓</span></a>
           </div>
           <div className="hero-proof" aria-label="Product advantages">
-            <span><b>01</b> supabase-js works unchanged</span>
+            <span><b>01</b> The supabase-js query style carries over</span>
             <span><b>02</b> Runs in your Cloudflare account</span>
           </div>
         </div>
@@ -159,9 +159,9 @@ export default function Home() {
         </div>
         <div className="capability-pill-row reveal" data-stagger>
           <span><i>DB</i><b>D1 database</b><small>Instant API included</small></span>
-          <span><i>ID</i><b>Authentication</b><small>Google, GitHub, email</small></span>
+          <span><i>ID</i><b>Authentication</b><small>Google + GitHub sign-in</small></span>
           <span><i>FS</i><b>R2 storage</b><small>Protected file access</small></span>
-          <span><i>FN</i><b>Functions</b><small>Workers-native compute</small></span>
+          <span><i>CLI</i><b>One-command deploy</b><small>create-baseclf provisions it</small></span>
         </div>
         <p className="advanced-line">CLI for repeatable workflows <span>•</span> Studio for guided work <span>•</span> Code remains the source of truth</p>
       </section>
@@ -203,11 +203,11 @@ export default function Home() {
         <div className="compat-panel" id="docs">
           <p className="section-index">05 / Compatibility</p>
           <h2>Keep the client<br />you already know.</h2>
-          <p>Move a supabase-js client with minimal changes: keep the query style, point it at the Worker you own.</p>
-          <pre aria-label="JavaScript client example"><code><span>import</span> {'{'} createClient {'}'} <span>from</span> <em>&quot;@supabase/supabase-js&quot;</em>{"\n\n"}<span>const</span> client = createClient({"\n"}  <em>&quot;https://field-notes.baseclf.workers.dev&quot;</em>,{"\n"}  <em>&quot;public-anon-key&quot;</em>{"\n"}){"\n\n"}<span>const</span> {'{'} data {'}'} = <span>await</span> client{"\n"}  .from(<em>&quot;posts&quot;</em>){"\n"}  .select(<em>&quot;*&quot;</em>)</code></pre>
+          <p>Keep the query style you know. The client is <code>baseclf-js</code>, there is no anonymous key, and no token simply means the anon role.</p>
+          <pre aria-label="JavaScript client example"><code><span>import</span> {'{'} createClient {'}'} <span>from</span> <em>&quot;baseclf-js&quot;</em>{"\n\n"}<span>const</span> client = createClient({"\n"}  <em>&quot;https://field-notes.baseclf.workers.dev&quot;</em>{"\n"}){"\n\n"}<span>const</span> {'{'} data {'}'} = <span>await</span> client{"\n"}  .from(<em>&quot;posts&quot;</em>){"\n"}  .select(<em>&quot;*&quot;</em>)</code></pre>
           <div className="compat-diff" aria-label="Compatibility summary">
-            <div><span>Change</span><p><b>Endpoint + public key</b><small>Point the client at your BaseCLF Worker.</small></p></div>
-            <div><span>Keep</span><p><b>Imports + query style</b><small>Continue using the client your team already knows.</small></p></div>
+            <div><span>Change</span><p><b>Package + URL</b><small>Import baseclf-js and point it at your Worker. No anon key exists.</small></p></div>
+            <div><span>Keep</span><p><b>Query style</b><small>.from().select(), the filters, inserts, updates, and deletes.</small></p></div>
             <div><span>Gain</span><p><b>Cloudflare ownership</b><small>D1, R2, and Worker resources remain in your account.</small></p></div>
           </div>
         </div>
@@ -245,7 +245,7 @@ export default function Home() {
         <div className="footer-links">
           <div><b>Product</b><a href="#capabilities">Overview</a><a href="#security">Security</a><a href="/docs/quickstart">Quickstart</a></div>
           <div><b>Developers</b><a href="/docs">Docs</a><a href="/docs/policies">Policy DSL</a><a href="/docs/compatibility">Compatibility</a></div>
-          <div><b>Project</b><a href="#top">GitHub</a><a href="#boundary">Caveats</a><a href="#top">License</a></div>
+          <div><b>Project</b><a href="https://github.com/baseclf/baseclf">GitHub</a><a href="#boundary">Caveats</a><a href="https://github.com/baseclf/baseclf/blob/main/LICENSE">License</a></div>
         </div>
         <div className="footer-bottom"><span>© 2026 BaseCLF</span><span>Built for Cloudflare developers.</span></div>
       </footer>

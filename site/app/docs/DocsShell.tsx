@@ -14,6 +14,10 @@ const sections = [
 export default function DocsShell({ active, children }: { active: string; children: ReactNode }) {
   const [searchOpen, setSearchOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const matches = sections.filter((section) =>
+    section.label.toLowerCase().includes(query.trim().toLowerCase()),
+  );
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -51,7 +55,7 @@ export default function DocsShell({ active, children }: { active: string; childr
 
       <aside className="docs-toc" aria-label="On this page"><span className="docs-label">On this page</span><a href="#overview">Overview</a><a href="#details">Details</a><a href="#caveats">Caveats</a></aside>
 
-      {searchOpen && <div className="docs-search-backdrop" role="button" tabIndex={0} aria-label="Close documentation search" onMouseDown={(event) => { if (event.target === event.currentTarget) setSearchOpen(false); }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") setSearchOpen(false); }}><section className="docs-search-dialog" role="dialog" aria-modal="true" aria-label="Search documentation"><input placeholder="Search docs" aria-label="Search docs" /><p>Pages</p>{sections.map((section) => <a key={section.href} href={section.href}><span>{section.label}</span><small>BaseCLF documentation</small></a>)}<footer>Mock search index · Press Esc to close</footer></section></div>}
+      {searchOpen && <div className="docs-search-backdrop" role="button" tabIndex={0} aria-label="Close documentation search" onMouseDown={(event) => { if (event.target === event.currentTarget) setSearchOpen(false); }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") setSearchOpen(false); }}><section className="docs-search-dialog" role="dialog" aria-modal="true" aria-label="Search documentation"><input placeholder="Search docs" aria-label="Search docs" value={query} onChange={(event) => setQuery(event.target.value)} /><p>Pages</p>{matches.map((section) => <a key={section.href} href={section.href}><span>{section.label}</span><small>BaseCLF documentation</small></a>)}<footer>{matches.length === 0 ? `No pages match "${query.trim()}"` : "Static page index · Press Esc to close"}</footer></section></div>}
     </main>
   );
 }

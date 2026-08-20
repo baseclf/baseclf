@@ -1,9 +1,10 @@
 # Compatibility
 
-This file mirrors the preview compatibility page. Status labels are planning content until verified against release builds.
+These rows mirror the compatibility tables in the engine repository's README, which are maintained against its tests.
 
-- Common `supabase-js` data queries: supported design target.
-- OAuth providers: partial; examples are fixtures.
-- Realtime subscriptions: planned.
-- Postgres extensions: not applicable because D1 is SQLite-based.
-- R2 object storage: supported design target.
+- supabase-js query style: supported. Same query grammar; the 14 operators SQLite cannot run are refused by name.
+- Email and password auth: off by default. Hashing one password costs ~58 ms CPU against the free plan's 10 ms per request.
+- OAuth providers: supported. Google and GitHub, configured per deployment.
+- Realtime subscriptions: planned. No CDC on D1; change events would be produced by the Worker, not the database.
+- Postgres extensions: not applicable, because D1 is SQLite-based.
+- R2 object storage: supported. Proxied through the Worker; no presigned URLs by design.

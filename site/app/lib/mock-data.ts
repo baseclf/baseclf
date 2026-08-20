@@ -74,12 +74,12 @@ export const mockExamplePosts = [
 ] as const;
 
 export const mockCompatibility = [
-  ["supabase-js data queries", "Supported", "Designed to preserve common query flows."],
-  ["Email/password auth", "Planned", "Provider and delivery contracts are not final."],
-  ["OAuth providers", "Partial", "Google and GitHub shown as design fixtures."],
-  ["Realtime subscriptions", "Planned", "No production claim in this preview."],
+  ["supabase-js query style", "Supported", "Same query grammar; the 14 operators SQLite cannot run are refused by name."],
+  ["Email and password auth", "Off by default", "Hashing one password costs ~58 ms CPU against the free plan's 10 ms per request."],
+  ["OAuth providers", "Supported", "Google and GitHub, configured per deployment."],
+  ["Realtime subscriptions", "Planned", "No CDC on D1; change events would be produced by the Worker, not the database."],
   ["Postgres extensions", "Not applicable", "D1 is SQLite-based, not Postgres."],
-  ["R2 object storage", "Supported", "Cloudflare-native storage target."],
+  ["R2 object storage", "Supported", "Proxied through the Worker; no presigned URLs by design."],
 ] as const;
 
 export const mockProvisioningSteps = [
@@ -122,9 +122,9 @@ export const mockApiResponse = `[
 
 export const mockRequestLogs = [
   { id: "req_7f3a", time: "14:32:08.418", method: "GET", path: "/rest/v1/posts", status: 200, duration: "42 ms", severity: "info", region: "SIN", role: "authenticated", message: "2 rows returned after policy filter" },
-  { id: "req_7f39", time: "14:31:54.102", method: "POST", path: "/rest/v1/posts", status: 403, duration: "18 ms", severity: "warning", region: "SIN", role: "anon", message: "Insert rejected by write_own_posts" },
-  { id: "req_7f38", time: "14:31:12.776", method: "GET", path: "/auth/v1/user", status: 200, duration: "27 ms", severity: "info", region: "HKG", role: "authenticated", message: "Session resolved for usr_maya_chen" },
-  { id: "req_7f37", time: "14:29:45.201", method: "GET", path: "/storage/v1/object/app-files", status: 404, duration: "31 ms", severity: "error", region: "SIN", role: "authenticated", message: "Object path was not found" },
+  { id: "req_7f39", time: "14:31:54.102", method: "POST", path: "/rest/v1/posts", status: 404, duration: "18 ms", severity: "warning", region: "SIN", role: "anon", message: "Insert refused; no policy grants anon this write, answered not found" },
+  { id: "req_7f38", time: "14:31:12.776", method: "GET", path: "/api/auth/get-session", status: 200, duration: "27 ms", severity: "info", region: "HKG", role: "authenticated", message: "Session resolved for usr_maya_chen" },
+  { id: "req_7f37", time: "14:29:45.201", method: "GET", path: "/storage/v1/app-files/report.pdf", status: 404, duration: "31 ms", severity: "error", region: "SIN", role: "authenticated", message: "No object behind that name, answered not found" },
   { id: "req_7f36", time: "14:28:19.930", method: "PATCH", path: "/rest/v1/profiles", status: 200, duration: "55 ms", severity: "info", region: "NRT", role: "authenticated", message: "1 row updated" },
 ] as const;
 
