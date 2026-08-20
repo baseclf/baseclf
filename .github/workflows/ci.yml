@@ -36,9 +36,12 @@ jobs:
       - name: Lint
         run: npm run lint
 
-      # Runs in workerd with a real D1 binding, not a Node emulation.
+      # Runs in workerd with a real D1 binding, not a Node emulation. The floor
+      # wrapper refuses a run whose file count shrank: vitest once summarised a
+      # suite as green while two files never executed, and the denominator
+      # followed the numerator so the line looked fine.
       - name: Test
-        run: npm test
+        run: npm run test:floor
 
       # `build:cli` runs the Worker build first, then builds both binaries and runs
       # each one. Publishing is a real workflow now, so what CI checks is what gets
@@ -51,3 +54,25 @@ jobs:
       # both were correct on disk and wrong in the package.
       - name: Package
         run: npm run check:package
+
+  # The site is its own workspace with its own runner. Until this job existed it
+  # was green only because somebody ran it by hand on one machine.
+  site:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+
+      - run: npm ci
+        working-directory: site
+
+      # `npm test` there is a production build plus the rendered-HTML contract
+      # tests, so what CI checks is what deploys rather than only what compiles.
+      - name: Build and contract tests
+        run: npm test
+        working-directory: site
