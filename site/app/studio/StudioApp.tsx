@@ -6,6 +6,8 @@ import ThemeToggle from "../ThemeToggle";
 import {
   applyOnBridge,
   type BridgeRows,
+  type BrowsePage,
+  browseOnBridge,
   type LintFinding,
   type PolicyTable,
   readDocumentOnBridge,
@@ -1048,7 +1050,7 @@ function DataScreen({ screen, client, live, bridgeKey, onRefresh, onNotice, onOp
   }
   if (screen === "Tables") {
     return client !== null && live !== null ? (
-      <LiveTablesScreen client={client} live={live} onNotice={onNotice} />
+      <LiveTablesScreen client={client} live={live} bridgeKey={bridgeKey} onNotice={onNotice} />
     ) : (
       <TablesScreen />
     );
@@ -1183,16 +1185,34 @@ function PoliciesScreen({ onNotice, onOpenDialog }: { onNotice: (message: string
  * writes stay with the API and the CLI; this screen is read-only by the same
  * decision (Q5) that keeps the policies screen read-only.
  */
-function LiveTablesScreen({ client, live, onNotice }: { client: StudioClient; live: LiveState; onNotice: (message: string) => void }) {
+function LiveTablesScreen({ client, live, bridgeKey, onNotice }: { client: StudioClient; live: LiveState; bridgeKey: string; onNotice: (message: string) => void }) {
   const [selectedName, setSelectedName] = useState("");
   // The description remembers which table it belongs to, so changing the
   // selection needs no synchronous reset: a description for another table is
   // simply not current, and the loading state falls out of that.
   const [described, setDescribed] = useState<{ table: string; detail?: TableDetail; error?: string } | null>(null);
+  // Same shape for the rows page. Nothing loads until the operator asks, and
+  // each numbered page is its own small scan: the deployment bills rows read,
+  // so the panel never runs a scan the person did not click for.
+  const [browsed, setBrowsed] = useState<{ table: string; offset: number; page?: BrowsePage; error?: string } | null>(null);
+  const [browsing, setBrowsing] = useState(false);
 
   const selected = live.tables.find((table) => table.name === selectedName) ?? live.tables[0];
   const policyEntry = selected === undefined ? undefined : live.policies.find((entry) => entry.table === selected.name);
   const finding = selected === undefined ? undefined : live.findings.find((entry) => entry.table === selected.name);
+
+  const loadRows = async (table: string, offset: number) => {
+    if (browsing) return;
+    setBrowsing(true);
+    const answer = await browseOnBridge(bridgeKey, table, offset);
+    setBrowsing(false);
+    setBrowsed(
+      answer.kind === "data"
+        ? { table, offset, page: answer.data }
+        : { table, offset, error: answer.message },
+    );
+    if (answer.kind !== "data") onNotice(answer.message);
+  };
 
   useEffect(() => {
     if (selected === undefined) return;
@@ -1213,8 +1233,19 @@ function LiveTablesScreen({ client, live, onNotice }: { client: StudioClient; li
   const detail = current?.detail ?? null;
   const detailError = current?.error ?? "";
 
+  const rowsCurrent = browsed !== null && selected !== undefined && browsed.table === selected.name ? browsed : null;
+  const rowsPage = rowsCurrent?.page;
+  const pageSize = rowsPage?.limit ?? 50;
+  const pageIndex = rowsPage === undefined ? 0 : Math.floor(rowsPage.offset / pageSize);
+  // Numbered pages, discovered lazily: a full page proves one more exists, and
+  // nothing is ever counted. The cap mirrors the bridge's scan ceiling.
+  const MAX_BROWSE_PAGES = 20;
+  const lastKnownPage = rowsPage === undefined ? 0 : pageIndex + (rowsPage.rows.length === pageSize ? 2 : 1);
+  const pageNumbers = Array.from({ length: Math.min(lastKnownPage, MAX_BROWSE_PAGES) }, (_, at) => at + 1);
+  const rowColumns = detail?.columns.map((column) => column.name) ?? Object.keys(rowsPage?.rows[0] ?? {});
+
   return <div>
-    <ScreenTitle kicker="Database" title="Tables" description="Every application table, read from the deployment itself. Columns and indexes are shown; rows are not, because counting them is a full scan D1 would bill for." action={<button className="studio-secondary" type="button" onClick={() => { void navigator.clipboard?.writeText("npx baseclf policy apply <document>.json"); onNotice("CLI command copied. Exposing a table is a policy document."); }}>Copy CLI command</button>} />
+    <ScreenTitle kicker="Database" title="Tables" description="Every application table, read from the deployment itself. Columns and indexes come from the deployment; rows come one small page at a time through your local bridge, and are never counted, because counting is a full scan D1 would bill for." action={<button className="studio-secondary" type="button" onClick={() => { void navigator.clipboard?.writeText("npx baseclf policy apply <document>.json"); onNotice("CLI command copied. Exposing a table is a policy document."); }}>Copy CLI command</button>} />
     <div className="workspace-grid">
       <section className="list-panel">
         <header><span>{live.tables.length} {live.tables.length === 1 ? "table" : "tables"}</span><span className="machine-label">live</span></header>
@@ -1282,6 +1313,40 @@ function LiveTablesScreen({ client, live, onNotice }: { client: StudioClient; li
                 )}
               </div>
             )}
+            <section className="full-panel rows-panel">
+              <header><span>Rows · operator view, no policy applied</span>{rowsPage !== undefined && <span>{rowsPage.rows.length} rows · {rowsPage.rowsRead ?? "?"} scanned</span>}</header>
+              {bridgeKey === "" ? (
+                <div className="editor-form"><p>Rows come from your local bridge, read with your own credential. Run <code>npx baseclf studio</code> and paste its key into the Simulator&apos;s Result panel; this panel shares it. What a caller would see is the Simulator&apos;s question.</p></div>
+              ) : rowsCurrent === null ? (
+                <div className="editor-form"><p>Newest rows first, fifty per page. Every page is one small scan, run only when you ask for it.</p><button className="studio-secondary" type="button" disabled={browsing} onClick={() => void loadRows(selected.name, 0)}>{browsing ? "Loading…" : "Load latest rows"}</button></div>
+              ) : rowsCurrent.error !== undefined ? (
+                <div className="editor-form"><p>{rowsCurrent.error}</p><button className="studio-secondary" type="button" disabled={browsing} onClick={() => void loadRows(selected.name, rowsCurrent.offset)}>Try again</button></div>
+              ) : rowsPage !== undefined && rowsPage.rows.length === 0 ? (
+                <div className="editor-form"><p>{rowsPage.offset === 0 ? "The table has no rows yet." : "No rows on this page."}</p>{rowsPage.offset > 0 && <button className="studio-secondary" type="button" disabled={browsing} onClick={() => void loadRows(selected.name, 0)}>Back to page 1</button>}</div>
+              ) : rowsPage !== undefined ? (
+                <>
+                  <div className="table-scroll">
+                    <table className="compact-table">
+                      <thead><tr>{rowColumns.map((name) => <th key={name}>{name}</th>)}</tr></thead>
+                      <tbody>
+                        {rowsPage.rows.map((row, index) => (
+                          <tr key={`${String(row[rowColumns[0] ?? "id"] ?? "")}-${index}`}>
+                            {rowColumns.map((name) => { const cell = formatCell(name, row[name]); return <td key={name} title={cell.title}>{cell.text}</td>; })}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  {pageNumbers.length > 1 && (
+                    <div className="rows-pager">
+                      {pageNumbers.map((number) => (
+                        <button key={number} className={number === pageIndex + 1 ? "studio-primary" : "studio-secondary"} type="button" disabled={browsing} onClick={() => void loadRows(selected.name, (number - 1) * pageSize)}>{number}</button>
+                      ))}
+                    </div>
+                  )}
+                </>
+              ) : null}
+            </section>
           </>
         )}
       </section>

@@ -203,6 +203,12 @@ test("ships the guided motion system and real product captures", async () => {
   const studioApp = await readFile(new URL("../app/studio/StudioApp.tsx", import.meta.url), "utf8");
   assert.match(studioApp, /First deployment\?/);
   assert.match(studioApp, /npx create-baseclf/);
+  // The Tables screen's row browse: the panel names what it is (the operator's
+  // view, not a caller's), rows load only on a click, and pages are numbered
+  // rather than counted, so no scan runs that nobody asked for.
+  assert.match(studioApp, /operator view, no policy applied/);
+  assert.match(studioApp, /Load latest rows/);
+  assert.match(studioApp, /browseOnBridge/);
   // The wizard's promise, pinned: every check mark is a real round trip, the
   // token stays out of the downloaded notes unless explicitly included, and
   // the flow ends in a download plus a connect that reuses the proven client.

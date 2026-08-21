@@ -383,3 +383,58 @@ export async function runOnBridge(
   }
   return { kind: "error", message: body.error ?? `The bridge answered ${response.status}.` };
 }
+
+/** One page of one table, as the operator. Never counted, only paged. */
+export interface BrowsePage {
+  readonly rows: readonly Record<string, unknown>[];
+  readonly rowsRead: number | null;
+  readonly limit: number;
+  readonly offset: number;
+}
+
+/**
+ * Read one page of a table through the bridge, newest rows first.
+ *
+ * The operator's view: their own credential, no policy applied, which is why
+ * the panel that renders this says so. The page sends a table name and an
+ * offset, never SQL, and the bridge refuses engine tables and deep pages
+ * (every skipped row is scanned, and rows read is what D1 bills).
+ */
+export async function browseOnBridge(
+  key: string,
+  table: string,
+  offset: number,
+): Promise<ToolAnswer<BrowsePage>> {
+  let response: Response;
+  try {
+    response = await fetch(
+      `${BRIDGE_URL}/rows?table=${encodeURIComponent(table)}&offset=${encodeURIComponent(String(offset))}`,
+      { headers: { "x-bridge-key": key } },
+    );
+  } catch {
+    return {
+      kind: "error",
+      message: "The bridge could not be reached. Is npx baseclf studio running?",
+    };
+  }
+  if (response.status === 401) return { kind: "error", message: "The bridge refused the key." };
+
+  let body: { rows?: Record<string, unknown>[]; rowsRead?: number | null; limit?: number; offset?: number; error?: string };
+  try {
+    body = (await response.json()) as typeof body;
+  } catch {
+    return { kind: "error", message: `The bridge answered ${response.status} without a body.` };
+  }
+  if (body.rows !== undefined) {
+    return {
+      kind: "data",
+      data: {
+        rows: body.rows,
+        rowsRead: body.rowsRead ?? null,
+        limit: body.limit ?? body.rows.length,
+        offset: body.offset ?? offset,
+      },
+    };
+  }
+  return { kind: "error", message: body.error ?? `The bridge answered ${response.status}.` };
+}
