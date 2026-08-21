@@ -120,6 +120,15 @@ describe('refusals that never reach the network', () => {
     expect(h.requests()).toBe(0);
   });
 
+  it('refuses a structure nested past three levels, before any request', async () => {
+    const h = harness({ file: JSON.stringify({ a: { b: { c: { d: 1 } } } }) });
+    const outcome = await runUser(['set-app', 'u_real', 'claims.json'], h.write, PLAIN, h.host);
+
+    expect(outcome).toBe('usage');
+    expect(h.text()).toContain('nests deeper');
+    expect(h.requests()).toBe(0);
+  });
+
   it('needs a verb, a user id and a file', async () => {
     const h = harness();
     expect(await runUser([], h.write, PLAIN, h.host)).toBe('usage');

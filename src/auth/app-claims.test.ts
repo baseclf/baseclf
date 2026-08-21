@@ -119,6 +119,25 @@ describe('the claims store and the token mint', () => {
     const payload = decodePayload(await withRecord.token());
     expect(payload['app_metadata']).toEqual({ plan: 'pro' });
   });
+
+  it('a row the validator could never have written mints as no claims at all', async () => {
+    // Written straight into the table, the way only somebody bypassing the CLI
+    // can. The read side must narrow to nothing rather than hand a policy an
+    // array to trust.
+    await env.DB.prepare(
+      "INSERT INTO _app_metadata (user_id, metadata, updated_at) VALUES (?1, '[1,2]', unixepoch()) " +
+        "ON CONFLICT(user_id) DO UPDATE SET metadata = '[1,2]'",
+    )
+      .bind(withoutRecord.userId)
+      .run();
+
+    const payload = decodePayload(await withoutRecord.token());
+    expect(payload['app_metadata']).toEqual({});
+
+    await env.DB.prepare('DELETE FROM _app_metadata WHERE user_id = ?1')
+      .bind(withoutRecord.userId)
+      .run();
+  });
 });
 
 describe('a policy that reads $auth.app.plan', () => {
