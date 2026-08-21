@@ -345,10 +345,15 @@ function TerminalShot({ command, lines }: { command: string; lines: readonly str
 }
 
 const WHOAMI_OUTPUT: readonly string[] = [
-  " ⛅️ wrangler 4.115.0",
+  "Need to install the following packages:",
+  "wrangler@4.125.0",
+  "Ok to proceed? (y) y",
+  "",
+  " ⛅️ wrangler 4.125.0",
   "───────────────────────",
   "Getting User settings...",
   "👋 You are logged in with an OAuth Token, associated with the email you@example.com.",
+  "🔐 Credentials are stored in: C:\\Users\\you\\.wrangler\\config\\default.toml",
   "┌──────────────┬──────────────────────┐",
   "│ Account Name │ Account ID           │",
   "├──────────────┼──────────────────────┤",
@@ -602,7 +607,7 @@ function ConnectFlow({ onConnected, onDemo, onNotice, onBridgeKey }: { onConnect
           <p className="wizard-item">1 · Cloudflare login</p>
           <div className="wizard-command"><code>npx wrangler whoami</code><button type="button" onClick={() => copy("npx wrangler whoami")}>Copy</button></div>
           <TerminalShot command="npx wrangler whoami" lines={WHOAMI_OUTPUT} />
-          <p className="form-help">A logged-in machine answers like that, and the account in the table is where the deployment will land. If it says you are not logged in instead, run the command below — it opens your browser to sign in and approve — then run the check again and compare with the window above.</p>
+          <p className="form-help">A logged-in machine answers like that, and the account in the table is where the deployment will land. A token permissions list follows the table; its exact entries do not matter here. If it says you are not logged in instead, run the command below — it opens your browser to sign in and approve — then run the check again and compare with the window above.</p>
           <div className="wizard-command"><code>npx wrangler login</code><button type="button" onClick={() => copy("npx wrangler login")}>Copy</button></div>
           <label className="wizard-include"><input type="checkbox" checked={authReady} onChange={(event) => setAuthReady(event.target.checked)} /> whoami answers, and it names the account I want to deploy to.</label>
           <p className="wizard-item">2 · R2 storage</p>
