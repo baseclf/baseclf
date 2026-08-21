@@ -392,8 +392,18 @@ const CREATE_OUTPUT: readonly string[] = [
 ];
 
 const SECRET_OUTPUT: readonly string[] = [
-  '\u{1F300} Creating the secret for the Worker "baseclf"',
-  "✨ Success! Uploaded secret MCP_TOKEN",
+  "Type the value for MCP_TOKEN, then press Enter.",
+  "  It is not echoed, not written to disk, and not printed back.",
+  "  Pick something you will remember: it is asked for twice, and you",
+  "  will need it again wherever this deployment is managed from.",
+  "  This value is the admin token. The Studio asks for it, and anyone",
+  "  holding it can do everything the engine allows.",
+  "Type it again to confirm.",
+  '✓ MCP_TOKEN is set on the Worker "your-project".',
+  "  The value is in your clipboard: paste it into the Admin token field on the",
+  "  Studio connect screen.",
+  "  Cloudflare does not hand a secret back, so this reports that the request was",
+  "  accepted rather than that the value is the one you meant.",
 ];
 
 const STUDIO_OUTPUT: readonly string[] = [
@@ -524,7 +534,7 @@ function ConnectFlow({ onConnected, onDemo, onNotice, onBridgeKey }: { onConnect
       "    npx create-baseclf",
       "",
       "Set or rotate the admin token:",
-      `    npx wrangler secret put MCP_TOKEN --name ${project}`,
+      `    npx baseclf secret set MCP_TOKEN --script ${project}`,
       "",
       "Start the local bridge for rows and policy editing:",
       `    npx baseclf studio --project ${project}`,
@@ -670,11 +680,11 @@ function ConnectFlow({ onConnected, onDemo, onNotice, onBridgeKey }: { onConnect
         <p className="wizard-progress">Step 3 of 4 · Set the admin token</p>
         <section className="wizard-card">
           <h3>The one credential, on your own Worker.</h3>
-          <p>Pick any strong value and set it as the MCP_TOKEN secret. It is what unlocks the management surface of your deployment, and it never leaves this page&apos;s memory.</p>
-          <div className="wizard-command"><code>npx wrangler secret put MCP_TOKEN --name {project}</code><button type="button" onClick={() => copy(`npx wrangler secret put MCP_TOKEN --name ${project}`)}>Copy</button></div>
-          <TerminalShot command={`npx wrangler secret put MCP_TOKEN --name ${project}`} lines={SECRET_OUTPUT} />
-          <p className="form-help">Yours should end on the Success line. It does not echo the value you typed, which is correct.</p>
-          <label className="wizard-field">Paste the same value here<input type="password" value={wizard.token} onChange={(event) => setWizard({ ...wizard, token: event.target.value, client: null })} placeholder="The MCP_TOKEN secret you just set" /></label>
+          <p>Invent a strong value and set it as the MCP_TOKEN secret — it unlocks the management surface of your deployment. The command asks you to type it <strong>twice</strong>, and remember it: it is the admin token you will use from now on. The confirmed value lands in your clipboard, so the field below is one paste.</p>
+          <div className="wizard-command"><code>npx baseclf secret set MCP_TOKEN --script {project}</code><button type="button" onClick={() => copy(`npx baseclf secret set MCP_TOKEN --script ${project}`)}>Copy</button></div>
+          <TerminalShot command={`npx baseclf secret set MCP_TOKEN --script ${project}`} lines={SECRET_OUTPUT} />
+          <p className="form-help">Nothing you type is echoed, which is correct. Yours should end like this, with the clipboard line.</p>
+          <label className="wizard-field">Paste the token here<input type="password" value={wizard.token} onChange={(event) => setWizard({ ...wizard, token: event.target.value, client: null })} placeholder="The MCP_TOKEN value, from your clipboard" /></label>
           {wizard.client !== null ? (
             <p className="wizard-verified"><span className="state-label active">Verified</span> The deployment accepted the token.</p>
           ) : problem !== "" ? (

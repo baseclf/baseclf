@@ -131,11 +131,11 @@ test("keeps unfinished product contracts explicit", async () => {
   assert.match(usage, /Illustrative numbers only/i);
   assert.match(realtime, /Planned — not enabled/i);
   // The API Keys screen collapsed into a Settings section: the product's one
-  // admin credential is the MCP_TOKEN secret, set with wrangler, never typed
-  // here. Read from the source because the tab renders on selection.
+  // admin credential is the MCP_TOKEN secret, set with the CLI's own command,
+  // never typed here. Read from the source because the tab renders on selection.
   assert.match(settings, /Admin token/);
   assert.match(settings, /MCP_TOKEN/);
-  assert.match(settings, /wrangler secret put/);
+  assert.match(settings, /baseclf secret set/);
   assert.doesNotMatch(settings, /mockEnvironments/);
 });
 
@@ -204,6 +204,11 @@ test("ships the guided motion system and real product captures", async () => {
   assert.match(studioApp, /npx wrangler whoami/);
   assert.match(studioApp, /npx wrangler login/);
   assert.match(studioApp, /Authorization granted to Wrangler/);
+  // The token step teaches the CLI's own secret command, whose terminal shot
+  // carries the type-twice confirmation and the clipboard line.
+  assert.match(studioApp, /baseclf secret set MCP_TOKEN --script/);
+  assert.match(studioApp, /Type it again to confirm/);
+  assert.match(studioApp, /in your clipboard/);
   assert.match(studioApp, /disabled=\{!authReady \|\| !r2Ready\}/);
   assert.match(studioApp, /R2 Object Storage/);
 
