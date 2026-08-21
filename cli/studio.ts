@@ -37,6 +37,13 @@
  * trust as the CLI reading their file; `policy_list` over the network still
  * withholds them.
  *
+ * On `/rows`, the bridge reads one page of one application table as the
+ * operator, newest first, no policy applied: the Tables screen's "did my data
+ * land" question, answerable on a table nobody has exposed yet. The page
+ * sends a table name and an offset, never SQL; `cli/browse.ts` holds the
+ * statement, the refusals (engine tables stay CLI-only), and the scan
+ * ceiling, since rows read is what D1 bills.
+ *
  * ## The key
  *
  * Anything on the machine can reach 127.0.0.1, including other pages in the
@@ -54,10 +61,12 @@
  */
 
 import type { D1Executor } from '../src/db/dialect.js';
-import { introspect } from '../src/db/introspect.js';
+import { type Catalogue, introspect } from '../src/db/introspect.js';
 import { loadRegistry } from '../src/policy/registry.js';
 import { readTable } from '../src/rest/router.js';
 import { BaseclfError } from '../src/utils/errors.js';
+import { MAX_REGISTRY_AGE_MS } from '../src/utils/memo.js';
+import { BROWSE_PAGE_SIZE, browseStatement } from './browse.js';
 import { restExecutor } from './d1-api.js';
 import { copyable, note, PLAIN, type Style, styledResultLine } from './output.js';
 import {
@@ -216,6 +225,21 @@ export function createBridge(options: {
   readonly applyDocument: (document: PolicyDocument) => Promise<BridgeApplyAnswer>;
   readonly log: (line: string) => void;
 }): BridgeHandler {
+  // One catalogue per bridge process, refreshed on the engine's own clock.
+  // /run rebuilds per request because a policy applied a moment ago has to be
+  // simulated a moment later; a schema, unlike a policy, has no write lane
+  // here, and a page turner re-reading it per click would pay the whole
+  // PRAGMA sweep over a transport with no batch. A failed read is not kept.
+  let rememberedCatalogue: { readonly at: number; readonly catalogue: Catalogue } | null = null;
+  const catalogueFor = async (): Promise<Catalogue> => {
+    if (rememberedCatalogue !== null && Date.now() - rememberedCatalogue.at < MAX_REGISTRY_AGE_MS) {
+      return rememberedCatalogue.catalogue;
+    }
+    const catalogue = await introspect(options.openExecutor());
+    rememberedCatalogue = { at: Date.now(), catalogue };
+    return catalogue;
+  };
+
   return async (request) => {
     const origin = request.header('origin') ?? '*';
 
@@ -230,7 +254,9 @@ export function createBridge(options: {
           ? 'apply'
           : request.method === 'GET' && request.path === '/document'
             ? 'document'
-            : null;
+            : request.method === 'GET' && request.path === '/rows'
+              ? 'rows'
+              : null;
 
     if (route === null) {
       return answer(404, origin, { error: 'Not found.' });
@@ -252,6 +278,38 @@ export function createBridge(options: {
         return answer(200, origin, { document });
       } catch {
         options.log('a document read failed before it finished');
+        return answer(500, origin, { error: 'The deployment could not be read.' });
+      }
+    }
+
+    if (route === 'rows') {
+      const params = new URLSearchParams(request.search);
+      const table = params.get('table') ?? '';
+      if (table === '') {
+        return answer(400, origin, { error: 'A table is required.' });
+      }
+      const offset = Number(params.get('offset') ?? '0');
+
+      try {
+        const plan = browseStatement(await catalogueFor(), table, offset);
+        if (!plan.ok) {
+          options.log(`refused a browse of "${table}"`);
+          return answer(400, origin, { error: plan.refusal });
+        }
+
+        const result = await options
+          .openExecutor()
+          .prepare(plan.sql)
+          .bind(...plan.parameters)
+          .all<Record<string, unknown>>();
+        const rows = result.results ?? [];
+        const scanned = (result.meta as { rows_read?: unknown } | undefined)?.rows_read;
+        const rowsRead = typeof scanned === 'number' ? scanned : null;
+
+        options.log(`browsed "${table}": ${rows.length} row(s), ${rowsRead ?? '?'} scanned`);
+        return answer(200, origin, { rows, rowsRead, limit: BROWSE_PAGE_SIZE, offset });
+      } catch {
+        options.log('a row browse failed before it finished');
         return answer(500, origin, { error: 'The deployment could not be read.' });
       }
     }

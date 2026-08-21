@@ -423,6 +423,71 @@ describe('a fresh deployment, which has no engine tables yet', () => {
   });
 });
 
+describe('the operator row browse', () => {
+  interface BrowseAnswer {
+    rows?: { id?: string; status?: string }[];
+    rowsRead?: number | null;
+    limit?: number;
+    offset?: number;
+    error?: string;
+  }
+
+  async function browse(
+    search: string,
+    key = KEY,
+  ): Promise<{ status: number; body: BrowseAnswer }> {
+    const response = await handler(get('/rows', search, key));
+    return { status: response.status, body: JSON.parse(response.body) as BrowseAnswer };
+  }
+
+  it('shows every row newest first, drafts included, and says what the scan cost', async () => {
+    const answer = await browse('?table=posts');
+
+    expect(answer.status).toBe(200);
+    // Both product claims in one line: insertion order reversed (the page an
+    // operator who just seeded wants), and the drafts are present, because
+    // this is the operator's view and no policy applies. What a caller would
+    // see is the simulator's question, and the panel says so.
+    expect((answer.body.rows ?? []).map((row) => row.id)).toEqual(['p4', 'p3', 'p2', 'p1']);
+    expect((answer.body.rows ?? []).some((row) => row.status === 'draft')).toBe(true);
+    expect(typeof answer.body.rowsRead).toBe('number');
+    expect(answer.body.limit).toBeGreaterThan(0);
+  });
+
+  it('remembers the catalogue between pages instead of re-reading the schema', async () => {
+    await browse('?table=posts');
+    const warm = opened;
+    await browse('?table=posts&offset=50');
+
+    // One executor open for the query itself, none for introspection: a page
+    // turner must not pay the whole PRAGMA sweep per click on a transport
+    // with no batch.
+    expect(opened - warm).toBe(1);
+  });
+
+  it('refuses engine tables, which stay CLI-only', async () => {
+    for (const name of ['_policies', 'user', 'jwks']) {
+      const answer = await browse(`?table=${name}`);
+      expect(answer.status).toBe(400);
+      expect(answer.body.error).toContain('CLI');
+      expect(answer.body.rows).toBeUndefined();
+    }
+  });
+
+  it('refuses a page past the scan ceiling, naming the reason', async () => {
+    const answer = await browse('?table=posts&offset=5000');
+    expect(answer.status).toBe(400);
+    expect(answer.body.error).toContain('rows read is what D1 bills');
+  });
+
+  it('is behind the same key as every other verb', async () => {
+    const before = opened;
+    const answer = await browse('?table=posts', 'not-the-key');
+    expect(answer.status).toBe(401);
+    expect(opened).toBe(before);
+  });
+});
+
 describe('the command around it', () => {
   function studioHost(overrides: Partial<StudioHost> = {}): {
     host: StudioHost;
