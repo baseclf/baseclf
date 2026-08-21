@@ -13,7 +13,6 @@ New-Item -ItemType Directory -Force -Path $outputRoot | Out-Null
 $shots = @(
   @{ Name = "overview"; Route = "/studio/overview" },
   @{ Name = "policy-studio"; Route = "/studio" },
-  @{ Name = "sql-editor"; Route = "/studio/sql" },
   @{ Name = "new-project"; Route = "/studio/new-project" },
   @{ Name = "provisioning"; Route = "/studio/provisioning" },
   @{ Name = "api-explorer"; Route = "/studio/api" },

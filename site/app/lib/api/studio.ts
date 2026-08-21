@@ -97,7 +97,12 @@ export interface TableDetail {
 export type ToolAnswer<T> =
   | { readonly kind: "data"; readonly data: T }
   | { readonly kind: "refusal"; readonly message: string }
-  | { readonly kind: "error"; readonly message: string };
+  | {
+      readonly kind: "error";
+      readonly message: string;
+      /** Set when the deployment answered 429; from its Retry-After header. */
+      readonly retryAfterSeconds?: number;
+    };
 
 interface RpcEnvelope {
   readonly result?: {
@@ -204,6 +209,18 @@ export class StudioClient {
 
     if (response.status === 401) {
       return { kind: "error", message: "The deployment refused the token." };
+    }
+    if (response.status === 429) {
+      // The engine's limiter always sends Retry-After in whole seconds, and
+      // exposes it through CORS precisely so this page can read it. No
+      // automatic retry: the person decides when to press Run again.
+      const declared = Number(response.headers.get("retry-after"));
+      const wait = Number.isInteger(declared) && declared > 0 ? declared : 60;
+      return {
+        kind: "error",
+        message: `The deployment is rate limiting this endpoint. Try again in ${wait}s.`,
+        retryAfterSeconds: wait,
+      };
     }
 
     const envelope = parseBody(response.headers.get("content-type") ?? "", await response.text());

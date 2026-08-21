@@ -106,6 +106,19 @@ test("keeps the matched studio screens on the deployment, not on fixtures", asyn
   assert.match(connection, /sessionStorage/);
   assert.doesNotMatch(connection, /StudioClient|#token|authorization|Bearer/);
   assert.doesNotMatch(studio, /setSharedOrigin\([^n)]*token/i);
+
+  // Real-data hardening: engine timestamps are unix seconds and any TEXT
+  // column can be 500 characters, so cells go through one formatter; a 429
+  // becomes a ticking cooldown from the deployment's own Retry-After, and
+  // never an automatic retry.
+  const format = await readFile(new URL("../app/lib/format.ts", import.meta.url), "utf8");
+  assert.match(format, /toISOString/);
+  assert.match(format, /MAX_CELL_CHARS/);
+  assert.match(studio, /formatCell/);
+  assert.match(studio, /retryAfterSeconds/);
+  assert.match(studio, /useOverlayFocus/);
+  assert.match(client, /retry-after/);
+  assert.doesNotMatch(client, /setTimeout[^\n]*#rpc|retry\(/);
 });
 
 test("keeps unfinished product contracts explicit", async () => {
@@ -199,9 +212,9 @@ test("ships the guided motion system and real product captures", async () => {
   assert.match(globals, /route-content-enter/);
   assert.match(globals, /object-fit:contain/);
 
-  // "functions" left this list with its screen (decision Q4); its orphaned
-  // capture files are P6 cleanup.
-  const shotNames = ["overview", "policy-studio", "sql-editor", "new-project", "provisioning", "api-explorer", "request-logs", "deployments", "backups"];
+  // Only shots a page actually renders. "functions" left with its screen
+  // (decision Q4); "sql-editor" was captured but never displayed anywhere.
+  const shotNames = ["overview", "policy-studio", "new-project", "provisioning", "api-explorer", "request-logs", "deployments", "backups"];
   const pairs = await Promise.all(shotNames.map(async (name) => ({
     png: await stat(new URL(`../public/product-shots/${name}.png`, import.meta.url)),
     webp: await stat(new URL(`../public/product-shots/${name}.webp`, import.meta.url)),

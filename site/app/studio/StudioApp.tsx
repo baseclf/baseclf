@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, ReactNode, useEffect, useState } from "react";
+import { FormEvent, ReactNode, RefObject, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import ThemeToggle from "../ThemeToggle";
 import {
@@ -13,6 +13,7 @@ import {
   StudioClient,
   type TableDetail,
 } from "../lib/api/studio";
+import { formatCell } from "../lib/format";
 import { setSharedOrigin } from "./connection";
 import {
   mockClaims,
@@ -48,6 +49,51 @@ function hostOf(origin: string): string {
   }
 }
 
+/**
+ * Minimal focus containment for an overlay: focus moves in when it opens,
+ * Tab cycles inside it, and focus returns to the opener when it closes.
+ * The visual is untouched; this is only where the keyboard can go.
+ */
+function useOverlayFocus(active: boolean) {
+  const containerRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (!active) return;
+    const container = containerRef.current;
+    if (container === null) return;
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+
+    const focusables = () =>
+      [...container.querySelectorAll<HTMLElement>('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')]
+        .filter((element) => !element.hasAttribute("disabled"));
+
+    (focusables()[0] ?? container).focus();
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Tab") return;
+      const items = focusables();
+      if (items.length === 0) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    container.addEventListener("keydown", onKeyDown);
+    return () => {
+      container.removeEventListener("keydown", onKeyDown);
+      opener?.focus();
+    };
+  }, [active]);
+
+  return containerRef;
+}
+
 const navigation: StudioScreen[] = ["Simulator", "Policies", "Tables", "Auth", "Storage", "Health"];
 const guidance: Record<StudioScreen, { label: string; copy: string }> = {
   Simulator: { label: "Recommended next", copy: "Run the request as an authenticated user, then compare it with anon access." },
@@ -69,6 +115,9 @@ export default function StudioApp() {
   const [galleryOpen, setGalleryOpen] = useState(false);
   const [toast, setToast] = useState("");
   const [notice, setNotice] = useState("Policy simulation ready.");
+  const paletteFocus = useOverlayFocus(paletteOpen);
+  const dialogFocus = useOverlayFocus(dialogOpen);
+  const galleryFocus = useOverlayFocus(galleryOpen);
 
   const connected = mode !== "connect";
 
@@ -207,7 +256,7 @@ export default function StudioApp() {
 
       {paletteOpen && (
         <div className="palette-backdrop" role="button" tabIndex={0} aria-label="Close command menu" onMouseDown={(event) => { if (event.target === event.currentTarget) setPaletteOpen(false); }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") setPaletteOpen(false); }}>
-          <section className="command-palette" role="dialog" aria-modal="true" aria-label="Command menu">
+          <section className="command-palette" role="dialog" aria-modal="true" aria-label="Command menu" ref={paletteFocus}>
             <input aria-label="Search commands" placeholder="Go to a screen" />
             <div>
               {navigation.map((item) => (
@@ -220,8 +269,8 @@ export default function StudioApp() {
           </section>
         </div>
       )}
-      {dialogOpen && <div className="palette-backdrop" role="button" tabIndex={0} aria-label="Close delete dialog" onMouseDown={(event) => { if (event.target === event.currentTarget) setDialogOpen(false); }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") setDialogOpen(false); }}><section className="confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="delete-title"><span className="dialog-icon">!</span><h2 id="delete-title">Delete this policy?</h2><p>This preview action does not delete real data. In production, requests relying on this policy could change access immediately.</p><div><button className="studio-secondary" type="button" onClick={() => setDialogOpen(false)}>Cancel</button><button className="danger-button" type="button" onClick={() => { setDialogOpen(false); announce("Mock policy deleted. No product data changed."); }}>Delete policy</button></div></section></div>}
-      {galleryOpen && <StateGallery onClose={() => setGalleryOpen(false)} />}
+      {dialogOpen && <div className="palette-backdrop" role="button" tabIndex={0} aria-label="Close delete dialog" onMouseDown={(event) => { if (event.target === event.currentTarget) setDialogOpen(false); }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") setDialogOpen(false); }}><section className="confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="delete-title" ref={dialogFocus}><span className="dialog-icon">!</span><h2 id="delete-title">Delete this policy?</h2><p>This preview action does not delete real data. In production, requests relying on this policy could change access immediately.</p><div><button className="studio-secondary" type="button" onClick={() => setDialogOpen(false)}>Cancel</button><button className="danger-button" type="button" onClick={() => { setDialogOpen(false); announce("Mock policy deleted. No product data changed."); }}>Delete policy</button></div></section></div>}
+      {galleryOpen && <StateGallery onClose={() => setGalleryOpen(false)} sectionRef={galleryFocus} />}
       {toast && <div className="studio-toast" role="status"><span className="status-pulse" />{toast}<button type="button" onClick={() => setToast("")} aria-label="Dismiss notification">×</button></div>}
     </main>
   );
@@ -302,12 +351,29 @@ function LiveSimulatorPanel({ client, live, onNotice }: { client: StudioClient; 
   const [result, setResult] = useState<SimulateResult | null>(null);
   const [refusal, setRefusal] = useState<string | null>(null);
   const [rowsAnswer, setRowsAnswer] = useState<BridgeRows | null>(null);
+  // A 429 sets a deadline from the deployment's Retry-After; the buttons stay
+  // disabled until it passes and the seconds tick down next to them. Never an
+  // automatic retry: the person decides when to press Run again.
+  const [cooldownUntil, setCooldownUntil] = useState(0);
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (cooldownUntil === 0 || cooldownUntil <= Date.now()) return;
+    const timer = window.setInterval(() => {
+      setNow(Date.now());
+      if (Date.now() >= cooldownUntil) setCooldownUntil(0);
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [cooldownUntil]);
+
+  const cooling = cooldownUntil > now;
+  const coolingSeconds = cooling ? Math.max(1, Math.ceil((cooldownUntil - now) / 1000)) : 0;
 
   const chosenTable = table !== "" ? table : (tables[0] ?? "");
   const writesBody = operation === "insert" || operation === "update";
 
   const run = async (asRole: string) => {
-    if (busy) return;
+    if (busy || cooling) return;
     if (chosenTable === "") {
       onNotice("Nothing is exposed yet. Apply a policy document first.");
       return;
@@ -328,6 +394,10 @@ function LiveSimulatorPanel({ client, live, onNotice }: { client: StudioClient; 
 
     if (answer.kind === "error") {
       setBusy(false);
+      if (answer.retryAfterSeconds !== undefined) {
+        setCooldownUntil(Date.now() + answer.retryAfterSeconds * 1000);
+        setNow(Date.now());
+      }
       onNotice(answer.message);
       return;
     }
@@ -385,8 +455,8 @@ function LiveSimulatorPanel({ client, live, onNotice }: { client: StudioClient; 
           {writesBody && <label className="claims-field">Write body<textarea value={bodyText} onChange={(event) => setBodyText(event.target.value)} spellCheck={false} /></label>}
           <label className="claims-field">Bridge key, from npx baseclf studio<textarea rows={1} value={bridgeKey} onChange={(event) => setBridgeKey(event.target.value)} placeholder="Leave empty to compile without rows" spellCheck={false} /></label>
           <div className="panel-actions">
-            <button className="studio-primary" type="button" disabled={busy} onClick={() => void run(role)}>{busy ? "Compiling…" : "Run simulation"}</button>
-            <button className="studio-secondary" type="button" disabled={busy} onClick={() => { setRole("anon"); void run("anon"); }}>Run as anon</button>
+            <button className="studio-primary" type="button" disabled={busy || cooling} onClick={() => void run(role)}>{busy ? "Compiling…" : cooling ? `Rate limited · ${coolingSeconds}s` : "Run simulation"}</button>
+            <button className="studio-secondary" type="button" disabled={busy || cooling} onClick={() => { setRole("anon"); void run("anon"); }}>Run as anon</button>
           </div>
         </section>
 
@@ -409,13 +479,19 @@ function LiveSimulatorPanel({ client, live, onNotice }: { client: StudioClient; 
               ) : rowsAnswer.rows.length === 0 ? (
                 <div><span><strong>No rows for this caller.</strong><small>Either there are none, or none are theirs. The engine answers both the same way on purpose.</small></span></div>
               ) : (
-                rowsAnswer.rows.map((row, index) => (
-                  <div key={String(row.id ?? index)}>
-                    <code>{String(row.id ?? index)}</code>
-                    <span><strong>{String(row.title ?? row.name ?? Object.values(row)[1] ?? "")}</strong><small>{Object.entries(row).filter(([column]) => column !== "id" && column !== "title").slice(0, 3).map(([column, value]) => `${column}: ${String(value)}`).join(" · ")}</small></span>
-                    <span className="result-verdict allow">Visible</span>
-                  </div>
-                ))
+                rowsAnswer.rows.map((row, index) => {
+                  const parts = Object.entries(row)
+                    .filter(([column]) => column !== "id" && column !== "title")
+                    .slice(0, 3)
+                    .map(([column, value]) => ({ column, cell: formatCell(column, value) }));
+                  return (
+                    <div key={String(row.id ?? index)}>
+                      <code>{formatCell("id", row.id ?? index).text}</code>
+                      <span><strong>{formatCell("title", row.title ?? row.name ?? Object.values(row)[1] ?? "").text}</strong><small title={parts.map((part) => `${part.column}: ${part.cell.title ?? part.cell.text}`).join(" · ")}>{parts.map((part) => `${part.column}: ${part.cell.text}`).join(" · ")}</small></span>
+                      <span className="result-verdict allow">Visible</span>
+                    </div>
+                  );
+                })
               )}
             </div>
             <footer><span>Decided by</span>{(result?.policies ?? []).map((name) => <code key={name}>{name}</code>)}</footer>
@@ -681,7 +757,7 @@ function HealthScreen() {
   return <div><ScreenTitle kicker="Operational record" title="Health" description="Review usage and policy warnings. Values remain mock data until telemetry contracts are approved." action={<span className="mock-badge">Mock data</span>} /><div className="metric-grid">{metrics.map(([label, value]) => <article key={label}><span>{label}</span><strong>{value}</strong><small>{mockHealth.period}</small></article>)}</div><div className="health-grid"><section className="full-panel"><header><span>Rows read and written</span><span>{mockHealth.period}</span></header><div className="mock-chart" aria-label="Mock seven-day activity chart">{[42,68,54,82,61,74,47].map((height, index) => <div key={index}><i style={{ height: `${height}%` }} /><span>Day {index + 1}</span></div>)}</div></section><section className="full-panel"><header><span>Attention required</span><span>2 items</span></header><div className="issue-list"><div><span className="state-label attention">Index</span><p><strong>posts.author_id</strong><small>Policy scans an unindexed column.</small></p></div><div><span className="state-label attention">Config</span><p><strong>Email provider disabled</strong><small>Passwordless email cannot send sign-in links.</small></p></div></div></section></div></div>;
 }
 
-function StateGallery({ onClose }: { onClose: () => void }) {
+function StateGallery({ onClose, sectionRef }: { onClose: () => void; sectionRef: RefObject<HTMLElement | null> }) {
   const states = [
     ["Loading", "Three restrained skeleton rows indicate pending data."],
     ["Empty", "No records yet. The primary action stays visible."],
@@ -689,5 +765,5 @@ function StateGallery({ onClose }: { onClose: () => void }) {
     ["Permission", "The user can see the boundary without seeing protected data."],
     ["Success", "A concise confirmation appears as a dismissible toast."],
   ];
-  return <div className="palette-backdrop state-gallery-backdrop" role="button" tabIndex={0} aria-label="Close state gallery" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") onClose(); }}><section className="state-gallery" role="dialog" aria-modal="true" aria-labelledby="gallery-title"><header><div><span className="machine-label">Shared system</span><h2 id="gallery-title">Interface states</h2></div><button type="button" onClick={onClose}>Close</button></header><div>{states.map(([title, description], index) => <article key={title}><span className={`gallery-state gallery-${index}`}>{index === 0 ? <><i /><i /><i /></> : index === 1 ? "0" : index === 2 ? "!" : index === 3 ? "×" : "✓"}</span><h3>{title}</h3><p>{description}</p></article>)}</div></section></div>;
+  return <div className="palette-backdrop state-gallery-backdrop" role="button" tabIndex={0} aria-label="Close state gallery" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") onClose(); }}><section className="state-gallery" role="dialog" aria-modal="true" aria-labelledby="gallery-title" ref={sectionRef}><header><div><span className="machine-label">Shared system</span><h2 id="gallery-title">Interface states</h2></div><button type="button" onClick={onClose}>Close</button></header><div>{states.map(([title, description], index) => <article key={title}><span className={`gallery-state gallery-${index}`}>{index === 0 ? <><i /><i /><i /></> : index === 1 ? "0" : index === 2 ? "!" : index === 3 ? "×" : "✓"}</span><h3>{title}</h3><p>{description}</p></article>)}</div></section></div>;
 }
