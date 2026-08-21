@@ -4,8 +4,10 @@ import { FormEvent, ReactNode, useEffect, useState } from "react";
 import Link from "next/link";
 import ThemeToggle from "../ThemeToggle";
 import {
+  type BridgeRows,
   type LintFinding,
   type PolicyTable,
+  runOnBridge,
   type SimulateResult,
   StudioClient,
 } from "../lib/api/studio";
@@ -286,9 +288,11 @@ function LiveSimulatorPanel({ client, live, onNotice }: { client: StudioClient; 
   const [role, setRole] = useState("authenticated");
   const [claimsText, setClaimsText] = useState('{ "uid": "u_demo" }');
   const [bodyText, setBodyText] = useState('{ "title": "edited" }');
+  const [bridgeKey, setBridgeKey] = useState("");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<SimulateResult | null>(null);
   const [refusal, setRefusal] = useState<string | null>(null);
+  const [rowsAnswer, setRowsAnswer] = useState<BridgeRows | null>(null);
 
   const chosenTable = table !== "" ? table : (tables[0] ?? "");
   const writesBody = operation === "insert" || operation === "update";
@@ -312,20 +316,39 @@ function LiveSimulatorPanel({ client, live, onNotice }: { client: StudioClient; 
 
     setBusy(true);
     const answer = await client.simulate({ table: chosenTable, operation, role: asRole, claims, body });
-    setBusy(false);
 
     if (answer.kind === "error") {
+      setBusy(false);
       onNotice(answer.message);
       return;
     }
     if (answer.kind === "refusal") {
+      setBusy(false);
       setResult(null);
+      setRowsAnswer(null);
       setRefusal(answer.message);
       onNotice(`Refused for role ${asRole}. Refusals are an answer here, not a failure.`);
       return;
     }
     setRefusal(null);
     setResult(answer.data);
+
+    // Rows come from the local bridge, never from the deployment's simulator:
+    // the tool does not touch data, and the bridge runs the read with the
+    // operator's own credential on the operator's own machine (decision Q3).
+    if (operation === "select" && bridgeKey.trim() !== "") {
+      const rows = await runOnBridge(bridgeKey.trim(), { table: chosenTable, role: asRole, claims });
+      if (rows.kind === "data") {
+        setRowsAnswer(rows.data);
+      } else {
+        setRowsAnswer(null);
+        onNotice(rows.message);
+      }
+    } else {
+      setRowsAnswer(null);
+    }
+
+    setBusy(false);
     onNotice(`Compiled for role ${asRole}: ${answer.data.policies.length} matching ${answer.data.policies.length === 1 ? "policy" : "policies"}.`);
   };
 
@@ -351,6 +374,7 @@ function LiveSimulatorPanel({ client, live, onNotice }: { client: StudioClient; 
           </div>
           <label className="claims-field">JWT claims<textarea value={role === "anon" ? "{}" : claimsText} readOnly={role === "anon"} onChange={(event) => setClaimsText(event.target.value)} spellCheck={false} /></label>
           {writesBody && <label className="claims-field">Write body<textarea value={bodyText} onChange={(event) => setBodyText(event.target.value)} spellCheck={false} /></label>}
+          <label className="claims-field">Bridge key, from npx baseclf studio<textarea rows={1} value={bridgeKey} onChange={(event) => setBridgeKey(event.target.value)} placeholder="Leave empty to compile without rows" spellCheck={false} /></label>
           <div className="panel-actions">
             <button className="studio-primary" type="button" disabled={busy} onClick={() => void run(role)}>{busy ? "Compiling…" : "Run simulation"}</button>
             <button className="studio-secondary" type="button" disabled={busy} onClick={() => { setRole("anon"); void run("anon"); }}>Run as anon</button>
@@ -369,9 +393,21 @@ function LiveSimulatorPanel({ client, live, onNotice }: { client: StudioClient; 
 
         {mode === "results" && (
           <section className="studio-panel results-panel">
-            <header><span>Result</span><span>local Studio</span></header>
+            <header><span>Result</span><span>{rowsAnswer === null ? "local bridge" : `${rowsAnswer.rows.length} row(s), ${rowsAnswer.rowsRead ?? "?"} scanned`}</span></header>
             <div className="result-list">
-              <div><span><strong>This preview compiles without touching data.</strong><small>Row execution arrives with the local Studio, which runs the statement with your own credential on your own machine.</small></span></div>
+              {rowsAnswer === null ? (
+                <div><span><strong>The deployment compiles without touching data.</strong><small>Rows come from the local bridge: run npx baseclf studio, paste its key on the left, and rerun. Your credential stays on your machine.</small></span></div>
+              ) : rowsAnswer.rows.length === 0 ? (
+                <div><span><strong>No rows for this caller.</strong><small>Either there are none, or none are theirs. The engine answers both the same way on purpose.</small></span></div>
+              ) : (
+                rowsAnswer.rows.map((row, index) => (
+                  <div key={String(row.id ?? index)}>
+                    <code>{String(row.id ?? index)}</code>
+                    <span><strong>{String(row.title ?? row.name ?? Object.values(row)[1] ?? "")}</strong><small>{Object.entries(row).filter(([column]) => column !== "id" && column !== "title").slice(0, 3).map(([column, value]) => `${column}: ${String(value)}`).join(" · ")}</small></span>
+                    <span className="result-verdict allow">Visible</span>
+                  </div>
+                ))
+              )}
             </div>
             <footer><span>Decided by</span>{(result?.policies ?? []).map((name) => <code key={name}>{name}</code>)}</footer>
           </section>

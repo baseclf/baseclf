@@ -205,3 +205,57 @@ export class StudioClient {
     return this.#call("policy_lint", {});
   }
 }
+
+/** What one bridge run returns: real rows, and what reading them scanned. */
+export interface BridgeRows {
+  readonly rows: readonly Record<string, unknown>[];
+  readonly rowsRead?: number | null;
+  readonly limit?: number;
+}
+
+/** Where `npx baseclf studio` listens. Loopback only, by that command's design. */
+export const BRIDGE_URL = "http://127.0.0.1:4000";
+
+/**
+ * Ask the local bridge what this caller would be shown.
+ *
+ * The bridge takes the simulate input, never SQL: it compiles and runs the read
+ * itself with the operator's own credential, on the operator's own machine. The
+ * key it printed at startup rides on every request and lives in page memory
+ * only, like the admin token.
+ */
+export async function runOnBridge(
+  key: string,
+  input: { table: string; role: string; claims?: { uid?: string; email?: string } },
+): Promise<ToolAnswer<BridgeRows>> {
+  let response: Response;
+  try {
+    response = await fetch(`${BRIDGE_URL}/run`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-bridge-key": key },
+      body: JSON.stringify(input),
+    });
+  } catch {
+    return {
+      kind: "error",
+      message: "The bridge could not be reached. Is npx baseclf studio running?",
+    };
+  }
+
+  if (response.status === 401) {
+    return { kind: "error", message: "The bridge refused the key." };
+  }
+
+  let body: { rows?: Record<string, unknown>[]; rowsRead?: number | null; limit?: number; refusal?: string; error?: string };
+  try {
+    body = (await response.json()) as typeof body;
+  } catch {
+    return { kind: "error", message: `The bridge answered ${response.status} without a body.` };
+  }
+
+  if (body.refusal !== undefined) return { kind: "refusal", message: body.refusal };
+  if (body.rows !== undefined) {
+    return { kind: "data", data: { rows: body.rows, rowsRead: body.rowsRead, limit: body.limit } };
+  }
+  return { kind: "error", message: body.error ?? `The bridge answered ${response.status}.` };
+}
