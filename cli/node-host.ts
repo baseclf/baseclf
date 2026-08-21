@@ -145,27 +145,44 @@ function readTypedLine(): Promise<string> {
  * them, which is the kind of tidiness that costs a reader their confidence at the
  * first prompt of the product.
  */
+/**
+ * 🔴 What one question read but did not consume, kept for the next question.
+ *
+ * A pipe delivers every answer in one chunk. The first version of the reader
+ * sliced its line off that chunk and dropped the remainder, so the SECOND
+ * prompt of a scripted run saw only end-of-file and silently took its
+ * default. Measured against a real provisioning run on 2026-08-21: the
+ * project name applied and the frontend origin did not, which is exactly the
+ * kind of half-applied answer that looks like success.
+ */
+let pendingInput = '';
+
 function readEchoedLine(prompt: string): Promise<string> {
   process.stdout.write(prompt);
 
   return new Promise((resolve) => {
     process.stdin.setEncoding('utf8');
-    process.stdin.resume();
-
-    let value = '';
 
     const finish = (line: string): void => {
       process.stdin.off('data', onData);
       process.stdin.off('end', onEnd);
       process.stdin.pause();
-      resolve(line);
+      resolve(line.replace(/\r$/, ''));
+    };
+
+    /** Take one full line from the shared buffer, leaving the rest behind. */
+    const consumeBufferedLine = (): boolean => {
+      const newline = pendingInput.indexOf('\n');
+      if (newline === -1) return false;
+      const line = pendingInput.slice(0, newline);
+      pendingInput = pendingInput.slice(newline + 1);
+      finish(line);
+      return true;
     };
 
     const onData = (chunk: string): void => {
-      value += chunk;
-      const newline = value.indexOf('\n');
-      if (newline === -1) return;
-      finish(value.slice(0, newline).replace(/\r$/, ''));
+      pendingInput += chunk;
+      consumeBufferedLine();
     };
 
     // 🔴 End of file has to resolve, and the first version of this had no handler for
@@ -181,9 +198,24 @@ function readEchoedLine(prompt: string): Promise<string> {
     // defaults, which is what somebody scripting it means. Anything unusable still
     // runs out of attempts and stops.
     const onEnd = (): void => {
-      finish(value.replace(/\r?\n$/, ''));
+      const line = pendingInput;
+      pendingInput = '';
+      finish(line.replace(/\r?\n$/, ''));
     };
 
+    // An earlier chunk may already hold this answer, and stdin may already be
+    // closed, so the buffer is tried before any listener is attached.
+    if (consumeBufferedLine()) return;
+
+    // 'end' fires once. If it already fired while a previous question was
+    // listening, waiting for it again would wait forever; whatever is left in
+    // the buffer is the whole answer.
+    if (process.stdin.readableEnded) {
+      onEnd();
+      return;
+    }
+
+    process.stdin.resume();
     process.stdin.on('data', onData);
     process.stdin.on('end', onEnd);
   });
