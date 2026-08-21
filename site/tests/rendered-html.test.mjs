@@ -190,6 +190,12 @@ test("ships the guided motion system and real product captures", async () => {
   const studioApp = await readFile(new URL("../app/studio/StudioApp.tsx", import.meta.url), "utf8");
   assert.match(studioApp, /First deployment\?/);
   assert.match(studioApp, /npx create-baseclf/);
+  // The wizard's promise, pinned: every check mark is a real round trip, the
+  // token stays out of the downloaded notes unless explicitly included, and
+  // the flow ends in a download plus a connect that reuses the proven client.
+  assert.match(studioApp, /Step 1 of 3/);
+  assert.match(studioApp, /Download setup notes/);
+  assert.match(studioApp, /includeToken \? wizard\.token : /);
 
   assert.match(home, /The operational suite/);
   assert.match(home, /name="overview"/);

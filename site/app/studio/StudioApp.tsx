@@ -208,8 +208,11 @@ export default function StudioApp() {
   }, []);
 
   return (
-    <main className="studio-root" data-density="compact">
-      <aside className={`studio-sidebar ${menuOpen ? "is-mobile-open" : ""}`} aria-label="Studio navigation">
+    <main className={`studio-root${connected ? "" : " is-connecting"}`} data-density="compact">
+      {/* The full navigation is noise for somebody who has not connected yet:
+          during the connect flow the sidebar goes away and the flow gets the
+          whole width. */}
+      {connected && <aside className={`studio-sidebar ${menuOpen ? "is-mobile-open" : ""}`} aria-label="Studio navigation">
         <Link className="studio-brand" href="/" aria-label="BaseCLF landing page">
           <span className="brand-mark" aria-hidden="true"><span /></span>
           <span>baseclf</span>
@@ -239,7 +242,7 @@ export default function StudioApp() {
           <button type="button" onClick={() => setGalleryOpen(true)}>State gallery <span>↗</span></button>
           <a href="/docs">Documentation <span>↗</span></a>
         </div>
-      </aside>
+      </aside>}
 
       <section className="studio-workspace">
         <div className="studio-ambient" aria-hidden="true" />
@@ -262,7 +265,7 @@ export default function StudioApp() {
         <div className="studio-content">
           {connected && <aside className="studio-guide"><span>{guidance[screen].label}</span><p>{guidance[screen].copy}</p>{mode === "demo" && <button type="button" onClick={() => setMode("connect")}>Connect live →</button>}<button type="button" onClick={() => setPaletteOpen(true)}>Show actions <kbd>⌘K</kbd></button></aside>}
           <div className="studio-screen-stage" key={connected ? `${mode}-${screen}` : "connect"}>{!connected ? (
-              <ConnectPanel onConnected={beginLive} onDemo={() => setMode("demo")} onNotice={announce} />
+              <ConnectFlow onConnected={beginLive} onDemo={() => setMode("demo")} onNotice={announce} onBridgeKey={setBridgeKey} />
             ) : screen === "Simulator" ? (
               <SimulatorPanel client={mode === "live" ? client : null} live={live} bridgeKey={bridgeKey} onBridgeKey={setBridgeKey} onNotice={announce} />
             ) : (
@@ -299,84 +302,361 @@ export default function StudioApp() {
   );
 }
 
+/** What the wizard has collected and PROVEN so far. Page memory only. */
+interface WizardState {
+  readonly url: string;
+  /** Set by a real GET /health round trip, never by typing. */
+  readonly version: string | null;
+  readonly token: string;
+  /** Set by a real tools/list round trip with the token. */
+  readonly client: StudioClient | null;
+  readonly bridgeKey: string;
+  readonly bridge: "unchecked" | "ok" | "skipped";
+}
+
+const EMPTY_WIZARD: WizardState = {
+  url: "",
+  version: null,
+  token: "",
+  client: null,
+  bridgeKey: "",
+  bridge: "unchecked",
+};
+
+type ConnectStage = "choice" | "create" | "token" | "bridge" | "summary" | "direct";
+
 /**
- * The three real steps from nothing to connected, with the one trap named:
- * the deployment only answers browsers from origins it trusts, so the create
- * prompt's "Frontend origin" has to be this page's origin. Every command is
- * the product's own; nothing here invents a flow.
+ * A terminal window showing what the command really prints. Every line is
+ * copied from a real run against real infrastructure, with only the
+ * deployment address and the session key genericized; nothing is invented,
+ * because the point of showing a terminal is that it matches the one the
+ * person is about to see.
  */
-function ConnectSetupGuide({ onNotice }: { onNotice: (message: string) => void }) {
-  const copy = (value: string) => {
-    void navigator.clipboard?.writeText(value);
-    onNotice("Command copied.");
-  };
+function TerminalShot({ command, lines }: { command: string; lines: readonly string[] }) {
   return (
-    <div className="connect-setup">
-      <header><span>First deployment?</span><small>Three commands, your own Cloudflare account</small></header>
-      <ol>
-        <li>
-          <strong>Create it.</strong> One command provisions the database, the bucket and the Worker, then prints your deployment URL. When it asks for the <strong>Frontend origin</strong>, enter this page&apos;s origin so the deployment trusts your browser.
-          <div><code>npx create-baseclf</code><button type="button" onClick={() => copy("npx create-baseclf")}>Copy</button></div>
-        </li>
-        <li>
-          <strong>Set the admin token.</strong> It is the MCP_TOKEN secret on your Worker, and it is what this form calls the admin token. Pick any strong value; you will paste the same value below.
-          <div><code>npx wrangler secret put MCP_TOKEN --name baseclf</code><button type="button" onClick={() => copy("npx wrangler secret put MCP_TOKEN --name baseclf")}>Copy</button></div>
-        </li>
-        <li>
-          <strong>Connect.</strong> Paste the printed URL and that token into the form here. Rows and policy editing additionally use the local bridge, started with:
-          <div><code>npx baseclf studio</code><button type="button" onClick={() => copy("npx baseclf studio")}>Copy</button></div>
-        </li>
-      </ol>
-    </div>
+    <figure className="wizard-terminal" aria-label={`What ${command} prints`}>
+      <figcaption><i /><i /><i /><span>Terminal</span></figcaption>
+      <pre><code>{`$ ${command}\n${lines.join("\n")}`}</code></pre>
+    </figure>
   );
 }
 
-function ConnectPanel({ onConnected, onDemo, onNotice }: { onConnected: (client: StudioClient) => void; onDemo: () => void; onNotice: (message: string) => void }) {
-  const [url, setUrl] = useState("");
-  const [token, setToken] = useState("");
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
+const CREATE_OUTPUT: readonly string[] = [
+  "Project name",
+  "  Names the database, the bucket and the Worker on your account.",
+  "  [baseclf]",
+  "Frontend origin",
+  "  Where your app runs. Without it the browser blocks every call to this API.",
+  "  [http://localhost:3000] https://baseclf.dev",
+  "✓ Check the Cloudflare login",
+  "✓ Create the database",
+  "✓ Create the bucket",
+  "✓ Claim the workers.dev subdomain",
+  "✓ Upload the Worker",
+  "✓ Set the signing secret",
+  "✓ Turn on the workers.dev route",
+  "✓ Set the scheduled work",
+  "✓ Wait for the address to answer",
+  "",
+  "  Check: npx baseclf doctor https://your-project.your-subdomain.workers.dev",
+];
 
-  /**
-   * The connection test is a real round trip: tools/list against the deployment.
-   * There is no token format to check locally, because the admin token is
-   * whatever MCP_TOKEN the operator set; only the deployment knows it.
-   */
-  const submit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
+const SECRET_OUTPUT: readonly string[] = [
+  '\u{1F300} Creating the secret for the Worker "baseclf"',
+  "✨ Success! Uploaded secret MCP_TOKEN",
+];
+
+const STUDIO_OUTPUT: readonly string[] = [
+  "✓ The result bridge is listening on 127.0.0.1:4000.",
+  "Paste this key into the Result panel of the Studio simulator:",
+  "",
+  "00000000-0000-4000-8000-000000000000",
+  "",
+  "  Reads, plus the policy documents you apply. On this machine only.",
+];
+
+/**
+ * The connect flow, one screen per decision. Every check mark is a real round
+ * trip (health, tools/list, a bridge read); Next stays dark until the step
+ * proved itself, and the summary offers the collected setup as a download —
+ * without the token unless the person explicitly includes it.
+ */
+function ConnectFlow({ onConnected, onDemo, onNotice, onBridgeKey }: { onConnected: (client: StudioClient) => void; onDemo: () => void; onNotice: (message: string) => void; onBridgeKey: (key: string) => void }) {
+  const [stage, setStage] = useState<ConnectStage>("choice");
+  const [wizard, setWizard] = useState<WizardState>(EMPTY_WIZARD);
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState("");
+  const [includeToken, setIncludeToken] = useState(false);
+  // Safe to read lazily: this component only ever mounts client-side, after a
+  // person chose Connect (or the ?connect deep link fired post-hydration).
+  const [pageOrigin] = useState(() => (typeof window === "undefined" ? "" : window.location.origin));
+
+  // The project name is the first label only on a workers.dev address, which
+  // is what create-baseclf hands out. Anything else (an IP, localhost, a
+  // custom domain) falls back to the CLI's own default rather than guessing:
+  // the first label of 127.0.0.1 is "127", measured on this very screen.
+  const project = (() => {
+    try {
+      const host = new URL(wizard.url).hostname;
+      return host.endsWith(".workers.dev") ? host.split(".")[0] || "baseclf" : "baseclf";
+    } catch {
+      return "baseclf";
+    }
+  })();
+
+  const copy = (value: string) => {
+    void navigator.clipboard?.writeText(value);
+    onNotice("Copied.");
+  };
+
+  const go = (next: ConnectStage) => {
+    setProblem("");
+    setStage(next);
+  };
+
+  const checkUrl = async () => {
     if (busy) return;
     setBusy(true);
-    setError("");
-    const candidate = new StudioClient(url, token);
+    setProblem("");
+    const target = wizard.url.trim().replace(/\/+$/, "");
+    try {
+      const response = await fetch(`${target}/health`, { headers: { accept: "application/json" } });
+      const body = (await response.json()) as { status?: string; version?: string };
+      if (response.ok && body.status === "ok") {
+        setWizard({ ...wizard, url: target, version: String(body.version ?? "unknown") });
+      } else {
+        setProblem(`That address answered ${response.status} without a health report.`);
+      }
+    } catch {
+      setProblem("Could not reach that address. Check the URL, that the create run finished, and that you answered the Frontend origin prompt with exactly this page's origin.");
+    }
+    setBusy(false);
+  };
+
+  const checkToken = async () => {
+    if (busy) return;
+    setBusy(true);
+    setProblem("");
+    const candidate = new StudioClient(wizard.url, wizard.token);
     const answer = await candidate.connect();
     setBusy(false);
     if ("error" in answer) {
-      setError(answer.error);
+      setProblem(answer.error);
+      return;
+    }
+    setWizard({ ...wizard, client: candidate });
+  };
+
+  const checkBridge = async () => {
+    if (busy) return;
+    setBusy(true);
+    setProblem("");
+    const key = wizard.bridgeKey.trim();
+    const answer = await readDocumentOnBridge(key, "__wizard_ping__");
+    setBusy(false);
+    if (answer.kind !== "data") {
+      setProblem(answer.message);
+      return;
+    }
+    setWizard({ ...wizard, bridgeKey: key, bridge: "ok" });
+    onBridgeKey(key);
+  };
+
+  const download = () => {
+    const lines = [
+      "# BaseCLF setup notes",
+      "",
+      `Deployment URL: ${wizard.url}`,
+      `Project name:   ${project}`,
+      `Version seen:   ${wizard.version ?? "unchecked"}`,
+      `Trusted origin: ${pageOrigin}`,
+      `Admin token:    ${includeToken ? wizard.token : "<your MCP_TOKEN — fill in yourself if you want it stored>"}`,
+      `Bridge:         ${wizard.bridge === "ok" ? "verified on this machine" : "skipped"}`,
+      "",
+      "## The commands, for next time",
+      "",
+      "Create or update the deployment:",
+      "    npx create-baseclf",
+      "",
+      "Set or rotate the admin token:",
+      `    npx wrangler secret put MCP_TOKEN --name ${project}`,
+      "",
+      "Start the local bridge for rows and policy editing:",
+      `    npx baseclf studio --project ${project}`,
+      "",
+      "Open the Studio:",
+      `    ${pageOrigin}/studio?connect=1`,
+      "",
+    ];
+    const blob = new Blob([lines.join("\n")], { type: "text/markdown" });
+    const anchor = document.createElement("a");
+    anchor.href = URL.createObjectURL(blob);
+    anchor.download = "baseclf-setup.md";
+    anchor.click();
+    URL.revokeObjectURL(anchor.href);
+    onNotice(includeToken ? "Downloaded, with the token inside. Treat the file as a secret." : "Downloaded. The token line is left for you to fill in.");
+  };
+
+  const directSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (busy) return;
+    setBusy(true);
+    setProblem("");
+    const candidate = new StudioClient(wizard.url, wizard.token);
+    const answer = await candidate.connect();
+    setBusy(false);
+    if ("error" in answer) {
+      setProblem(answer.error);
       return;
     }
     onConnected(candidate);
   };
 
+  if (stage === "choice") {
+    return (
+      <div className="wizard">
+        <section className="connect-copy">
+          <p className="section-kicker">Live connection</p>
+          <h2>Connect Studio to your Worker.</h2>
+          <p>Everything is sent directly to your own deployment and held in this page&apos;s memory only. BaseCLF has no servers in between.</p>
+          <dl>
+            <div><dt>Transport</dt><dd>HTTPS to your Worker</dd></div>
+            <div><dt>Credential storage</dt><dd>This page, in memory</dd></div>
+            <div><dt>BaseCLF servers</dt><dd>Not involved</dd></div>
+          </dl>
+        </section>
+        <div className="wizard-actions">
+          <button className="studio-primary" type="button" onClick={() => go("create")}>First deployment? Set up step by step</button>
+          <button className="studio-secondary" type="button" onClick={() => go("direct")}>I already have a deployment</button>
+          <button className="studio-secondary" type="button" onClick={onDemo}>Open demo workspace</button>
+        </div>
+      </div>
+    );
+  }
+
+  if (stage === "direct") {
+    return (
+      <div className="wizard">
+        <section className="connect-copy">
+          <p className="section-kicker">Live connection</p>
+          <h2>Connect Studio to your Worker.</h2>
+          <p>The token is the MCP_TOKEN secret you set on the deployment. This page&apos;s origin has to be in the deployment&apos;s trusted origins.</p>
+        </section>
+        <form className="connect-form" onSubmit={directSubmit}>
+          <label>Worker URL<input type="url" value={wizard.url} onChange={(event) => setWizard({ ...wizard, url: event.target.value })} placeholder="https://your-project.your-subdomain.workers.dev" required /></label>
+          <label>Admin token<input type="password" value={wizard.token} onChange={(event) => setWizard({ ...wizard, token: event.target.value })} placeholder="The MCP_TOKEN secret" aria-describedby={problem ? "token-error" : undefined} required /></label>
+          {problem !== "" && <p className="form-error" id="token-error">{problem}</p>}
+          <button className="studio-primary" type="submit" disabled={busy}>{busy ? "Connecting…" : "Connect Studio"}</button>
+          <button className="studio-secondary" type="button" onClick={() => go("choice")}>Back</button>
+        </form>
+      </div>
+    );
+  }
+
+  if (stage === "create") {
+    return (
+      <div className="wizard">
+        <p className="wizard-progress">Step 1 of 3 · Create the deployment</p>
+        <section className="wizard-card">
+          <h3>One command creates everything.</h3>
+          <p>It provisions the database, the bucket and the Worker on your own Cloudflare account, then <strong>prints your deployment URL</strong>. It asks two questions: a project name, and the <strong>Frontend origin</strong>. Answer the second with exactly this page&apos;s origin, or the deployment will refuse this browser.</p>
+          <div className="wizard-command"><code>npx create-baseclf</code><button type="button" onClick={() => copy("npx create-baseclf")}>Copy</button></div>
+          <div className="wizard-command"><code>{pageOrigin}</code><button type="button" onClick={() => copy(pageOrigin)}>Copy origin</button></div>
+          <TerminalShot command="npx create-baseclf" lines={CREATE_OUTPUT} />
+          <p className="form-help">This is what a successful run prints, from a real one. If yours shows a ✗ or stops early, that line is the thing to fix before going on.</p>
+          <label className="wizard-field">Paste the deployment URL it printed<input type="url" value={wizard.url} onChange={(event) => setWizard({ ...wizard, url: event.target.value, version: null })} placeholder="https://your-project.your-subdomain.workers.dev" /></label>
+          {wizard.version !== null ? (
+            <p className="wizard-verified"><span className="state-label active">Verified</span> The deployment answers, running version {wizard.version}.</p>
+          ) : problem !== "" ? (
+            <p className="form-error">{problem}</p>
+          ) : (
+            <p className="form-help">Check makes a real request to /health. Nothing advances on trust.</p>
+          )}
+          <div className="wizard-actions">
+            <button className="studio-secondary" type="button" onClick={() => go("choice")}>Back</button>
+            <button className="studio-secondary" type="button" disabled={busy || wizard.url.trim() === ""} onClick={() => void checkUrl()}>{busy ? "Checking…" : "Check"}</button>
+            <button className="studio-primary" type="button" disabled={wizard.version === null} onClick={() => go("token")}>Next</button>
+          </div>
+        </section>
+      </div>
+    );
+  }
+
+  if (stage === "token") {
+    return (
+      <div className="wizard">
+        <p className="wizard-progress">Step 2 of 3 · Set the admin token</p>
+        <section className="wizard-card">
+          <h3>The one credential, on your own Worker.</h3>
+          <p>Pick any strong value and set it as the MCP_TOKEN secret. It is what unlocks the management surface of your deployment, and it never leaves this page&apos;s memory.</p>
+          <div className="wizard-command"><code>npx wrangler secret put MCP_TOKEN --name {project}</code><button type="button" onClick={() => copy(`npx wrangler secret put MCP_TOKEN --name ${project}`)}>Copy</button></div>
+          <TerminalShot command={`npx wrangler secret put MCP_TOKEN --name ${project}`} lines={SECRET_OUTPUT} />
+          <p className="form-help">Yours should end on the Success line. It does not echo the value you typed, which is correct.</p>
+          <label className="wizard-field">Paste the same value here<input type="password" value={wizard.token} onChange={(event) => setWizard({ ...wizard, token: event.target.value, client: null })} placeholder="The MCP_TOKEN secret you just set" /></label>
+          {wizard.client !== null ? (
+            <p className="wizard-verified"><span className="state-label active">Verified</span> The deployment accepted the token.</p>
+          ) : problem !== "" ? (
+            <p className="form-error">{problem}</p>
+          ) : (
+            <p className="form-help">Check makes a real tools/list call with the token.</p>
+          )}
+          <div className="wizard-actions">
+            <button className="studio-secondary" type="button" onClick={() => go("create")}>Back</button>
+            <button className="studio-secondary" type="button" disabled={busy || wizard.token === ""} onClick={() => void checkToken()}>{busy ? "Checking…" : "Check"}</button>
+            <button className="studio-primary" type="button" disabled={wizard.client === null} onClick={() => go("bridge")}>Next</button>
+          </div>
+        </section>
+      </div>
+    );
+  }
+
+  if (stage === "bridge") {
+    return (
+      <div className="wizard">
+        <p className="wizard-progress">Step 3 of 3 · The local bridge, if you want rows</p>
+        <section className="wizard-card">
+          <h3>Rows and policy editing run on your machine.</h3>
+          <p>The bridge holds your Cloudflare credential and answers this page on 127.0.0.1 only. Skipping it is fine: compiling SQL and reading policies work without it.</p>
+          <div className="wizard-command"><code>npx baseclf studio --project {project}</code><button type="button" onClick={() => copy(`npx baseclf studio --project ${project}`)}>Copy</button></div>
+          <TerminalShot command={`npx baseclf studio --project ${project}`} lines={STUDIO_OUTPUT} />
+          <p className="form-help">Yours prints a key of this shape, freshly made for the session. Copy that one, not this example.</p>
+          <label className="wizard-field">Paste the key it prints<input type="text" value={wizard.bridgeKey} onChange={(event) => setWizard({ ...wizard, bridgeKey: event.target.value, bridge: "unchecked" })} placeholder="The session key from the terminal" /></label>
+          {wizard.bridge === "ok" ? (
+            <p className="wizard-verified"><span className="state-label active">Verified</span> The bridge is answering on this machine.</p>
+          ) : problem !== "" ? (
+            <p className="form-error">{problem}</p>
+          ) : (
+            <p className="form-help">Check makes a real request to 127.0.0.1:4000 with the key.</p>
+          )}
+          <div className="wizard-actions">
+            <button className="studio-secondary" type="button" onClick={() => go("token")}>Back</button>
+            <button className="studio-secondary" type="button" disabled={busy || wizard.bridgeKey.trim() === ""} onClick={() => void checkBridge()}>{busy ? "Checking…" : "Check"}</button>
+            <button className="studio-secondary" type="button" onClick={() => { setWizard({ ...wizard, bridge: "skipped" }); go("summary"); }}>Skip</button>
+            <button className="studio-primary" type="button" disabled={wizard.bridge !== "ok"} onClick={() => go("summary")}>Next</button>
+          </div>
+        </section>
+      </div>
+    );
+  }
+
   return (
-    <div className="connect-layout">
-      <section className="connect-copy">
-        <p className="section-kicker">Live connection</p>
-        <h2>Connect Studio to your Worker.</h2>
-        <p>The deployment URL and admin token are sent directly to your Worker and are not stored by BaseCLF. The token is the MCP_TOKEN secret you set on the deployment, and it stays in this page&apos;s memory only.</p>
-        <dl>
-          <div><dt>Transport</dt><dd>HTTPS to your Worker</dd></div>
-          <div><dt>Credential storage</dt><dd>This page, in memory</dd></div>
-          <div><dt>BaseCLF servers</dt><dd>Not involved</dd></div>
-        </dl>
-        <ConnectSetupGuide onNotice={onNotice} />
+    <div className="wizard">
+      <p className="wizard-progress">Done · Everything below was verified, not assumed</p>
+      <section className="wizard-card">
+        <h3>Your setup, checked.</h3>
+        <div className="wizard-summary">
+          <div><dt>Deployment</dt><dd>{wizard.url} <span className="state-label active">version {wizard.version}</span></dd></div>
+          <div><dt>Admin token</dt><dd>{"•".repeat(Math.min(wizard.token.length, 18))} <span className="state-label active">accepted</span></dd></div>
+          <div><dt>Local bridge</dt><dd>{wizard.bridge === "ok" ? <span className="state-label active">answering</span> : <span className="state-label blocked">skipped</span>}</dd></div>
+          <div><dt>Trusted origin</dt><dd>{pageOrigin} <span className="state-label active">proven by the token check</span></dd></div>
+        </div>
+        <label className="wizard-include"><input type="checkbox" checked={includeToken} onChange={(event) => setIncludeToken(event.target.checked)} /> Include the token in the downloaded file. Off, the token line is left for you to fill in.</label>
+        <div className="wizard-actions">
+          <button className="studio-secondary" type="button" onClick={() => go("bridge")}>Back</button>
+          <button className="studio-secondary" type="button" onClick={download}>Download setup notes</button>
+          <button className="studio-primary" type="button" onClick={() => { if (wizard.client !== null) onConnected(wizard.client); }}>Connect</button>
+        </div>
       </section>
-      <form className="connect-form" onSubmit={submit}>
-        <label>Worker URL<input type="url" value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://your-project.your-subdomain.workers.dev" required /></label>
-        <label>Admin token<input type="password" value={token} onChange={(event) => setToken(event.target.value)} placeholder="The MCP_TOKEN secret" aria-describedby={error ? "token-error" : "token-help"} required /></label>
-        {error ? <p className="form-error" id="token-error">{error}</p> : <p className="form-help" id="token-help">This page&apos;s origin has to be in the deployment&apos;s trusted origins.</p>}
-        <button className="studio-primary" type="submit" disabled={busy}>{busy ? "Connecting…" : "Connect Studio"}</button>
-        <button className="studio-secondary" type="button" onClick={onDemo}>Open demo workspace</button>
-      </form>
     </div>
   );
 }

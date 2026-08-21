@@ -95,6 +95,32 @@
 .connect-copy dl { max-width: 560px; margin-top: 34px; border-top: 1px solid var(--line); }
 .connect-copy dl div { min-height: 44px; display: grid; grid-template-columns: 150px 1fr; align-items: center; border-bottom: 1px solid var(--line); }
 .connect-copy dt { color: var(--ink-soft); }
+.studio-root.is-connecting { grid-template-columns: 1fr; }
+.wizard { width: 100%; max-width: 720px; margin: 0 auto; display: grid; gap: 16px; align-content: start; }
+.wizard .connect-copy h2 { max-width: none; }
+.wizard-progress { color: var(--ink-soft); font: 10px var(--font-geist-mono); text-transform: uppercase; letter-spacing: .08em; }
+.wizard-card { padding: 20px; display: grid; gap: 13px; border: 1px solid var(--line); border-radius: 5px; background: var(--paper); }
+.wizard-card h3 { margin: 0; font-size: 21px; font-weight: 450; letter-spacing: -.02em; }
+.wizard-card > p { margin: 0; color: var(--ink-soft); font-size: 12px; line-height: 1.65; }
+.wizard-command { display: flex; align-items: center; gap: 8px; }
+.wizard-command code { padding: 7px 10px; border: 1px solid var(--line); border-radius: 2px; background: var(--canvas); color: var(--ink); font-size: 11px; overflow-wrap: anywhere; }
+.wizard-command button, .wizard-actions button { min-height: 34px; padding: 0 12px; border: 1px solid var(--line); border-radius: 2px; background: transparent; color: var(--ink); font: inherit; font-size: 10px; cursor: pointer; white-space: nowrap; }
+.wizard-command button:hover { border-color: var(--ink); }
+.wizard-field { display: grid; gap: 7px; color: var(--ink-soft); font-size: 11px; }
+.wizard-field input { width: 100%; min-height: 38px; padding: 0 10px; border: 1px solid var(--line); border-radius: 2px; background: var(--canvas); color: var(--ink); font: inherit; }
+.wizard-verified { margin: 0; display: flex; align-items: center; gap: 8px; font-size: 11px; }
+.wizard-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.wizard-actions .studio-primary, .wizard-actions .studio-secondary { min-height: 38px; padding: 0 16px; }
+.wizard-summary { display: grid; border-top: 1px solid var(--line); }
+.wizard-summary > div { min-height: 46px; padding: 6px 0; display: grid; grid-template-columns: 140px 1fr; align-items: center; gap: 10px; border-bottom: 1px solid var(--line); }
+.wizard-summary dt { color: var(--ink-soft); font-size: 11px; }
+.wizard-summary dd { margin: 0; display: flex; align-items: center; gap: 8px; font-size: 11px; overflow-wrap: anywhere; }
+.wizard-include { display: flex; align-items: center; gap: 8px; color: var(--ink-soft); font-size: 11px; }
+.wizard-terminal { margin: 0; border: 1px solid var(--line); border-radius: 5px; overflow: hidden; }
+.wizard-terminal figcaption { min-height: 30px; padding: 0 11px; display: flex; align-items: center; gap: 6px; border-bottom: 1px solid var(--line); background: var(--canvas); }
+.wizard-terminal figcaption i { width: 9px; height: 9px; border-radius: 50%; background: color-mix(in srgb, var(--ink) 18%, transparent); }
+.wizard-terminal figcaption span { margin-left: 6px; color: var(--ink-soft); font: 9px var(--font-geist-mono); text-transform: uppercase; letter-spacing: .08em; }
+.wizard-terminal pre { margin: 0; padding: 13px 14px; overflow-x: auto; background: #15171c; color: #e7e9ed; font: 10.5px/1.7 var(--font-geist-mono); }
 .connect-setup { max-width: 560px; margin-top: 30px; border: 1px solid var(--line); border-radius: 4px; background: var(--paper); }
 .connect-setup > header { min-height: 42px; padding: 0 14px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); font-size: 11px; font-weight: 600; }
 .connect-setup > header small { color: var(--ink-soft); font-weight: 400; }
