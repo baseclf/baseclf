@@ -12,8 +12,9 @@
  */
 
 import { env } from 'cloudflare:workers';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
+import { applyEngineSchema } from '../db/bootstrap.js';
 import type { AuthCtx } from '../policy/types.js';
 import { BaseclfError } from '../utils/errors.js';
 import type { StorageBucketDefinition } from './policy.js';
@@ -24,6 +25,12 @@ interface Bindings {
 }
 
 const bucket = (env as unknown as Bindings).BUCKET;
+
+// The context is no longer allowed to omit its executor (debt 80), so this file
+// carries the real one and the record table it writes into.
+beforeAll(async () => {
+  await applyEngineSchema(env.DB);
+});
 
 const ANN: AuthCtx = { role: 'authenticated', uid: 'u_ann', email: 'ann@test', app: {} };
 const BOB: AuthCtx = { ...ANN, uid: 'u_bob', email: 'bob@test' };
@@ -53,6 +60,7 @@ function context(overrides: Partial<StorageContext> = {}): StorageContext {
     bucketName: 'avatars',
     fileName: 'me.png',
     ...overrides,
+    db: overrides.db ?? env.DB,
   };
 }
 

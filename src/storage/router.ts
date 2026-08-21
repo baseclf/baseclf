@@ -68,12 +68,13 @@ export interface StorageContext {
   /**
    * Where the D1 record of the object goes.
    *
-   * Optional, and only because half the tests here exercise the R2 side with a
-   * fake bucket and have nothing to say about the record. In the worker it is
-   * always present. A missing executor means the record is skipped, never that the
-   * object is skipped, so it cannot become a way to write bytes with no trace.
+   * Required. It used to be optional "for tests", while every context the worker
+   * or a suite actually built carried one, so the only thing the `?` bought was
+   * a representable state in which records are silently skipped on a security
+   * path (debt 80). Never a way to write bytes with no trace, but a state
+   * nothing needs is a state better left unrepresentable.
    */
-  readonly db?: D1Executor;
+  readonly db: D1Executor;
   /** The logical bucket from the path, not the R2 binding. */
   readonly bucketName: string;
   readonly fileName: string;
@@ -242,15 +243,13 @@ export async function uploadObject(
   // truth and D1 follows it, so a failure here leaves an object with no record
   // rather than a record for an object that is not there. The second is worse,
   // because then a join returns a row and the image it points at is a 404.
-  if (context.db !== undefined) {
-    await recordObject(context.db, {
-      key: grant.key,
-      bucket: context.bucketName,
-      auth: context.auth,
-      sizeBytes: length,
-      contentType,
-    });
-  }
+  await recordObject(context.db, {
+    key: grant.key,
+    bucket: context.bucketName,
+    auth: context.auth,
+    sizeBytes: length,
+    contentType,
+  });
 
   // The key is a path built from a verified claim, so it is not caller data, but
   // it is also not interesting enough to log on every upload. The policy name and
@@ -326,9 +325,7 @@ export async function deleteObject(context: StorageContext): Promise<void> {
   // the caller asked for them to be deleted, still downloadable by anyone who
   // knows the key, which is the deletion not having happened.
   await context.bucket.delete(grant.key);
-  if (context.db !== undefined) {
-    await forgetObject(context.db, grant.key);
-  }
+  await forgetObject(context.db, grant.key);
 
   logEvent({
     event: 'storage_write',
