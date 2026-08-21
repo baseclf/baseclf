@@ -922,7 +922,9 @@ async function respond(request: Request, env: Env): Promise<Response> {
       const limited = await enforceRateLimit(request, env, url.pathname);
       if (limited !== null) return limited;
 
-      return await handleMcp(request, env);
+      // The trusted origins ride along so the endpoint's Origin allowlist is
+      // the same list CORS answers for, not a second one that drifts.
+      return await handleMcp(request, env, authConfig(env).trustedOrigins);
     }
 
     const object = storageTargetFromPath(url.pathname);

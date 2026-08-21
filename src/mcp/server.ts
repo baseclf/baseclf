@@ -26,9 +26,17 @@
  * ## Origin
  *
  * The spec makes Origin validation a MUST, against DNS rebinding. `createMcpHandler`
- * does it: `allowedOriginHostnames` defaults to localhost-class origins plus the
- * endpoint's own `workers.dev` hostname. A deployment on a custom domain has to say so,
- * which is why the option is set from the request rather than left out.
+ * does it, and its default allowlist is localhost-class origins plus the endpoint's
+ * own `workers.dev` hostname, which quietly refused every real browser page: the
+ * Studio on its deployed origin got 403 `Invalid Origin` on a request CORS had
+ * already approved. Measured against a live deployment on 2026-08-21, and invisible
+ * until then because every browser test ran from localhost, which the default
+ * happens to cover.
+ *
+ * So the allowlist is passed explicitly, derived from the deployment's trusted
+ * origins: the same list the CORS layer answers for, handed in by the caller so
+ * there is one source of truth rather than a second allowlist that drifts. An
+ * origin the operator has not trusted stays refused, exactly as it is for CORS.
  */
 
 import {
@@ -105,9 +113,24 @@ export function metadataResponse(request: Request): Response | undefined {
  * unauthenticated client discover how to authenticate. Rebuilding that response here
  * would drop the header that makes the endpoint discoverable.
  */
-export async function handleMcp(request: Request, env: McpToolEnv): Promise<Response> {
+export async function handleMcp(
+  request: Request,
+  env: McpToolEnv,
+  trustedOrigins: readonly string[],
+): Promise<Response> {
   const url = new URL(request.url);
   const resource = new URL(`${url.origin}${MCP_ROUTE}`);
+
+  // Hostnames, because that is the SDK's convention for this option. An entry
+  // that does not parse as a URL is skipped rather than fatal: the CORS layer
+  // already ignores it the same way.
+  const trustedHostnames = trustedOrigins.flatMap((origin) => {
+    try {
+      return [new URL(origin).hostname];
+    } catch {
+      return [];
+    }
+  });
 
   const gate = requireBearerAuth({
     verifier: createTokenVerifier(env, resource),
@@ -127,6 +150,10 @@ export async function handleMcp(request: Request, env: McpToolEnv): Promise<Resp
     // `workers.dev` and localhost; a custom domain would otherwise be refused by
     // the Host check with nothing saying why.
     allowedHostnames: [url.hostname],
+    // The browser lane. Passing the option replaces the SDK's localhost-only
+    // default, so the deployment's own hostname rides along for same-origin
+    // pages; everything else is exactly the operator's trusted origins.
+    allowedOriginHostnames: [...new Set([url.hostname, ...trustedHostnames])],
     authContext: { props: { clientId: auth.clientId, scopes: auth.scopes } },
   });
 

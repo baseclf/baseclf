@@ -121,6 +121,59 @@ describe('the gate on /mcp', () => {
     expect(response.status).toBe(401);
   });
 
+  it('admits a browser page from a trusted origin that is not localhost', async () => {
+    // 🔴 The regression this guards was invisible to every earlier test: the SDK's
+    // Origin allowlist defaults to localhost-class origins, every browser test ran
+    // from localhost, and the first page on a real deployed origin got 403 on a
+    // request CORS had already approved. Measured against a live deployment on
+    // 2026-08-21. A non-localhost origin is the whole point of this test.
+    const trusted = {
+      ...configured,
+      BETTER_AUTH_TRUSTED_ORIGINS: 'https://studio.example',
+    } as Env;
+
+    // The full wire shape, because this request has to make it PAST the gate:
+    // a Host header (real HTTP always sends one; a constructed Request does
+    // not, and host validation requires it) and the per-request _meta envelope.
+    const wired = (origin: string, ip: string) =>
+      call(
+        '/mcp',
+        {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            accept: 'application/json, text/event-stream',
+            authorization: `Bearer ${TOKEN}`,
+            host: 'baseclf.test',
+            origin,
+            'MCP-Protocol-Version': '2026-07-28',
+            'Mcp-Method': 'tools/list',
+          },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'tools/list',
+            params: {
+              _meta: {
+                'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+                'io.modelcontextprotocol/clientCapabilities': {},
+              },
+            },
+          }),
+        },
+        trusted,
+        ip,
+      );
+
+    const admitted = await wired('https://studio.example', '203.0.113.209');
+    expect(admitted.status, await admitted.clone().text()).toBe(200);
+
+    // And the allowlist is the trusted origins, not the world: a stranger origin
+    // stays refused even with a valid token.
+    const stranger = await wired('https://stranger.example', '203.0.113.210');
+    expect(stranger.status).toBe(403);
+  });
+
   it('refuses an empty secret, which is the case the explicit check is for', async () => {
     // 🔴 A mutation found this gap. Removing the "is the secret set" check left every
     // test green, because the comparison below it refuses anything that does not match
