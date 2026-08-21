@@ -431,7 +431,15 @@ function ConnectFlow({ onConnected, onDemo, onNotice, onBridgeKey }: { onConnect
         setProblem(`That address answered ${response.status} without a health report.`);
       }
     } catch {
-      setProblem("Could not reach that address. Check the URL, that the create run finished, and that you answered the Frontend origin prompt with exactly this page's origin.");
+      // A CORS refusal and a dead address throw the same TypeError. A no-cors
+      // probe tells them apart: it resolves opaque when the server answered and
+      // only rejects when nothing did, so each failure gets its own fix.
+      try {
+        await fetch(`${target}/health`, { mode: "no-cors" });
+        setProblem(`The deployment is alive, but it does not trust this page's origin, so the browser refuses to read its answers. Re-run npx create-baseclf with the same project name and answer the Frontend origin prompt with ${pageOrigin} — everything already created is kept.`);
+      } catch {
+        setProblem("Could not reach that address. Check the URL, and that the create run finished.");
+      }
     }
     setBusy(false);
   };
