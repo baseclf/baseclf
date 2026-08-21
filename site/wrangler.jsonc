@@ -14,16 +14,20 @@
  */
 {
   "name": "baseclf-site",
+  // One canonical address. Without this, dropping the routes block turns the
+  // workers.dev route back on and the site answers at two hosts.
+  "workers_dev": false,
   "main": "dist/server/index.js",
   "compatibility_date": "2026-07-28",
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "logs": { "enabled": true } },
-  // The product domain. Deploying attaches it as a Workers custom domain,
-  // which also provisions DNS and the certificate on the zone.
-  "routes": [
-    { "pattern": "baseclf.dev", "custom_domain": true },
-    { "pattern": "www.baseclf.dev", "custom_domain": true }
-  ],
+  // baseclf.dev and www.baseclf.dev are attached as Workers custom domains,
+  // done once by deploying with a `routes` block of custom_domain entries.
+  // The block is deliberately absent now: with the domains already on the
+  // zone, a redeploy that carries it makes wrangler list zone routes for
+  // conflicts, and that zone-scoped read is a permission the deploy token
+  // does not hold (Authentication error 10000, measured 2026-08-21). The
+  // domains persist on the zone independently of this file.
   "assets": {
     "directory": "dist/client",
     "binding": "ASSETS"
