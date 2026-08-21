@@ -8,9 +8,10 @@
  * the transport requires, and answers that may arrive as JSON or as an SSE
  * stream, both of which are correct.
  *
- * The admin token lives in this object in memory and nowhere else: not in
- * localStorage, not in a cookie, never in a URL. Closing the tab forgets it,
- * which is the right default for a credential that grants schema reads.
+ * The admin token lives in this object and, once a connection has been proven,
+ * in this tab's sessionStorage so a reload does not sign the person out: never
+ * in localStorage, not in a cookie, never in a URL. Closing the tab forgets
+ * it, which is the right default for a credential that grants schema reads.
  */
 
 const PROTOCOL_VERSION = "2026-07-28";
@@ -137,7 +138,10 @@ export class StudioClient {
 
   constructor(url: string, token: string) {
     this.origin = url.trim().replace(/\/+$/, "");
-    this.#token = token;
+    // Trimmed for the same reason the CLI trims what it reads: a paste often
+    // carries a trailing space, and a bearer token with invisible whitespace
+    // fails every check with nothing anywhere mentioning whitespace.
+    this.#token = token.trim();
   }
 
   async #rpc(method: string, params: Record<string, unknown>): Promise<Response> {

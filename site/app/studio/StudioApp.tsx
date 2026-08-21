@@ -106,6 +106,51 @@ const guidance: Record<StudioScreen, { label: string; copy: string }> = {
   Health: { label: "What matters", copy: "Start with failures, then inspect the request trend." },
 };
 
+/**
+ * The tab's saved session, so a reload does not sign the person out.
+ *
+ * sessionStorage on purpose, and the scope is the decision: it survives F5 in
+ * this tab and is forgotten when the tab closes. Never localStorage - an admin
+ * token on disk with no expiry is a different promise than the one this page
+ * makes. Every reconnect is still proven by a real round trip before anything
+ * trusts it; the stored copy only spares the retyping.
+ */
+const SESSION_KEY = "baseclf-studio-session";
+
+interface StoredSession {
+  readonly url: string;
+  readonly token: string;
+  readonly bridgeKey: string;
+}
+
+function readStoredSession(): StoredSession | null {
+  try {
+    const raw = window.sessionStorage.getItem(SESSION_KEY);
+    if (raw === null) return null;
+    const parsed = JSON.parse(raw) as Partial<StoredSession>;
+    if (typeof parsed.url !== "string" || typeof parsed.token !== "string") return null;
+    return { url: parsed.url, token: parsed.token, bridgeKey: typeof parsed.bridgeKey === "string" ? parsed.bridgeKey : "" };
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredSession(session: StoredSession): void {
+  try {
+    window.sessionStorage.setItem(SESSION_KEY, JSON.stringify(session));
+  } catch {
+    // Storage can be unavailable; the in-memory session still serves this page.
+  }
+}
+
+function clearStoredSession(): void {
+  try {
+    window.sessionStorage.removeItem(SESSION_KEY);
+  } catch {
+    // Nothing stored is nothing to clear.
+  }
+}
+
 export default function StudioApp() {
   const [screen, setScreen] = useState<StudioScreen>("Simulator");
   const [mode, setMode] = useState<StudioMode>("demo");
@@ -118,7 +163,8 @@ export default function StudioApp() {
   const [toast, setToast] = useState("");
   const [notice, setNotice] = useState("Policy simulation ready.");
   // One key for every bridge lane: the simulator's rows and the policies
-  // editor share it, entered once. Page memory only, like the admin token.
+  // editor share it, entered once. It rides with the tab's saved session,
+  // like the admin token.
   const [bridgeKey, setBridgeKey] = useState("");
   const paletteFocus = useOverlayFocus(paletteOpen);
   const dialogFocus = useOverlayFocus(dialogOpen);
@@ -152,12 +198,22 @@ export default function StudioApp() {
     });
   };
 
-  const beginLive = async (nextClient: StudioClient) => {
+  const beginLive = async (nextClient: StudioClient, credentials: { url: string; token: string }) => {
     setClient(nextClient);
     setLive(null);
     setMode("live");
     // The origin only, for Overview and the API Explorer. Never the token.
     setSharedOrigin(nextClient.origin);
+    // The proven pair, kept for this tab so a reload reconnects instead of
+    // signing the person out. Written only after a real round trip accepted it.
+    // A reconnect to the same deployment keeps the bridge key it stored; this
+    // render's closure may still hold the empty initial one.
+    const prior = readStoredSession();
+    writeStoredSession({
+      url: credentials.url,
+      token: credentials.token,
+      bridgeKey: prior !== null && prior.url === credentials.url ? prior.bridgeKey : bridgeKey,
+    });
     announce(`Connected to ${hostOf(nextClient.origin)}.`);
     await loadLive(nextClient);
   };
@@ -173,6 +229,14 @@ export default function StudioApp() {
     setMode("connect");
     setBridgeKey("");
     setSharedOrigin(null);
+    clearStoredSession();
+  };
+
+  /** The bridge key rides with the saved session, so F5 keeps the row lanes too. */
+  const rememberBridgeKey = (key: string) => {
+    setBridgeKey(key);
+    const stored = readStoredSession();
+    if (stored !== null) writeStoredSession({ ...stored, bridgeKey: key });
   };
 
   useEffect(() => {
@@ -201,10 +265,43 @@ export default function StudioApp() {
   // The landing's "Connect live" deep-links here with ?connect=1. Read once
   // after hydration so the server-rendered demo frame stays identical; the
   // microtask keeps the state change out of the effect's synchronous body.
+  //
+  // A session saved in this tab outranks the deep link: the person already
+  // connected once, so a reload reconnects - proven by a fresh round trip,
+  // never by trust in the stored copy. A refusal clears the stored pair and
+  // lands on the connect flow with a notice instead of a silent demo.
   useEffect(() => {
-    if (new URLSearchParams(window.location.search).has("connect")) {
-      queueMicrotask(() => setMode("connect"));
+    const stored = readStoredSession();
+
+    if (stored === null) {
+      if (new URLSearchParams(window.location.search).has("connect")) {
+        queueMicrotask(() => setMode("connect"));
+      }
+      return;
     }
+
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) announce(`Reconnecting to ${hostOf(stored.url)}…`);
+    });
+    void (async () => {
+      const candidate = new StudioClient(stored.url, stored.token);
+      const answer = await candidate.connect();
+      if (cancelled) return;
+      if ("error" in answer) {
+        clearStoredSession();
+        setMode("connect");
+        announce("The saved session no longer connects. Connect again.");
+        return;
+      }
+      setBridgeKey(stored.bridgeKey);
+      await beginLive(candidate, { url: stored.url, token: stored.token });
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // Mount-only by design: the stored session is read once per page load.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (
@@ -268,9 +365,9 @@ export default function StudioApp() {
         <div className="studio-content">
           {connected && <aside className="studio-guide"><span>{guidance[screen].label}</span><p>{guidance[screen].copy}</p>{mode === "demo" && <button type="button" onClick={() => setMode("connect")}>Connect live →</button>}<button type="button" onClick={() => setPaletteOpen(true)}>Show actions <kbd>⌘K</kbd></button></aside>}
           <div className="studio-screen-stage" key={connected ? `${mode}-${screen}` : "connect"}>{!connected ? (
-              <ConnectFlow onConnected={beginLive} onDemo={() => setMode("demo")} onNotice={announce} onBridgeKey={setBridgeKey} />
-            ) : screen === "Simulator" ? (
-              <SimulatorPanel client={mode === "live" ? client : null} live={live} bridgeKey={bridgeKey} onBridgeKey={setBridgeKey} onNotice={announce} />
+              <ConnectFlow onConnected={beginLive} onDemo={() => setMode("demo")} onNotice={announce} onBridgeKey={rememberBridgeKey} />
+) : screen === "Simulator" ? (
+              <SimulatorPanel client={mode === "live" ? client : null} live={live} bridgeKey={bridgeKey} onBridgeKey={rememberBridgeKey} onNotice={announce} />
             ) : (
               <DataScreen screen={screen} client={mode === "live" ? client : null} live={mode === "live" ? live : null} bridgeKey={bridgeKey} onRefresh={() => void refreshLive()} onNotice={announce} onOpenDialog={() => setDialogOpen(true)} />
             )}</div>
@@ -420,7 +517,7 @@ const STUDIO_OUTPUT: readonly string[] = [
  * proved itself, and the summary offers the collected setup as a download —
  * without the token unless the person explicitly includes it.
  */
-function ConnectFlow({ onConnected, onDemo, onNotice, onBridgeKey }: { onConnected: (client: StudioClient) => void; onDemo: () => void; onNotice: (message: string) => void; onBridgeKey: (key: string) => void }) {
+function ConnectFlow({ onConnected, onDemo, onNotice, onBridgeKey }: { onConnected: (client: StudioClient, credentials: { url: string; token: string }) => void; onDemo: () => void; onNotice: (message: string) => void; onBridgeKey: (key: string) => void }) {
   const [stage, setStage] = useState<ConnectStage>("choice");
   const [wizard, setWizard] = useState<WizardState>(EMPTY_WIZARD);
   const [busy, setBusy] = useState(false);
@@ -563,7 +660,7 @@ function ConnectFlow({ onConnected, onDemo, onNotice, onBridgeKey }: { onConnect
       setProblem(answer.error);
       return;
     }
-    onConnected(candidate);
+    onConnected(candidate, { url: wizard.url, token: wizard.token.trim() });
   };
 
   if (stage === "choice") {
@@ -572,10 +669,10 @@ function ConnectFlow({ onConnected, onDemo, onNotice, onBridgeKey }: { onConnect
         <section className="connect-copy">
           <p className="section-kicker">Live connection</p>
           <h2>Connect Studio to your Worker.</h2>
-          <p>Everything is sent directly to your own deployment and held in this page&apos;s memory only. BaseCLF has no servers in between.</p>
+          <p>Everything is sent directly to your own deployment and kept in this browser tab only — a reload reconnects, closing the tab forgets it. BaseCLF has no servers in between.</p>
           <dl>
             <div><dt>Transport</dt><dd>HTTPS to your Worker</dd></div>
-            <div><dt>Credential storage</dt><dd>This page, in memory</dd></div>
+            <div><dt>Credential storage</dt><dd>This tab, until it closes</dd></div>
             <div><dt>BaseCLF servers</dt><dd>Not involved</dd></div>
           </dl>
         </section>
@@ -745,7 +842,7 @@ function ConnectFlow({ onConnected, onDemo, onNotice, onBridgeKey }: { onConnect
         <div className="wizard-actions">
           <button className="studio-secondary" type="button" onClick={() => go("bridge")}>Back</button>
           <button className="studio-secondary" type="button" onClick={download}>Download setup notes</button>
-          <button className="studio-primary" type="button" onClick={() => { if (wizard.client !== null) onConnected(wizard.client); }}>Connect</button>
+          <button className="studio-primary" type="button" onClick={() => { if (wizard.client !== null) onConnected(wizard.client, { url: wizard.url, token: wizard.token.trim() }); }}>Connect</button>
         </div>
       </section>
     </div>
