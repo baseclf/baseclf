@@ -203,6 +203,7 @@ test("ships the guided motion system and real product captures", async () => {
   // checks the person makes rather than round trips the page proves.
   assert.match(studioApp, /npx wrangler whoami/);
   assert.match(studioApp, /npx wrangler login/);
+  assert.match(studioApp, /Authorization granted to Wrangler/);
   assert.match(studioApp, /disabled=\{!authReady \|\| !r2Ready\}/);
   assert.match(studioApp, /R2 Object Storage/);
 

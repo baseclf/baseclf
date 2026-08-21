@@ -345,10 +345,6 @@ function TerminalShot({ command, lines }: { command: string; lines: readonly str
 }
 
 const WHOAMI_OUTPUT: readonly string[] = [
-  "Need to install the following packages:",
-  "wrangler@4.125.0",
-  "Ok to proceed? (y) y",
-  "",
   " ⛅️ wrangler 4.125.0",
   "───────────────────────",
   "Getting User settings...",
@@ -359,6 +355,17 @@ const WHOAMI_OUTPUT: readonly string[] = [
   "├──────────────┼──────────────────────┤",
   "│ Your Account │ <your-account-id>    │",
   "└──────────────┴──────────────────────┘",
+];
+
+const LOGIN_OUTPUT: readonly string[] = [
+  "Need to install the following packages:",
+  "wrangler@4.125.0",
+  "Ok to proceed? (y) y",
+  "",
+  " ⛅️ wrangler 4.125.0",
+  "───────────────────────",
+  "Attempting to login via OAuth...",
+  "Opening a link in your default browser: https://dash.cloudflare.com/oauth2/auth?response_type=code&client_id=…",
 ];
 
 const CREATE_OUTPUT: readonly string[] = [
@@ -605,10 +612,13 @@ function ConnectFlow({ onConnected, onDemo, onNotice, onBridgeKey }: { onConnect
           <h3>Two things the next command needs.</h3>
           <p>The create command provisions onto <strong>your own Cloudflare account</strong> — it needs a Cloudflare login on this machine, and an account with R2 storage turned on. Both live outside this page, so these two are the checks only you can make.</p>
           <p className="wizard-item">1 · Cloudflare login</p>
+          <p className="form-help">This signs the machine into Cloudflare. Already signed in on this machine? Skip straight to the check below.</p>
+          <div className="wizard-command"><code>npx wrangler login</code><button type="button" onClick={() => copy("npx wrangler login")}>Copy</button></div>
+          <TerminalShot command="npx wrangler login" lines={LOGIN_OUTPUT} />
+          <p className="form-help">Your browser opens Cloudflare&apos;s consent screen — &ldquo;Wrangler wants to access your account&rdquo;. Pick the account you want, press <strong>Authorize</strong>, and the tab ends on &ldquo;Authorization granted to Wrangler&rdquo;. Close it, then verify:</p>
           <div className="wizard-command"><code>npx wrangler whoami</code><button type="button" onClick={() => copy("npx wrangler whoami")}>Copy</button></div>
           <TerminalShot command="npx wrangler whoami" lines={WHOAMI_OUTPUT} />
-          <p className="form-help">A logged-in machine answers like that, and the account in the table is where the deployment will land. A token permissions list follows the table; its exact entries do not matter here. If it says you are not logged in instead, run the command below — it opens your browser to sign in and approve — then run the check again and compare with the window above.</p>
-          <div className="wizard-command"><code>npx wrangler login</code><button type="button" onClick={() => copy("npx wrangler login")}>Copy</button></div>
+          <p className="form-help">However you got here, whoami has to answer like that, and the account in the table is where the deployment will land. A token permissions list follows the table; its exact entries do not matter here.</p>
           <label className="wizard-include"><input type="checkbox" checked={authReady} onChange={(event) => setAuthReady(event.target.checked)} /> whoami answers, and it names the account I want to deploy to.</label>
           <p className="wizard-item">2 · R2 storage</p>
           <p className="form-help">Files live in R2, and on a new account R2 is off until you open it once. In the <a href="https://dash.cloudflare.com/?to=/:account/r2" target="_blank" rel="noreferrer">Cloudflare dashboard, open R2 Object Storage</a> and follow what it asks of you. Skipping this stops the create run at its bucket step.</p>
