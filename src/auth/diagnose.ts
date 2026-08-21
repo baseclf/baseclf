@@ -243,9 +243,9 @@ function checkSecret(configured: boolean, warnings: string[]): void {
 
   warnings.push(
     'BETTER_AUTH_SECRET is not set, so every request to this deployment fails with a 500. ' +
-      'Set it with `wrangler secret put BETTER_AUTH_SECRET` and redeploy. It is deliberately ' +
-      'fatal rather than defaulted: a deployment that signs sessions with a guessable value ' +
-      'looks like it is working.',
+      'Set it with `npx baseclf secret set BETTER_AUTH_SECRET --script <project>`. It is ' +
+      'deliberately fatal rather than defaulted: a deployment that signs sessions with a ' +
+      'guessable value looks like it is working.',
   );
 }
 
@@ -353,11 +353,15 @@ function checkProviders(providers: readonly ProviderStatus[], warnings: string[]
     if (!isPartial) continue;
 
     const set = variables.filter((name) => !status.missing.includes(name));
+    // The exact command when exactly one value is missing, which for a
+    // two-variable provider is every partial state there is; the placeholder
+    // form stays as the fallback for a provider that ever grows a third.
+    const missingKey = status.missing.length === 1 ? status.missing[0] : undefined;
     warnings.push(
       `${PROVIDER_LABELS[status.provider]} sign-in is off because ${list(status.missing)} ` +
         `${status.missing.length === 1 ? 'is' : 'are'} not set, although ${list(set)} ` +
         `${set.length === 1 ? 'is' : 'are'}. A provider needs both values. Set the missing ` +
-        'one with `wrangler secret put`, then redeploy.',
+        `one with \`npx baseclf secret set ${missingKey ?? '<KEY>'} --script <project>\`.`,
     );
   }
 

@@ -122,7 +122,7 @@ export function authSettings(env: AuthEnv): AuthSettings {
 
   const secret = env.BETTER_AUTH_SECRET?.trim();
   if (!config.secretConfigured || secret === undefined) {
-    throw misconfigured('BETTER_AUTH_SECRET is not set. Set it with `wrangler secret put`.');
+    throw misconfigured('BETTER_AUTH_SECRET is not set. Set it with `npx baseclf secret set`.');
   }
 
   if (config.baseURL.length === 0) {

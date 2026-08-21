@@ -155,7 +155,10 @@ describe('a deployment that is not finished', () => {
 
     const secret = report.checks.find((check) => check.name === 'secret');
     expect(secret?.verdict).toBe('deny');
-    expect(secret?.action).toContain('wrangler secret put');
+    // The product's own command, not `wrangler secret put`: piping a value into
+    // wrangler on Windows has stored a corrupted secret while reporting
+    // success, so the advice must not point at the trap.
+    expect(secret?.action).toContain('baseclf secret set BETTER_AUTH_SECRET');
   });
 
   it('reports missing engine tables, and what they break', async () => {

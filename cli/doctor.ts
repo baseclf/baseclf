@@ -414,7 +414,7 @@ function checkConfiguration(result: Awaited<ReturnType<typeof probe>>): readonly
       name: 'secret',
       verdict: 'deny',
       detail: 'BETTER_AUTH_SECRET is not set, so every request to this deployment answers 500.',
-      action: 'wrangler secret put BETTER_AUTH_SECRET',
+      action: 'npx baseclf secret set BETTER_AUTH_SECRET --script <project>',
     });
   }
 

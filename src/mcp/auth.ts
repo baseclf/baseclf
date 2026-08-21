@@ -38,7 +38,7 @@ import { OAuthError, OAuthErrorCode } from '@modelcontextprotocol/server';
  * `AuthInfo.expiresAt` is unset (matches v1 behavior)". That check is written for OAuth
  * access tokens, which really do expire.
  *
- * A shared secret set with `wrangler secret put` does not expire, so any value here is
+ * A shared secret set with `baseclf secret set` does not expire, so any value here is
  * an assertion nobody can check. It is deliberately short rather than far in the
  * future: a client that caches the answer re-verifies within the minute, and the value
  * can never be mistaken for a real lifetime.

@@ -63,18 +63,22 @@
   }
 
   // BETTER_AUTH_SECRET is deliberately absent. It is a secret, so it goes in
-  // with `wrangler secret put BETTER_AUTH_SECRET` and never into this file.
-  // Without it the engine refuses every request rather than serving them all
-  // anonymously, because a deployment missing its secret should be visibly
-  // broken rather than quietly open.
+  // with `npx baseclf secret set BETTER_AUTH_SECRET --script baseclf` and never
+  // into this file. Without it the engine refuses every request rather than
+  // serving them all anonymously, because a deployment missing its secret
+  // should be visibly broken rather than quietly open.
   //
   // The OAuth provider credentials are absent for the same reason. Set the pair
-  // for each provider you want to offer, then redeploy:
+  // for each provider you want to offer:
   //
-  //   wrangler secret put GOOGLE_CLIENT_ID
-  //   wrangler secret put GOOGLE_CLIENT_SECRET
-  //   wrangler secret put GITHUB_CLIENT_ID
-  //   wrangler secret put GITHUB_CLIENT_SECRET
+  //   npx baseclf secret set GOOGLE_CLIENT_ID --script baseclf
+  //   npx baseclf secret set GOOGLE_CLIENT_SECRET --script baseclf
+  //   npx baseclf secret set GITHUB_CLIENT_ID --script baseclf
+  //   npx baseclf secret set GITHUB_CLIENT_SECRET --script baseclf
+  //
+  // The value is read from stdin, never from the command line. Piping a value
+  // into `wrangler secret put` on Windows has stored a corrupted secret while
+  // reporting success, which is why the advice here is not that command.
   //
   // A provider with only one of its two values set is not offered at all.
   // GET /api/auth/_diagnose reports which half is missing, along with the exact

@@ -146,12 +146,12 @@ describe('how output ends', () => {
     const rendered = nextAction({
       goal: 'set the signing secret',
       steps: ['Run the command below'],
-      copy: 'wrangler secret put BETTER_AUTH_SECRET',
+      copy: 'npx baseclf secret set BETTER_AUTH_SECRET --script baseclf',
     });
 
     expect(rendered).toContain('  1. Run the command below');
-    const valueLine = rendered.split('\n').find((line) => line.startsWith('wrangler'));
-    expect(valueLine).toBe('wrangler secret put BETTER_AUTH_SECRET');
+    const valueLine = rendered.split('\n').find((line) => line.startsWith('npx'));
+    expect(valueLine).toBe('npx baseclf secret set BETTER_AUTH_SECRET --script baseclf');
   });
 });
 
