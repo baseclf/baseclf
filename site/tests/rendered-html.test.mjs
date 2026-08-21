@@ -193,6 +193,13 @@ test("ships the guided motion system and real product captures", async () => {
   assert.match(navCta, /Dashboard/);
   assert.match(navCta, /\/studio\?connect=1/);
   assert.match(navCta, /onSessionChange/);
+  // The docs topbar makes the same offer: its Studio link reads the browser's
+  // saved session after hydration and swaps to Dashboard, so a reader who
+  // already connected is not routed through the connect flow again.
+  const docsShell = await readFile(new URL("../app/docs/DocsShell.tsx", import.meta.url), "utf8");
+  assert.match(docsShell, /Open Studio/);
+  assert.match(docsShell, /Dashboard/);
+  assert.match(docsShell, /onSessionChange/);
   const studioApp = await readFile(new URL("../app/studio/StudioApp.tsx", import.meta.url), "utf8");
   assert.match(studioApp, /First deployment\?/);
   assert.match(studioApp, /npx create-baseclf/);

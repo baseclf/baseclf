@@ -3,6 +3,7 @@
 import { ReactNode, useEffect, useState } from "react";
 import Link from "next/link";
 import ThemeToggle from "../ThemeToggle";
+import { onSessionChange } from "../studio/session";
 
 const sections = [
   { href: "/docs", label: "Overview" },
@@ -15,6 +16,13 @@ export default function DocsShell({ active, children }: { active: string; childr
   const [searchOpen, setSearchOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [query, setQuery] = useState("");
+  // Same swap as the landing's NavCta: the server renders the signed-out
+  // label, and this reads the browser's saved session after hydration so a
+  // docs reader who already connected is offered their Dashboard, not a
+  // fresh connect flow. A shortcut, never a claim: the Studio it opens still
+  // re-proves the stored pair with a real round trip.
+  const [connected, setConnected] = useState(false);
+  useEffect(() => onSessionChange(setConnected), []);
   const matches = sections.filter((section) =>
     section.label.toLowerCase().includes(query.trim().toLowerCase()),
   );
@@ -40,7 +48,7 @@ export default function DocsShell({ active, children }: { active: string; childr
       <header className="docs-topbar">
         <Link className="docs-brand" href="/" aria-label="BaseCLF home"><span className="brand-mark" aria-hidden="true"><span /></span><strong>baseclf</strong><i>docs</i></Link>
         <button className="docs-search" type="button" onClick={() => setSearchOpen(true)}><span>Search documentation</span><kbd>⌘K</kbd></button>
-        <nav aria-label="Docs utilities"><a href="/studio">Open Studio</a><a href="/docs/index.md">Markdown</a><ThemeToggle /></nav>
+        <nav aria-label="Docs utilities"><a href={connected ? "/studio?connect=1" : "/studio"}>{connected ? "Dashboard" : "Open Studio"}</a><a href="/docs/index.md">Markdown</a><ThemeToggle /></nav>
         <button className="docs-menu-button" type="button" onClick={() => setMenuOpen((value) => !value)}>Menu</button>
       </header>
 
