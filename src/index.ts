@@ -111,8 +111,21 @@ export interface Env extends AuthEnv {
  *    than as rate limiting, which is the worst of both.
  */
 
-/** What a browser may send. Anything absent here fails its preflight. */
-const ALLOWED_REQUEST_HEADERS = 'authorization, content-type, prefer, x-d1-bookmark';
+/**
+ * What a browser may send. Anything absent here fails its preflight.
+ *
+ * The three `mcp-*` entries are what let a browser client reach `/mcp` at all:
+ * the transport requires them on every call, a browser must ask permission for
+ * non-safelisted headers, and a preflight that omits one kills the request
+ * before it is sent. Measured against the live deployment on 2026-08-21
+ * (`scripts/probe-mcp-cors.mjs`): with the old list, a trusted origin's
+ * preflight came back without them and the Studio lane was closed while every
+ * server-side test stayed green, because no HTTP client enforces CORS.
+ * Allowing a header is not an exemption from anything else: the bearer gate
+ * and the origin allowlist still decide who gets an answer.
+ */
+const ALLOWED_REQUEST_HEADERS =
+  'authorization, content-type, prefer, x-d1-bookmark, mcp-protocol-version, mcp-method, mcp-name';
 
 /**
  * What a browser may read back.

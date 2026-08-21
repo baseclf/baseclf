@@ -65,6 +65,21 @@ describe('a preflight from an origin on the list', () => {
     expect(Number(response.headers.get('access-control-max-age'))).toBeGreaterThan(0);
   });
 
+  it('allows every header the MCP transport requires, or the Studio lane dies at preflight', async () => {
+    // Measured on the live deployment before the fix (probe-mcp-cors.mjs): the
+    // trusted origin's preflight came back without these three, so a browser
+    // client could never send a single /mcp request while every in-process test
+    // stayed green. Nothing but this assertion keeps the list honest, because
+    // no HTTP client enforces CORS.
+    const allowed = (
+      (await preflight('/mcp', TRUSTED)).headers.get('access-control-allow-headers') ?? ''
+    ).toLowerCase();
+
+    for (const header of ['mcp-protocol-version', 'mcp-method', 'mcp-name']) {
+      expect(allowed).toContain(header);
+    }
+  });
+
   it('lets the browser read the headers a client actually needs', async () => {
     // Without this the bookmark is invisible cross-origin, and read after write
     // silently stops working for the callers most likely to need it.
