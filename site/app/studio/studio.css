@@ -2,6 +2,9 @@
 .studio-sidebar { position: sticky; top: 0; height: 100vh; padding: 20px 14px 14px; display: flex; flex-direction: column; border-right: 1px solid var(--line); background: var(--paper); }
 .studio-brand { padding: 0 8px 20px; display: flex; align-items: center; gap: 10px; font-size: 18px; font-weight: 650; letter-spacing: -.04em; }
 .studio-project { margin: 0 0 16px; padding: 13px; display: grid; gap: 5px; border: 1px solid var(--line); border-radius: 5px; }
+/* A live project name is a hostname: one long word with no break points, so
+   without this it walks straight out of the card. */
+.studio-project strong { overflow-wrap: anywhere; line-height: 1.35; }
 .machine-label, .section-kicker { color: var(--ink-soft); font-family: var(--font-geist-mono); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
 .connection-state { margin-top: 3px; color: var(--ink-soft); font-size: 10px; }
 .connection-state i { display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: var(--allow); }
