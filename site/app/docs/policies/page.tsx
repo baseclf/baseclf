@@ -3,7 +3,7 @@ import DocsShell from "../DocsShell";
 import CopyButton from "../CopyButton";
 import "../docs.css";
 
-export const metadata: Metadata = { title: "Policy DSL — BaseCLF" };
+export const metadata: Metadata = { title: "Policy DSL" };
 
 export default function PoliciesPage() {
   const policy = `{\n  "table": "posts",\n  "enabled": true,\n  "binds": {\n    "isPublished": { "status": { "_eq": "published" } },\n    "isAuthor": { "author_id": { "_eq": "$auth.uid" } }\n  },\n  "policies": [\n    {\n      "name": "read_own_or_published",\n      "for": "select",\n      "to": ["authenticated"],\n      "using": { "_or": [{ "$bind": "isPublished" }, { "$bind": "isAuthor" }] },\n      "columns": ["id", "title", "body", "status", "author_id", "created_at"]\n    }\n  ]\n}`;

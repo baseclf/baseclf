@@ -27,6 +27,10 @@ export async function generateMetadata(): Promise<Metadata> {
   const socialImage = `${origin}/og.png`;
 
   return {
+    // The default is used as-is (the template only wraps child titles,
+    // measured on the local server), so it carries the brand itself; child
+    // pages must NOT put the brand in their own titles or the template
+    // doubles it — "Docs — BaseCLF | BaseCLF" was live until 2026-08-21.
     title: {
       default: "BaseCLF | The backend layer for Cloudflare",
       template: "%s | BaseCLF",

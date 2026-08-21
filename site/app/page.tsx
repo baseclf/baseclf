@@ -3,8 +3,10 @@ import MotionEffects from "./MotionEffects";
 import PolicyDemo from "./PolicyDemo";
 import ThemeToggle from "./ThemeToggle";
 
+// No title here on purpose: the layout's default already names the landing
+// page, and a title set here would be fed through the layout's "%s | BaseCLF"
+// template and come out doubled. Measured on the live tab.
 export const metadata: Metadata = {
-  title: "BaseCLF | The backend layer for Cloudflare",
   description:
     "Auth, database, storage, instant APIs, and real row-level security for Cloudflare D1.",
 };

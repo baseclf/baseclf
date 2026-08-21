@@ -10,7 +10,12 @@
  *
  * Build first, from the repository root:
  *   npm run build --prefix site
- *   npx wrangler deploy --config site/wrangler.jsonc
+ *   npx wrangler deploy --config site/wrangler.deploy.jsonc
+ *
+ * Named wrangler.deploy.jsonc, not wrangler.jsonc, on purpose: the Cloudflare
+ * vite plugin auto-discovers a wrangler.jsonc and merges it into its own dev
+ * config, which declared nodejs_compat twice and kept the dev server from
+ * starting at all. Deploy config and dev config stay separate files.
  */
 {
   "name": "baseclf-site",

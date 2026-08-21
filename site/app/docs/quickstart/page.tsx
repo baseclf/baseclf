@@ -3,7 +3,7 @@ import DocsShell from "../DocsShell";
 import CopyButton from "../CopyButton";
 import "../docs.css";
 
-export const metadata: Metadata = { title: "Quickstart — BaseCLF" };
+export const metadata: Metadata = { title: "Quickstart" };
 
 export default function QuickstartPage() {
   const create = `npx baseclf login\nnpx create-baseclf`;
