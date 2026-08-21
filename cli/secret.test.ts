@@ -84,35 +84,59 @@ interface RunResult {
   readonly out: string;
   readonly sent: readonly Recorded[];
   readonly reads: number;
+  readonly copied: readonly string[];
 }
 
 async function run(
   argv: readonly string[],
   options: {
     readonly value?: string;
+    /** Per-call answers for `readSecret`, for the type-and-confirm paths. */
+    readonly values?: readonly string[];
     readonly env?: Readonly<Record<string, string | undefined>>;
     readonly envFile?: string;
     readonly interactive?: boolean;
     readonly answer?: (recorded: Recorded) => Response;
+    /** The create-grade resolution, injected. Null means it refused. */
+    readonly credentials?: { accountId: string; token: string } | null;
+    readonly clipboardWorks?: boolean;
   } = {},
 ): Promise<RunResult> {
   const written: string[] = [];
   const { fetcher, sent } = api(options.answer);
   let reads = 0;
+  const copied: string[] = [];
 
   const host: Host = {
     env: options.env ?? { CLOUDFLARE_API_TOKEN: TOKEN, CLOUDFLARE_ACCOUNT_ID: ACCOUNT },
     envFile: options.envFile,
     interactive: options.interactive ?? false,
     readSecret: () => {
+      const answer = options.values?.[reads] ?? options.value ?? VALUE;
       reads++;
-      return Promise.resolve(options.value ?? VALUE);
+      return Promise.resolve(answer);
     },
     fetcher,
+    ...(() => {
+      const injected = options.credentials;
+      if (injected === undefined) return {};
+      return {
+        credentials: () =>
+          Promise.resolve(injected === null ? null : { credentials: injected, warnings: [] }),
+      };
+    })(),
+    ...(options.clipboardWorks !== undefined
+      ? {
+          copyToClipboard: (text: string) => {
+            copied.push(text);
+            return Promise.resolve(options.clipboardWorks === true);
+          },
+        }
+      : {}),
   };
 
   const outcome = await runSecretSet(argv, (text) => written.push(text), PLAIN, host);
-  return { outcome, out: written.join('\n'), sent, reads };
+  return { outcome, out: written.join('\n'), sent, reads, copied };
 }
 
 describe('⭐ a value on the command line', () => {
@@ -327,8 +351,8 @@ describe('reading the value', () => {
     const typed = await run(['BETTER_AUTH_SECRET', '--script', 'baseclf'], { interactive: true });
     const piped = await run(['BETTER_AUTH_SECRET', '--script', 'baseclf']);
 
-    expect(typed.out).toContain('Paste the value for BETTER_AUTH_SECRET');
-    expect(piped.out).not.toContain('Paste the value');
+    expect(typed.out).toContain('Type the value for BETTER_AUTH_SECRET');
+    expect(piped.out).not.toContain('Type the value');
   });
 
   it('⭐ does not ask for a value it has nowhere to send', async () => {
@@ -340,10 +364,159 @@ describe('reading the value', () => {
     expect(reads).toBe(0);
   });
 
-  it('reads once', async () => {
+  it('reads once from a pipe, which scripts depend on', async () => {
     const { reads } = await run(['KEY', '--script', 'baseclf']);
 
     expect(reads).toBe(1);
+  });
+});
+
+describe('⭐ typing the value twice', () => {
+  it('asks for a confirmation, and sends only when the two entries match', async () => {
+    const { outcome, out, sent, reads } = await run(['KEY', '--script', 'baseclf'], {
+      interactive: true,
+      values: [VALUE, VALUE],
+    });
+
+    expect(outcome).toBe('ok');
+    expect(out).toContain('Type it again to confirm');
+    expect(reads).toBe(2);
+    expect(JSON.parse(sent[0]?.body ?? '{}').text).toBe(VALUE);
+  });
+
+  it('says to pick something memorable before the first prompt', async () => {
+    const { out } = await run(['KEY', '--script', 'baseclf'], {
+      interactive: true,
+      values: [VALUE, VALUE],
+    });
+
+    expect(out).toContain('Pick something you will remember');
+  });
+
+  it('tells the MCP_TOKEN reader what this value is, since the Studio asks for it', async () => {
+    const { out } = await run(['MCP_TOKEN', '--script', 'baseclf'], {
+      interactive: true,
+      values: [VALUE, VALUE],
+    });
+
+    expect(out).toContain('admin token');
+  });
+
+  it('sends nothing on a mismatch, says so, and lets the person start over', async () => {
+    const { outcome, out, sent } = await run(['KEY', '--script', 'baseclf'], {
+      interactive: true,
+      values: ['first-try', 'first-typo', VALUE, VALUE],
+    });
+
+    expect(outcome).toBe('ok');
+    expect(out).toContain('The two entries differ');
+    expect(sent).toHaveLength(1);
+    expect(JSON.parse(sent[0]?.body ?? '{}').text).toBe(VALUE);
+  });
+
+  it('gives up after three mismatched rounds without sending anything', async () => {
+    const { outcome, sent } = await run(['KEY', '--script', 'baseclf'], {
+      interactive: true,
+      values: ['a', 'b', 'c', 'd', 'e', 'f'],
+    });
+
+    expect(outcome).toBe('usage');
+    expect(sent).toEqual([]);
+  });
+
+  it('never confirms a pipe, whose second read has nothing to answer', async () => {
+    const { out, reads } = await run(['KEY', '--script', 'baseclf'], { value: VALUE });
+
+    expect(reads).toBe(1);
+    expect(out).not.toContain('Type it again');
+  });
+
+  it('keeps the mismatched entries out of the output too', async () => {
+    const { out } = await run(['KEY', '--script', 'baseclf'], {
+      interactive: true,
+      values: ['secret-attempt-one', 'secret-attempt-two', VALUE, VALUE],
+    });
+
+    expect(out).not.toContain('secret-attempt-one');
+    expect(out).not.toContain('secret-attempt-two');
+  });
+});
+
+describe('⭐ the clipboard', () => {
+  it('receives the confirmed value, and the output says to paste it', async () => {
+    const { out, copied } = await run(['MCP_TOKEN', '--script', 'baseclf'], {
+      interactive: true,
+      values: [VALUE, VALUE],
+      clipboardWorks: true,
+    });
+
+    expect(copied).toEqual([VALUE]);
+    expect(out).toContain('in your clipboard');
+    expect(out).toContain('Admin token field');
+    expect(out).not.toContain(VALUE);
+  });
+
+  it('says when the clipboard was not reachable, without printing the value', async () => {
+    const { out } = await run(['MCP_TOKEN', '--script', 'baseclf'], {
+      interactive: true,
+      values: [VALUE, VALUE],
+      clipboardWorks: false,
+    });
+
+    expect(out).toContain('clipboard was not reachable');
+    expect(out).not.toContain(VALUE);
+  });
+
+  it('is left alone by a pipe, whose caller did not ask to lose what they had on it', async () => {
+    const { copied, outcome } = await run(['MCP_TOKEN', '--script', 'baseclf'], {
+      value: VALUE,
+      clipboardWorks: true,
+    });
+
+    expect(outcome).toBe('ok');
+    expect(copied).toEqual([]);
+  });
+});
+
+describe('⭐ the machine whose only credential is the wrangler login', () => {
+  it('falls through to the create-grade resolution instead of refusing', async () => {
+    const { outcome, sent } = await run(['KEY', '--script', 'baseclf'], {
+      env: {},
+      credentials: { accountId: 'acct_oauth', token: 'oauth-token-under-test' },
+    });
+
+    expect(outcome).toBe('ok');
+    expect(sent[0]?.url).toContain('/accounts/acct_oauth/');
+    expect(sent[0]?.authorization).toBe('Bearer oauth-token-under-test');
+  });
+
+  it('lets an explicit --account override the resolved one', async () => {
+    const { sent } = await run(['KEY', '--script', 'baseclf', '--account', 'acct_mine'], {
+      env: {},
+      credentials: { accountId: 'acct_oauth', token: 'oauth-token-under-test' },
+    });
+
+    expect(sent[0]?.url).toContain('/accounts/acct_mine/');
+  });
+
+  it('stops without reading a value when the resolution refused', async () => {
+    const { outcome, reads, sent } = await run(['KEY', '--script', 'baseclf'], {
+      env: {},
+      credentials: null,
+    });
+
+    expect(outcome).toBe('failed');
+    expect(reads).toBe(0);
+    expect(sent).toEqual([]);
+  });
+
+  it('still prefers the environment token when both are present', async () => {
+    const { sent } = await run(['KEY', '--script', 'baseclf'], {
+      credentials: { accountId: 'acct_oauth', token: 'oauth-token-under-test' },
+    });
+
+    expect(sent[0]?.authorization).toBe(`Bearer ${TOKEN}`);
+    expect(sent[0]?.url).toContain(`/accounts/${ACCOUNT}/`);
   });
 });
 

@@ -32,7 +32,7 @@
  * None of the four writes anything anywhere.
  */
 
-import { execSync, spawnSync } from 'node:child_process';
+import { execSync, spawn, spawnSync } from 'node:child_process';
 import { readFileSync, statSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { homedir } from 'node:os';
@@ -349,6 +349,43 @@ function isDirectory(path: string): boolean {
   }
 }
 
+/**
+ * Put text on the clipboard, with the tool this platform ships.
+ *
+ * Windows and macOS each have exactly one answer. Linux has two conventions and no
+ * guarantee of either, so both are tried and a desktop with neither installed gets
+ * `false` rather than an error: the caller has wording for that, and the person
+ * still holds the value they typed.
+ *
+ * The value goes in on stdin, never as an argument, for the reason `cli/secret.ts`
+ * refuses values on its own command line: argv is public to every process.
+ */
+function copyToClipboard(text: string): Promise<boolean> {
+  const attempts: ReadonlyArray<readonly [string, readonly string[]]> =
+    process.platform === 'win32'
+      ? [['clip', []]]
+      : process.platform === 'darwin'
+        ? [['pbcopy', []]]
+        : [
+            ['wl-copy', []],
+            ['xclip', ['-selection', 'clipboard']],
+          ];
+
+  const tryOne = ([command, args]: readonly [string, readonly string[]]): Promise<boolean> =>
+    new Promise((resolve) => {
+      const child = spawn(command, [...args], { stdio: ['pipe', 'ignore', 'ignore'] });
+      child.on('error', () => resolve(false));
+      child.on('close', (code) => resolve(code === 0));
+      child.stdin.on('error', () => {});
+      child.stdin.end(text);
+    });
+
+  return attempts.reduce<Promise<boolean>>(
+    (previous, attempt) => previous.then((done) => (done ? true : tryOne(attempt))),
+    Promise.resolve(false),
+  );
+}
+
 // `process.platform` is wider than the three this cares about. Anything else gets the
 // POSIX answer, which is what every other platform Node runs on uses.
 const platform: Platform =
@@ -399,6 +436,25 @@ export const runtime = {
     envFile: readEnvFile(),
     interactive,
     readSecret: interactive ? readTypedLine : readPipedInput,
+    // The same resolution `create` and `policy` use, so the machine whose only
+    // credential is `wrangler login` can set a secret too. See the note on
+    // `policyHost.credentials`.
+    credentials: () =>
+      resolveAccountCredential(
+        {
+          fetcher: fetch,
+          refreshLogin,
+          readAuthFile: readTextFile,
+          paths,
+          envFile: readEnvFile(),
+          now: () => new Date(),
+        },
+        (text: string) => {
+          process.stdout.write(`${text}\n`);
+        },
+        { colour },
+      ),
+    copyToClipboard,
   } satisfies Host,
   createHost: {
     fetcher: fetch,

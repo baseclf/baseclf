@@ -60,14 +60,27 @@ export interface Host {
   /**
    * One value, from a pipe or from somebody typing.
    *
-   * Called once, and never given the value in an argument. Whatever it returns is
-   * used and never written anywhere but the request body.
+   * Never given the value in an argument. Whatever it returns is used and never
+   * written anywhere but the request body. An interactive run calls it again to
+   * confirm what was typed, because a typo in a value nobody can see fails later
+   * with nothing pointing back here. A pipe is read once and believed.
    */
   readonly readSecret: () => Promise<string>;
   /** True when a person is at the keyboard, so a prompt is worth printing. */
   readonly interactive: boolean;
   /** Injected so a test never reaches the network. */
   readonly fetcher?: Fetcher | undefined;
+  /**
+   * The same account-and-token resolution `create` uses, for the machine whose
+   * only credential is `wrangler login`. It writes its own refusals. Absent, the
+   * environment is the only source, which is what scripts and the tests want.
+   */
+  readonly credentials?: () => Promise<{
+    readonly credentials: Credentials;
+    readonly warnings: readonly string[];
+  } | null>;
+  /** Put text on the machine's clipboard. Resolves true when it landed. */
+  readonly copyToClipboard?: (text: string) => Promise<boolean>;
 }
 
 /** A host that can do nothing, so the command fails the way a real one would. */
@@ -80,8 +93,11 @@ export const NO_HOST: Host = Object.freeze({
 export const SECRET_USAGE = [
   'baseclf secret set <KEY> --script <name>',
   '',
-  'Sets one secret on a deployed Worker. The value is read from stdin: paste it at',
+  'Sets one secret on a deployed Worker. The value is read from stdin: type it at',
   'the prompt, or pipe it in. No option takes the value, and that is deliberate.',
+  '',
+  'Typed at the prompt, the value is asked for twice and has to match, and the',
+  'confirmed value is placed on your clipboard for the paste that comes next.',
   '',
   'Options:',
   '  --script <name>   The Worker to set it on. The "name" field in wrangler.jsonc',
@@ -89,10 +105,20 @@ export const SECRET_USAGE = [
   '',
   'The API token comes from CLOUDFLARE_API_TOKEN, or from .env when the environment',
   'has none. A variable that is already set wins, and this says so when it happens.',
+  'With neither set, the Cloudflare login on this machine is used, the same way',
+  'create uses it.',
 ].join('\n');
 
 /** Names a Worker accepts for a binding, which is what a secret becomes. */
 const KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/**
+ * How many times the type-and-confirm pair may disagree before this gives up.
+ *
+ * Bounded for the same reason `create` bounds its questions: attached to a pipe that
+ * keeps answering, an unbounded loop asks forever.
+ */
+const CONFIRM_ATTEMPTS = 3;
 
 /**
  * Options somebody would reach for to pass the value, so the refusal can name it.
@@ -341,61 +367,116 @@ export async function runSecretSet(
   const { key, script } = parsed.request;
   const fromFile = parseEnvFile(host.envFile ?? '');
 
-  const accountId = (
+  const explicitAccount = (
     parsed.request.account ??
     host.env.CLOUDFLARE_ACCOUNT_ID ??
     fromFile.CLOUDFLARE_ACCOUNT_ID ??
     ''
   ).trim();
 
-  if (accountId === '') {
-    write(
-      [
-        'baseclf secret set needs the account the Worker lives in.',
-        '',
-        'Pass --account, or set CLOUDFLARE_ACCOUNT_ID. It is on the right of any page',
-        'in the Cloudflare dashboard, and `wrangler whoami` prints it.',
-      ].join('\n'),
-    );
-    return 'usage';
-  }
-
   const decision = decideToken({
     fromEnvironment: host.env.CLOUDFLARE_API_TOKEN,
     fromFile: fromFile.CLOUDFLARE_API_TOKEN,
   });
 
-  // Printed before anything is attempted. A token warning read after a refusal is a
-  // warning that arrives once the reader has already started looking somewhere else.
-  for (const warning of decision.warnings) {
-    write(styledResultLine('attention', warning, style));
-  }
+  // Which credential and account this run uses, in one place. An explicit account
+  // plus a token from the environment is the scripted path and stays exactly as it
+  // was. Anything missing falls through to the same resolution `create` uses, so the
+  // machine whose only credential is `wrangler login` is not turned away here, one
+  // step from the end of onboarding.
+  let credentials: Credentials;
 
-  if (decision.token === undefined) return 'usage';
+  if (explicitAccount !== '' && decision.token !== undefined) {
+    // Printed before anything is attempted. A token warning read after a refusal is
+    // a warning that arrives once the reader has started looking somewhere else.
+    for (const warning of decision.warnings) {
+      write(styledResultLine('attention', warning, style));
+    }
+    credentials = { accountId: explicitAccount, token: decision.token };
+  } else if (host.credentials !== undefined) {
+    const resolved = await host.credentials();
+    if (resolved === null) return 'failed';
+    for (const warning of resolved.warnings) {
+      write(styledResultLine('attention', warning, style));
+    }
+    credentials = {
+      accountId: explicitAccount !== '' ? explicitAccount : resolved.credentials.accountId,
+      token: resolved.credentials.token,
+    };
+  } else {
+    for (const warning of decision.warnings) {
+      write(styledResultLine('attention', warning, style));
+    }
 
-  if (host.interactive) {
-    write(`Paste the value for ${key}, then press Enter.`);
-    write(note('It is not echoed, not written to disk, and not printed back.'));
+    if (explicitAccount === '') {
+      write(
+        [
+          'baseclf secret set needs the account the Worker lives in.',
+          '',
+          'Pass --account, or set CLOUDFLARE_ACCOUNT_ID. It is on the right of any page',
+          'in the Cloudflare dashboard, and `wrangler whoami` prints it.',
+        ].join('\n'),
+      );
+      return 'usage';
+    }
+
+    if (decision.token === undefined) return 'usage';
+    credentials = { accountId: explicitAccount, token: decision.token };
   }
 
   // Trimmed, and the reason is not tidiness. A pipe adds a newline, a paste often
   // carries a trailing space, and a secret with invisible whitespace on the end is
   // accepted by Cloudflare, stored, and then fails every signature check with nothing
   // in any log that mentions whitespace.
-  const value = (await host.readSecret()).trim();
+  let value = '';
+
+  if (host.interactive) {
+    write(`Type the value for ${key}, then press Enter.`);
+    write(note('It is not echoed, not written to disk, and not printed back.'));
+    write(note('Pick something you will remember: it is asked for twice, and you'));
+    write(note('will need it again wherever this deployment is managed from.'));
+    if (key === 'MCP_TOKEN') {
+      write(note('This value is the admin token. The Studio asks for it, and anyone'));
+      write(note('holding it can do everything the engine allows.'));
+    }
+
+    for (let attempt = 1; attempt <= CONFIRM_ATTEMPTS; attempt++) {
+      const first = (await host.readSecret()).trim();
+      if (first === '') break;
+
+      write('Type it again to confirm.');
+      const second = (await host.readSecret()).trim();
+
+      if (first === second) {
+        value = first;
+        break;
+      }
+
+      write(
+        styledResultLine(
+          'attention',
+          attempt < CONFIRM_ATTEMPTS
+            ? 'The two entries differ. Nothing was sent. Start over.'
+            : `The two entries differ. Nothing was sent, and ${key} was not changed.`,
+          style,
+        ),
+      );
+      if (attempt === CONFIRM_ATTEMPTS) return 'usage';
+    }
+  } else {
+    value = (await host.readSecret()).trim();
+  }
 
   if (value === '') {
     write(
       [
         `baseclf secret set: nothing was read, so ${key} was not changed.`,
         '',
-        'Pipe the value in, or run this in a terminal and paste it at the prompt.',
+        'Pipe the value in, or run this in a terminal and type it at the prompt.',
       ].join('\n'),
     );
     return 'usage';
   }
-
-  const credentials: Credentials = { accountId, token: decision.token };
 
   try {
     await putSecret(host.fetcher ?? fetch, credentials, script, key, value);
@@ -405,6 +486,25 @@ export async function runSecretSet(
   }
 
   write(styledResultLine('allow', `${key} is set on the Worker "${script}".`, style));
+
+  // The clipboard, so the value typed twice does not have to be typed a third time
+  // into whatever asked for it. Only for a person at a keyboard: a script piping a
+  // value in did not ask to have its clipboard replaced.
+  if (host.interactive && host.copyToClipboard !== undefined) {
+    if (await host.copyToClipboard(value)) {
+      write(
+        note(
+          key === 'MCP_TOKEN'
+            ? 'The value is in your clipboard: paste it into the Admin token field on the'
+            : 'The value is in your clipboard, ready to paste where it is needed.',
+        ),
+      );
+      if (key === 'MCP_TOKEN') write(note('Studio connect screen.'));
+    } else {
+      write(note('The clipboard was not reachable here. Use the value you just typed.'));
+    }
+  }
+
   write(note('Cloudflare does not hand a secret back, so this reports that the request was'));
   write(note('accepted rather than that the value is the one you meant.'));
   write(
