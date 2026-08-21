@@ -249,12 +249,15 @@ export default function StudioApp() {
         <header className="studio-header">
           <button className="mobile-menu" type="button" aria-label="Open navigation" onClick={() => setMenuOpen((value) => !value)}>Menu</button>
           <div>
-            <span className="machine-label">{mode === "live" && client ? `live / ${hostOf(client.origin)}` : `${mockProject.environment} / ${mockProject.database}`}</span>
+            {/* The connect flow is neither mock nor live yet, so it wears
+                neither label: a setup screen stamped "MOCK DATA" reads as a
+                fake setup. */}
+            <span className="machine-label">{mode === "live" && client ? `live / ${hostOf(client.origin)}` : mode === "connect" ? "setup / your deployment" : `${mockProject.environment} / ${mockProject.database}`}</span>
             <h1>{connected ? screen : "Connect Studio"}</h1>
           </div>
           <div className="studio-header-actions">
             <Link className="studio-help" href="/docs">Need help?</Link>
-            <span className="mock-badge">{mode === "live" ? "Live connection" : "Mock data"}</span>
+            {mode !== "connect" && <span className="mock-badge">{mode === "live" ? "Live connection" : "Mock data"}</span>}
             <ThemeToggle />
             <button className="connection-button" type="button" onClick={() => (mode === "demo" ? setMode("connect") : mode === "connect" ? setMode("demo") : disconnect())}>
               {mode === "demo" ? "Connect live" : mode === "connect" ? "Use demo" : "Disconnect"}
@@ -525,10 +528,19 @@ function ConnectFlow({ onConnected, onDemo, onNotice, onBridgeKey }: { onConnect
             <div><dt>BaseCLF servers</dt><dd>Not involved</dd></div>
           </dl>
         </section>
-        <div className="wizard-actions">
-          <button className="studio-primary" type="button" onClick={() => go("create")}>First deployment? Set up step by step</button>
-          <button className="studio-secondary" type="button" onClick={() => go("direct")}>I already have a deployment</button>
-          <button className="studio-secondary" type="button" onClick={onDemo}>Open demo workspace</button>
+        <div className="wizard-doors">
+          <button className="wizard-door is-primary" type="button" onClick={() => go("create")}>
+            <strong>First deployment? Set up step by step</strong>
+            <small>Three commands, each one checked for real before the next.</small>
+          </button>
+          <button className="wizard-door" type="button" onClick={() => go("direct")}>
+            <strong>I already have a deployment</strong>
+            <small>Paste the URL and the admin token, and connect.</small>
+          </button>
+          <button className="wizard-door" type="button" onClick={onDemo}>
+            <strong>Open the demo workspace</strong>
+            <small>Look around with fixture data first. Nothing to set up.</small>
+          </button>
         </div>
       </div>
     );
