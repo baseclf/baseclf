@@ -2,12 +2,12 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.baseclf/baseclf",
   "description": "Row-level security and auto-REST for Cloudflare D1, on your own account",
-  "version": "0.4.6",
+  "version": "0.4.7",
   "repository": {
     "url": "https://github.com/baseclf/baseclf",
     "source": "github"
   },
-  "websiteUrl": "https://github.com/baseclf/baseclf",
+  "websiteUrl": "https://baseclf.dev",
   "remotes": [
     {
       "type": "streamable-http",
