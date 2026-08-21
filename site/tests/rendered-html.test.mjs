@@ -205,9 +205,9 @@ test("ships the guided motion system and real product captures", async () => {
   assert.match(studioApp, /npx wrangler login/);
   assert.match(studioApp, /Authorization granted to Wrangler/);
   // The token step teaches the CLI's own secret command, whose terminal shot
-  // carries the type-twice confirmation and the clipboard line.
+  // carries the Enter-to-generate default and the clipboard line.
   assert.match(studioApp, /baseclf secret set MCP_TOKEN --script/);
-  assert.match(studioApp, /Type it again to confirm/);
+  assert.match(studioApp, /Generated a strong value/);
   assert.match(studioApp, /in your clipboard/);
   assert.match(studioApp, /disabled=\{!authReady \|\| !r2Ready\}/);
   assert.match(studioApp, /R2 Object Storage/);

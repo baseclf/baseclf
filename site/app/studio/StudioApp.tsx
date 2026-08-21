@@ -392,13 +392,12 @@ const CREATE_OUTPUT: readonly string[] = [
 ];
 
 const SECRET_OUTPUT: readonly string[] = [
-  "Type the value for MCP_TOKEN, then press Enter.",
-  "  It is not echoed, not written to disk, and not printed back.",
-  "  Pick something you will remember: it is asked for twice, and you",
-  "  will need it again wherever this deployment is managed from.",
+  "Press Enter to generate a strong value for MCP_TOKEN, or type your own.",
+  "  Nothing you type is echoed, written to disk, or printed back.",
+  "  A typed value is asked for twice; a generated one cannot be mistyped.",
   "  This value is the admin token. The Studio asks for it, and anyone",
   "  holding it can do everything the engine allows.",
-  "Type it again to confirm.",
+  "✓ Generated a strong value.",
   '✓ MCP_TOKEN is set on the Worker "your-project".',
   "  The value is in your clipboard: paste it into the Admin token field on the",
   "  Studio connect screen.",
@@ -680,7 +679,7 @@ function ConnectFlow({ onConnected, onDemo, onNotice, onBridgeKey }: { onConnect
         <p className="wizard-progress">Step 3 of 4 · Set the admin token</p>
         <section className="wizard-card">
           <h3>The one credential, on your own Worker.</h3>
-          <p>Invent a strong value and set it as the MCP_TOKEN secret — it unlocks the management surface of your deployment. The command asks you to type it <strong>twice</strong>, and remember it: it is the admin token you will use from now on. The confirmed value lands in your clipboard, so the field below is one paste.</p>
+          <p>Set the MCP_TOKEN secret — it unlocks the management surface of your deployment. At the prompt, just <strong>press Enter</strong> and a strong value is generated for you; type your own instead and it is asked for twice. Either way the token lands in your clipboard, so the field below is one paste.</p>
           <div className="wizard-command"><code>npx baseclf secret set MCP_TOKEN --script {project}</code><button type="button" onClick={() => copy(`npx baseclf secret set MCP_TOKEN --script ${project}`)}>Copy</button></div>
           <TerminalShot command={`npx baseclf secret set MCP_TOKEN --script ${project}`} lines={SECRET_OUTPUT} />
           <p className="form-help">Nothing you type is echoed, which is correct. Yours should end like this, with the clipboard line.</p>
