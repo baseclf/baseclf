@@ -60,7 +60,8 @@ export default function Home() {
         </div>
         <div className="nav-actions">
           <ThemeToggle />
-          <a className="nav-cta" href="/studio">Open Studio <span aria-hidden="true">↗</span></a>
+          <a className="nav-cta-quiet" href="/studio">View demo</a>
+          <a className="nav-cta" href="/studio?connect=1">Connect live <span aria-hidden="true">↗</span></a>
         </div>
       </nav>
 

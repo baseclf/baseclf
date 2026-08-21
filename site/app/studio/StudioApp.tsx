@@ -198,6 +198,15 @@ export default function StudioApp() {
     return () => window.clearTimeout(timer);
   }, [toast]);
 
+  // The landing's "Connect live" deep-links here with ?connect=1. Read once
+  // after hydration so the server-rendered demo frame stays identical; the
+  // microtask keeps the state change out of the effect's synchronous body.
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).has("connect")) {
+      queueMicrotask(() => setMode("connect"));
+    }
+  }, []);
+
   return (
     <main className="studio-root" data-density="compact">
       <aside className={`studio-sidebar ${menuOpen ? "is-mobile-open" : ""}`} aria-label="Studio navigation">
@@ -251,9 +260,9 @@ export default function StudioApp() {
         </header>
 
         <div className="studio-content">
-          {connected && <aside className="studio-guide"><span>{guidance[screen].label}</span><p>{guidance[screen].copy}</p><button type="button" onClick={() => setPaletteOpen(true)}>Show actions <kbd>⌘K</kbd></button></aside>}
+          {connected && <aside className="studio-guide"><span>{guidance[screen].label}</span><p>{guidance[screen].copy}</p>{mode === "demo" && <button type="button" onClick={() => setMode("connect")}>Connect live →</button>}<button type="button" onClick={() => setPaletteOpen(true)}>Show actions <kbd>⌘K</kbd></button></aside>}
           <div className="studio-screen-stage" key={connected ? `${mode}-${screen}` : "connect"}>{!connected ? (
-              <ConnectPanel onConnected={beginLive} onDemo={() => setMode("demo")} />
+              <ConnectPanel onConnected={beginLive} onDemo={() => setMode("demo")} onNotice={announce} />
             ) : screen === "Simulator" ? (
               <SimulatorPanel client={mode === "live" ? client : null} live={live} bridgeKey={bridgeKey} onBridgeKey={setBridgeKey} onNotice={announce} />
             ) : (
@@ -290,7 +299,39 @@ export default function StudioApp() {
   );
 }
 
-function ConnectPanel({ onConnected, onDemo }: { onConnected: (client: StudioClient) => void; onDemo: () => void }) {
+/**
+ * The three real steps from nothing to connected, with the one trap named:
+ * the deployment only answers browsers from origins it trusts, so the create
+ * prompt's "Frontend origin" has to be this page's origin. Every command is
+ * the product's own; nothing here invents a flow.
+ */
+function ConnectSetupGuide({ onNotice }: { onNotice: (message: string) => void }) {
+  const copy = (value: string) => {
+    void navigator.clipboard?.writeText(value);
+    onNotice("Command copied.");
+  };
+  return (
+    <div className="connect-setup">
+      <header><span>First deployment?</span><small>Three commands, your own Cloudflare account</small></header>
+      <ol>
+        <li>
+          <strong>Create it.</strong> One command provisions the database, the bucket and the Worker, then prints your deployment URL. When it asks for the <strong>Frontend origin</strong>, enter this page&apos;s origin so the deployment trusts your browser.
+          <div><code>npx create-baseclf</code><button type="button" onClick={() => copy("npx create-baseclf")}>Copy</button></div>
+        </li>
+        <li>
+          <strong>Set the admin token.</strong> It is the MCP_TOKEN secret on your Worker, and it is what this form calls the admin token. Pick any strong value; you will paste the same value below.
+          <div><code>npx wrangler secret put MCP_TOKEN --name baseclf</code><button type="button" onClick={() => copy("npx wrangler secret put MCP_TOKEN --name baseclf")}>Copy</button></div>
+        </li>
+        <li>
+          <strong>Connect.</strong> Paste the printed URL and that token into the form here. Rows and policy editing additionally use the local bridge, started with:
+          <div><code>npx baseclf studio</code><button type="button" onClick={() => copy("npx baseclf studio")}>Copy</button></div>
+        </li>
+      </ol>
+    </div>
+  );
+}
+
+function ConnectPanel({ onConnected, onDemo, onNotice }: { onConnected: (client: StudioClient) => void; onDemo: () => void; onNotice: (message: string) => void }) {
   const [url, setUrl] = useState("");
   const [token, setToken] = useState("");
   const [error, setError] = useState("");
@@ -327,6 +368,7 @@ function ConnectPanel({ onConnected, onDemo }: { onConnected: (client: StudioCli
           <div><dt>Credential storage</dt><dd>This page, in memory</dd></div>
           <div><dt>BaseCLF servers</dt><dd>Not involved</dd></div>
         </dl>
+        <ConnectSetupGuide onNotice={onNotice} />
       </section>
       <form className="connect-form" onSubmit={submit}>
         <label>Worker URL<input type="url" value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://your-project.your-subdomain.workers.dev" required /></label>

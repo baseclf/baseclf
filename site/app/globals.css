@@ -72,6 +72,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .theme-icon { width: 16px; display: grid; place-items: center; font-size: 16px; line-height: 1; }
 .nav-cta { display: inline-flex; align-items: center; gap: 18px; min-height: 46px; padding: 0 20px; border-radius: 7px; color: white; background: var(--carbon); font-size: 14px; font-weight: 550; transition: transform .2s ease, box-shadow .2s ease; }
 .nav-cta:hover { transform: translateY(-2px); box-shadow: 0 10px 24px rgba(16,19,24,.15); }
+.nav-cta-quiet { display: inline-flex; align-items: center; min-height: 46px; padding: 0 16px; border: 1px solid var(--line); border-radius: 7px; color: var(--ink); background: transparent; font-size: 14px; font-weight: 550; transition: transform .2s ease, border-color .2s ease; }
+.nav-cta-quiet:hover { transform: translateY(-2px); border-color: var(--carbon); }
 
 .hero { width: min(var(--page-width), calc(100% - var(--page-gutter) - var(--page-gutter))); min-height: 750px; margin: 0 auto; padding: 82px 0 70px; display: grid; grid-template-columns: minmax(0, .82fr) minmax(0, 1.18fr); align-items: center; gap: clamp(38px, 4.2vw, 82px); }
 .hero > *, .hero-copy, .hero-visual-wrap { min-width: 0; }

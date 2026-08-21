@@ -95,6 +95,15 @@
 .connect-copy dl { max-width: 560px; margin-top: 34px; border-top: 1px solid var(--line); }
 .connect-copy dl div { min-height: 44px; display: grid; grid-template-columns: 150px 1fr; align-items: center; border-bottom: 1px solid var(--line); }
 .connect-copy dt { color: var(--ink-soft); }
+.connect-setup { max-width: 560px; margin-top: 30px; border: 1px solid var(--line); border-radius: 4px; background: var(--paper); }
+.connect-setup > header { min-height: 42px; padding: 0 14px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); font-size: 11px; font-weight: 600; }
+.connect-setup > header small { color: var(--ink-soft); font-weight: 400; }
+.connect-setup ol { margin: 0; padding: 6px 14px 12px 30px; display: grid; gap: 10px; color: var(--ink-soft); font-size: 11px; line-height: 1.6; }
+.connect-setup li strong { color: var(--ink); font-weight: 550; }
+.connect-setup li > div { margin-top: 5px; display: flex; align-items: center; gap: 8px; }
+.connect-setup code { padding: 5px 8px; border: 1px solid var(--line); border-radius: 2px; background: var(--canvas); color: var(--ink); font-size: 10px; overflow-wrap: anywhere; }
+.connect-setup li button { min-height: 24px; padding: 0 8px; border: 1px solid var(--line); border-radius: 2px; background: transparent; color: var(--ink); font: inherit; font-size: 9px; cursor: pointer; white-space: nowrap; }
+.connect-setup li button:hover { border-color: var(--ink); }
 .connect-form { padding: 24px; display: grid; gap: 16px; border: 1px solid var(--line); border-radius: 5px; background: var(--paper); }
 .connect-form .studio-primary, .connect-form .studio-secondary { width: 100%; }
 .form-error { margin: -4px 0 0; color: var(--deny); font-size: 11px; }

@@ -182,6 +182,15 @@ test("ships the guided motion system and real product captures", async () => {
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
   ]);
 
+  // The funnel has both doors: view the demo, or connect a real deployment,
+  // which deep-links straight into the connect screen with its setup guide.
+  assert.match(home, /View demo/);
+  assert.match(home, /Connect live/);
+  assert.match(home, /\/studio\?connect=1/);
+  const studioApp = await readFile(new URL("../app/studio/StudioApp.tsx", import.meta.url), "utf8");
+  assert.match(studioApp, /First deployment\?/);
+  assert.match(studioApp, /npx create-baseclf/);
+
   assert.match(home, /The operational suite/);
   assert.match(home, /name="overview"/);
   assert.match(home, /name="request-logs"/);
