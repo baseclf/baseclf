@@ -9,9 +9,9 @@
  * stream, both of which are correct.
  *
  * The admin token lives in this object and, once a connection has been proven,
- * in this tab's sessionStorage so a reload does not sign the person out: never
- * in localStorage, not in a cookie, never in a URL. Closing the tab forgets
- * it, which is the right default for a credential that grants schema reads.
+ * in the browser's saved session (see app/studio/session.ts for the scope and
+ * the expiry that tempers it): not in a cookie, never in a URL. Disconnect
+ * forgets it everywhere.
  */
 
 const PROTOCOL_VERSION = "2026-07-28";

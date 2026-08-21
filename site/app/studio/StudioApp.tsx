@@ -625,10 +625,10 @@ function ConnectFlow({ onConnected, onDemo, onNotice, onBridgeKey }: { onConnect
         <section className="connect-copy">
           <p className="section-kicker">Live connection</p>
           <h2>Connect Studio to your Worker.</h2>
-          <p>Everything is sent directly to your own deployment and kept in this browser tab only — a reload reconnects, closing the tab forgets it. BaseCLF has no servers in between.</p>
+          <p>Everything is sent directly to your own deployment and kept in this browser only — you stay signed in until you disconnect, or after seven days unused. BaseCLF has no servers in between.</p>
           <dl>
             <div><dt>Transport</dt><dd>HTTPS to your Worker</dd></div>
-            <div><dt>Credential storage</dt><dd>This tab, until it closes</dd></div>
+            <div><dt>Credential storage</dt><dd>This browser, until you disconnect</dd></div>
             <div><dt>BaseCLF servers</dt><dd>Not involved</dd></div>
           </dl>
         </section>

@@ -2,23 +2,22 @@
 
 import { useEffect, useState } from "react";
 
-import { hasStoredSession } from "./studio/session";
+import { onSessionChange } from "./studio/session";
 
 /**
- * The landing's connect button, aware of this tab's Studio session.
+ * The landing's connect button, aware of the browser's Studio session.
  *
- * The session lives in sessionStorage, which the server cannot see, so the
- * server renders the signed-out label and this swaps after hydration. A tab
- * that already holds a proven session reads "Dashboard": the Studio it opens
- * reconnects from the stored pair by making the round trip again, so the
- * label is a shortcut, never a claim the page has not re-proven.
+ * The session lives in localStorage, which the server cannot see, so the
+ * server renders the signed-out label and this swaps after hydration - and
+ * keeps listening, so a landing page already open updates the moment the
+ * Studio connects or disconnects in another tab. "Dashboard" is a shortcut,
+ * never a claim: the Studio it opens still re-proves the stored pair with a
+ * real round trip.
  */
 export default function NavCta() {
   const [connected, setConnected] = useState(false);
 
-  useEffect(() => {
-    setConnected(hasStoredSession());
-  }, []);
+  useEffect(() => onSessionChange(setConnected), []);
 
   return (
     <a className="nav-cta" href="/studio?connect=1">

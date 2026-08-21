@@ -192,7 +192,7 @@ test("ships the guided motion system and real product captures", async () => {
   assert.match(navCta, /Connect live/);
   assert.match(navCta, /Dashboard/);
   assert.match(navCta, /\/studio\?connect=1/);
-  assert.match(navCta, /hasStoredSession/);
+  assert.match(navCta, /onSessionChange/);
   const studioApp = await readFile(new URL("../app/studio/StudioApp.tsx", import.meta.url), "utf8");
   assert.match(studioApp, /First deployment\?/);
   assert.match(studioApp, /npx create-baseclf/);
