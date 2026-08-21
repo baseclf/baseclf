@@ -171,7 +171,9 @@ describe('the variables a deployment cannot start without', () => {
     const vars = varsFor('https://shop.someone.workers.dev', 'http://localhost:5173');
 
     expect(vars.BETTER_AUTH_URL).toBe('https://shop.someone.workers.dev');
-    expect(vars.BETTER_AUTH_TRUSTED_ORIGINS).toBe('http://localhost:5173');
+    // The frontend the reader named, plus the studio's fixed origin, so the
+    // simulator works without a config edit and a redeploy later.
+    expect(vars.BETTER_AUTH_TRUSTED_ORIGINS).toBe('http://localhost:5173,http://localhost:4000');
   });
 
   it('leaves email and password off, which is a measurement not a preference', () => {

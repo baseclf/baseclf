@@ -243,10 +243,20 @@ export const REQUIRED_BINDING_NAMES: readonly string[] = Object.freeze(['DB', 'B
  * preference: hashing costs 58 ms of CPU against a free-plan budget of 10 ms for
  * the whole request. OAuth performs no hash, so social login works on any plan.
  */
+/**
+ * Where `baseclf studio` serves its pages, allowed on every deployment so the
+ * Studio works without a config edit and a redeploy. An origin on this list
+ * gets CORS answers and nothing else; every request still carries its own
+ * credential, so allowing a localhost origin grants no access by itself.
+ */
+export const STUDIO_ORIGIN = 'http://localhost:4000';
+
 export function varsFor(deploymentUrl: string, frontendOrigin: string): Record<string, string> {
+  const origins =
+    frontendOrigin === STUDIO_ORIGIN ? frontendOrigin : `${frontendOrigin},${STUDIO_ORIGIN}`;
   return {
     BETTER_AUTH_URL: deploymentUrl,
-    BETTER_AUTH_TRUSTED_ORIGINS: frontendOrigin,
+    BETTER_AUTH_TRUSTED_ORIGINS: origins,
     BETTER_AUTH_EMAIL_PASSWORD: 'false',
   };
 }

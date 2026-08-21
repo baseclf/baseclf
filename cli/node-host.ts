@@ -34,6 +34,7 @@
 
 import { execSync, spawnSync } from 'node:child_process';
 import { readFileSync, statSync } from 'node:fs';
+import { createServer } from 'node:http';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import process from 'node:process';
@@ -43,6 +44,7 @@ import type { LoginHost } from './login.js';
 import type { PolicyHost } from './policy.js';
 import { type CreateHost, resolveAccountCredential } from './run-create.js';
 import type { Host } from './secret.js';
+import type { BridgeHandler, StudioHost } from './studio.js';
 import type { Platform } from './wrangler-credential.js';
 
 const colour = process.stdout.isTTY === true && process.env.NO_COLOR === undefined;
@@ -258,6 +260,53 @@ function readTextFile(path: string): string | undefined {
   }
 }
 
+/**
+ * Bind the studio bridge to the loopback interface, and only that interface.
+ *
+ * 127.0.0.1 in the `listen` call is the boundary that keeps the bridge off the
+ * network: the process holds a Cloudflare credential, and a listener on
+ * 0.0.0.0 would offer it to whatever the local network holds.
+ */
+function serveBridge(
+  port: number,
+  handler: BridgeHandler,
+): Promise<{ untilClosed: Promise<void> } | { error: string }> {
+  return new Promise((resolve) => {
+    const server = createServer((incoming, outgoing) => {
+      let bodyText = '';
+      incoming.setEncoding('utf8');
+      incoming.on('data', (chunk: string) => {
+        bodyText += chunk;
+      });
+      incoming.on('end', () => {
+        void handler({
+          method: incoming.method ?? 'GET',
+          path: new URL(incoming.url ?? '/', 'http://127.0.0.1').pathname,
+          header: (name: string) => {
+            const value = incoming.headers[name.toLowerCase()];
+            return Array.isArray(value) ? (value[0] ?? null) : (value ?? null);
+          },
+          bodyText,
+        }).then((response) => {
+          outgoing.writeHead(response.status, response.headers);
+          outgoing.end(response.body);
+        });
+      });
+    });
+
+    server.on('error', (error) => {
+      resolve({ error: error instanceof Error ? error.message : String(error) });
+    });
+    server.listen(port, '127.0.0.1', () => {
+      resolve({
+        untilClosed: new Promise<void>((done) => {
+          server.on('close', () => done());
+        }),
+      });
+    });
+  });
+}
+
 function isDirectory(path: string): boolean {
   try {
     return statSync(path).isDirectory();
@@ -277,6 +326,33 @@ const paths = {
   env: process.env,
   isDirectory,
 };
+
+const policyHost = {
+  fetcher: fetch,
+  readFile: readTextFile,
+  // Names the holder of the write lock. Unique per run, across machines.
+  newId: () => crypto.randomUUID(),
+  // ⚠️ The same resolution `create` uses, called rather than reimplemented. It
+  // decides which Cloudflare account the policies land on, and two implementations
+  // of that decision is how they come to disagree.
+  //
+  // It writes its own refusals, which is why it takes the writer and the style.
+  credentials: () =>
+    resolveAccountCredential(
+      {
+        fetcher: fetch,
+        refreshLogin,
+        readAuthFile: readTextFile,
+        paths,
+        envFile: readEnvFile(),
+        now: () => new Date(),
+      },
+      (text: string) => {
+        process.stdout.write(`${text}\n`);
+      },
+      { colour },
+    ),
+} satisfies PolicyHost;
 
 /** What the runtime owns, for every command. */
 export const runtime = {
@@ -309,30 +385,9 @@ export const runtime = {
     envFile: readEnvFile(),
     now: () => new Date(),
   } satisfies LoginHost,
-  policyHost: {
-    fetcher: fetch,
-    readFile: readTextFile,
-    // Names the holder of the write lock. Unique per run, across machines.
-    newId: () => crypto.randomUUID(),
-    // ⚠️ The same resolution `create` uses, called rather than reimplemented. It
-    // decides which Cloudflare account the policies land on, and two implementations
-    // of that decision is how they come to disagree.
-    //
-    // It writes its own refusals, which is why it takes the writer and the style.
-    credentials: () =>
-      resolveAccountCredential(
-        {
-          fetcher: fetch,
-          refreshLogin,
-          readAuthFile: readTextFile,
-          paths,
-          envFile: readEnvFile(),
-          now: () => new Date(),
-        },
-        (text: string) => {
-          process.stdout.write(`${text}\n`);
-        },
-        { colour },
-      ),
-  } satisfies PolicyHost,
+  policyHost,
+  // The same host as `policy` plus somewhere to bind a listener, spread rather
+  // than rebuilt: a second copy of the credential resolution is how two commands
+  // come to disagree about which account they act on.
+  studioHost: { ...policyHost, serve: serveBridge } satisfies StudioHost,
 };

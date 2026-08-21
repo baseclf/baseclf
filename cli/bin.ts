@@ -19,4 +19,5 @@ process.exitCode = await main(
   runtime.createHost,
   runtime.loginHost,
   runtime.policyHost,
+  runtime.studioHost,
 );

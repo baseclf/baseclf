@@ -30,6 +30,7 @@ import {
   SECRET_USAGE,
   type SecretOutcome,
 } from './secret.js';
+import { runStudio, STUDIO_FIXED_TEXT, type StudioHost } from './studio.js';
 import { runUser, USER_FIXED_TEXT } from './user.js';
 
 export type Writer = (text: string) => void;
@@ -68,6 +69,7 @@ const USAGE = [
   '  create             Create the resources and deploy the engine to your account',
   '  policy <verb>      Expose a table, list what is exposed, or stop exposing one',
   '  user set-app       Store server-set claims for one user, readable as $auth.app.*',
+  '  studio             Start the local result bridge for the Studio simulator',
   '  doctor <url>       Ask a deployment what is wrong with it, and what to do about it',
   '  secret set <KEY>   Set one secret on a deployed Worker, reading the value from stdin',
   '',
@@ -111,6 +113,7 @@ export async function main(
   createHost?: CreateHost,
   loginHost?: LoginHost,
   policyHost?: PolicyHost,
+  studioHost?: StudioHost,
 ): Promise<number> {
   const [command, ...rest] = argv;
 
@@ -148,6 +151,14 @@ export async function main(
       return EXIT.usage;
     }
     return OUTCOME_EXIT[await runPolicy(rest, write, style, policyHost)];
+  }
+
+  if (command === 'studio') {
+    if (studioHost === undefined) {
+      write('baseclf studio needs a runtime that can reach the network and bind a port.');
+      return EXIT.usage;
+    }
+    return OUTCOME_EXIT[await runStudio(rest, write, style, studioHost)];
   }
 
   // The same host as `policy`, because it needs exactly the same reach: a file,
@@ -226,6 +237,7 @@ export const FIXED_TEXT: readonly string[] = Object.freeze([
   ...LOGIN_FIXED_TEXT,
   ...POLICY_FIXED_TEXT,
   ...USER_FIXED_TEXT,
+  ...STUDIO_FIXED_TEXT,
 ]);
 
 /** The voice rules, over everything in `FIXED_TEXT`. Used by the tests. */
