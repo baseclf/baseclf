@@ -575,7 +575,7 @@ function ConnectFlow({ onConnected, onDemo, onNotice, onBridgeKey }: { onConnect
           <div className="wizard-command"><code>npx create-baseclf</code><button type="button" onClick={() => copy("npx create-baseclf")}>Copy</button></div>
           <div className="wizard-command"><code>{pageOrigin}</code><button type="button" onClick={() => copy(pageOrigin)}>Copy origin</button></div>
           <TerminalShot command="npx create-baseclf" lines={CREATE_OUTPUT} />
-          <p className="form-help">This is what a successful run prints, from a real one. If yours shows a ✗ or stops early, that line is the thing to fix before going on.</p>
+          <p className="form-help">This is what a successful run prints, from a real one. If yours shows a ✗ or stops early, that line is the thing to fix before going on. A ▲ line is different: the printout explains what it could not set and why, but the run continues and the address at the end works — carry on, and deal with the ▲ when it suits you.</p>
           <label className="wizard-field">Paste the deployment URL it printed<input type="url" value={wizard.url} onChange={(event) => setWizard({ ...wizard, url: event.target.value, version: null })} placeholder="https://your-project.your-subdomain.workers.dev" /></label>
           {wizard.version !== null ? (
             <p className="wizard-verified"><span className="state-label active">Verified</span> The deployment answers, running version {wizard.version}.</p>
