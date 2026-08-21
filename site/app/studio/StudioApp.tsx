@@ -4,9 +4,11 @@ import { FormEvent, ReactNode, RefObject, useEffect, useRef, useState } from "re
 import Link from "next/link";
 import ThemeToggle from "../ThemeToggle";
 import {
+  applyOnBridge,
   type BridgeRows,
   type LintFinding,
   type PolicyTable,
+  readDocumentOnBridge,
   runOnBridge,
   type SchemaTable,
   type SimulateResult,
@@ -115,6 +117,9 @@ export default function StudioApp() {
   const [galleryOpen, setGalleryOpen] = useState(false);
   const [toast, setToast] = useState("");
   const [notice, setNotice] = useState("Policy simulation ready.");
+  // One key for every bridge lane: the simulator's rows and the policies
+  // editor share it, entered once. Page memory only, like the admin token.
+  const [bridgeKey, setBridgeKey] = useState("");
   const paletteFocus = useOverlayFocus(paletteOpen);
   const dialogFocus = useOverlayFocus(dialogOpen);
   const galleryFocus = useOverlayFocus(galleryOpen);
@@ -132,18 +137,11 @@ export default function StudioApp() {
    * unwinding the connection, because a deployment with no policies yet is a
    * normal state, not a broken one.
    */
-  const beginLive = async (nextClient: StudioClient) => {
-    setClient(nextClient);
-    setLive(null);
-    setMode("live");
-    // The origin only, for Overview and the API Explorer. Never the token.
-    setSharedOrigin(nextClient.origin);
-    announce(`Connected to ${hostOf(nextClient.origin)}.`);
-
+  const loadLive = async (from: StudioClient) => {
     const [policyAnswer, lintAnswer, schemaAnswer] = await Promise.all([
-      nextClient.policies(),
-      nextClient.lint(),
-      nextClient.schema(),
+      from.policies(),
+      from.lint(),
+      from.schema(),
     ]);
     if (policyAnswer.kind === "error") announce(policyAnswer.message);
     setLive({
@@ -154,10 +152,26 @@ export default function StudioApp() {
     });
   };
 
+  const beginLive = async (nextClient: StudioClient) => {
+    setClient(nextClient);
+    setLive(null);
+    setMode("live");
+    // The origin only, for Overview and the API Explorer. Never the token.
+    setSharedOrigin(nextClient.origin);
+    announce(`Connected to ${hostOf(nextClient.origin)}.`);
+    await loadLive(nextClient);
+  };
+
+  /** After an apply: what the deployment now admits to, re-read from it. */
+  const refreshLive = async () => {
+    if (client !== null) await loadLive(client);
+  };
+
   const disconnect = () => {
     setClient(null);
     setLive(null);
     setMode("connect");
+    setBridgeKey("");
     setSharedOrigin(null);
   };
 
@@ -241,9 +255,9 @@ export default function StudioApp() {
           <div className="studio-screen-stage" key={connected ? `${mode}-${screen}` : "connect"}>{!connected ? (
               <ConnectPanel onConnected={beginLive} onDemo={() => setMode("demo")} />
             ) : screen === "Simulator" ? (
-              <SimulatorPanel client={mode === "live" ? client : null} live={live} onNotice={announce} />
+              <SimulatorPanel client={mode === "live" ? client : null} live={live} bridgeKey={bridgeKey} onBridgeKey={setBridgeKey} onNotice={announce} />
             ) : (
-              <DataScreen screen={screen} client={mode === "live" ? client : null} live={mode === "live" ? live : null} onNotice={announce} onOpenDialog={() => setDialogOpen(true)} />
+              <DataScreen screen={screen} client={mode === "live" ? client : null} live={mode === "live" ? live : null} bridgeKey={bridgeKey} onRefresh={() => void refreshLive()} onNotice={announce} onOpenDialog={() => setDialogOpen(true)} />
             )}</div>
         </div>
 
@@ -325,8 +339,8 @@ function ConnectPanel({ onConnected, onDemo }: { onConnected: (client: StudioCli
   );
 }
 
-function SimulatorPanel({ client, live, onNotice }: { client: StudioClient | null; live: LiveState | null; onNotice: (message: string) => void }) {
-  if (client !== null) return <LiveSimulatorPanel client={client} live={live} onNotice={onNotice} />;
+function SimulatorPanel({ client, live, bridgeKey, onBridgeKey, onNotice }: { client: StudioClient | null; live: LiveState | null; bridgeKey: string; onBridgeKey: (key: string) => void; onNotice: (message: string) => void }) {
+  if (client !== null) return <LiveSimulatorPanel client={client} live={live} bridgeKey={bridgeKey} onBridgeKey={onBridgeKey} onNotice={onNotice} />;
   return <DemoSimulatorPanel onNotice={onNotice} />;
 }
 
@@ -338,7 +352,7 @@ function SimulatorPanel({ client, live, onNotice }: { client: StudioClient | nul
  * touches data, and executing the statement is the local Studio's job
  * (decision Q3), where the operator's own credential runs it.
  */
-function LiveSimulatorPanel({ client, live, onNotice }: { client: StudioClient; live: LiveState | null; onNotice: (message: string) => void }) {
+function LiveSimulatorPanel({ client, live, bridgeKey, onBridgeKey, onNotice }: { client: StudioClient; live: LiveState | null; bridgeKey: string; onBridgeKey: (key: string) => void; onNotice: (message: string) => void }) {
   const tables = live === null ? [] : live.policies.map((entry) => entry.table);
   const [mode, setMode] = useState<"results" | "sql">("results");
   const [table, setTable] = useState("");
@@ -346,7 +360,6 @@ function LiveSimulatorPanel({ client, live, onNotice }: { client: StudioClient; 
   const [role, setRole] = useState("authenticated");
   const [claimsText, setClaimsText] = useState('{ "uid": "u_demo" }');
   const [bodyText, setBodyText] = useState('{ "title": "edited" }');
-  const [bridgeKey, setBridgeKey] = useState("");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<SimulateResult | null>(null);
   const [refusal, setRefusal] = useState<string | null>(null);
@@ -453,7 +466,7 @@ function LiveSimulatorPanel({ client, live, onNotice }: { client: StudioClient; 
           </div>
           <label className="claims-field">JWT claims<textarea value={role === "anon" ? "{}" : claimsText} readOnly={role === "anon"} onChange={(event) => setClaimsText(event.target.value)} spellCheck={false} /></label>
           {writesBody && <label className="claims-field">Write body<textarea value={bodyText} onChange={(event) => setBodyText(event.target.value)} spellCheck={false} /></label>}
-          <label className="claims-field">Bridge key, from npx baseclf studio<textarea rows={1} value={bridgeKey} onChange={(event) => setBridgeKey(event.target.value)} placeholder="Leave empty to compile without rows" spellCheck={false} /></label>
+          <label className="claims-field">Bridge key, from npx baseclf studio<textarea rows={1} value={bridgeKey} onChange={(event) => onBridgeKey(event.target.value)} placeholder="Leave empty to compile without rows" spellCheck={false} /></label>
           <div className="panel-actions">
             <button className="studio-primary" type="button" disabled={busy || cooling} onClick={() => void run(role)}>{busy ? "Compiling…" : cooling ? `Rate limited · ${coolingSeconds}s` : "Run simulation"}</button>
             <button className="studio-secondary" type="button" disabled={busy || cooling} onClick={() => { setRole("anon"); void run("anon"); }}>Run as anon</button>
@@ -559,10 +572,10 @@ function DemoSimulatorPanel({ onNotice }: { onNotice: (message: string) => void 
   );
 }
 
-function DataScreen({ screen, client, live, onNotice, onOpenDialog }: { screen: Exclude<StudioScreen, "Simulator">; client: StudioClient | null; live: LiveState | null; onNotice: (message: string) => void; onOpenDialog: () => void }) {
+function DataScreen({ screen, client, live, bridgeKey, onRefresh, onNotice, onOpenDialog }: { screen: Exclude<StudioScreen, "Simulator">; client: StudioClient | null; live: LiveState | null; bridgeKey: string; onRefresh: () => void; onNotice: (message: string) => void; onOpenDialog: () => void }) {
   if (screen === "Policies") {
     return live !== null ? (
-      <LivePoliciesScreen live={live} onNotice={onNotice} />
+      <LivePoliciesScreen live={live} bridgeKey={bridgeKey} onRefresh={onRefresh} onNotice={onNotice} />
     ) : (
       <PoliciesScreen onNotice={onNotice} onOpenDialog={onOpenDialog} />
     );
@@ -580,14 +593,15 @@ function DataScreen({ screen, client, live, onNotice, onOpenDialog }: { screen: 
 }
 
 /**
- * The deployment's own policy list, read-only by decision Q5: the write path is
- * `baseclf policy apply`, whose validator refuses a bad document before it is
- * stored, and this screen hands out that command instead of growing a second
- * write path. Predicates are absent because `policy_list` withholds them by
- * design; what the operator gets is what the deployment will admit to a client
- * holding the admin token.
+ * The deployment's own policy list, and the editor decision Q5 planned as the
+ * second phase. The listing reads over `/mcp`, which withholds predicates by
+ * design. Editing goes through the local bridge instead: the stored source
+ * document is read back for the operator's own page, and applying runs the
+ * CLI's `policy apply` code path on the operator's machine, so there is still
+ * exactly one write path and one validator. Deleting rules stays with the CLI
+ * and its typed `--confirm`.
  */
-function LivePoliciesScreen({ live, onNotice }: { live: LiveState; onNotice: (message: string) => void }) {
+function LivePoliciesScreen({ live, bridgeKey, onRefresh, onNotice }: { live: LiveState; bridgeKey: string; onRefresh: () => void; onNotice: (message: string) => void }) {
   const rows = live.policies.flatMap((entry) =>
     entry.policies.map((policy) => ({ ...policy, table: entry.table, enabled: entry.enabled, version: entry.version })),
   );
@@ -595,12 +609,83 @@ function LivePoliciesScreen({ live, onNotice }: { live: LiveState; onNotice: (me
   const selected = rows.find((row) => `${row.table}.${row.name}` === selectedKey) ?? rows[0];
   const command = "npx baseclf policy apply <document>.json --project <your-project>";
 
+  // The editor. Opened per table, seeded with the stored source document read
+  // through the bridge, applied through the bridge, which runs the CLI's own
+  // apply. Nothing here ever holds or sends SQL.
+  const [editing, setEditing] = useState<string | null>(null);
+  const [draftText, setDraftText] = useState("");
+  const [applyBusy, setApplyBusy] = useState(false);
+  const [applyAnswer, setApplyAnswer] = useState<{ tone: "refusal" | "lines"; text: string } | null>(null);
+
+  const openEditor = async (table: string) => {
+    if (bridgeKey.trim() === "") {
+      onNotice("Editing needs the bridge. Run npx baseclf studio and paste its key in the Simulator.");
+      return;
+    }
+    setApplyAnswer(null);
+    const answer = await readDocumentOnBridge(bridgeKey.trim(), table);
+    if (answer.kind !== "data") {
+      onNotice(answer.kind === "refusal" ? answer.message : answer.message);
+      return;
+    }
+    const seed =
+      answer.data.document ??
+      ({ table, enabled: true, policies: [] } as Record<string, unknown>);
+    setDraftText(JSON.stringify(seed, null, 2));
+    setEditing(table);
+  };
+
+  const applyDraft = async () => {
+    if (applyBusy || editing === null) return;
+    setApplyBusy(true);
+    setApplyAnswer(null);
+    const answer = await applyOnBridge(bridgeKey.trim(), draftText);
+    setApplyBusy(false);
+    if (answer.kind === "refusal") {
+      setApplyAnswer({ tone: "refusal", text: answer.message });
+      onNotice("The engine refused the document. Nothing was stored.");
+      return;
+    }
+    if (answer.kind === "error") {
+      onNotice(answer.message);
+      return;
+    }
+    setApplyAnswer({ tone: "lines", text: answer.data.lines.join("\n") });
+    if (answer.data.applied) {
+      onNotice(`Applied. The deployment now answers for "${editing}" under the new rules.`);
+      onRefresh();
+    } else {
+      onNotice("The apply did not finish. The lines say where it stopped.");
+    }
+  };
+
+  if (editing !== null) {
+    return <div>
+      <ScreenTitle kicker="Policy engine" title={`Edit ${editing}`} description="The document below is the stored source, read from the deployment. Applying replaces every rule on the table, through the same validation and the same steps as baseclf policy apply." action={<button className="studio-secondary" type="button" onClick={() => setEditing(null)}>Back to policies</button>} />
+      <section className="detail-panel">
+        <div className="editor-form">
+          <label className="claims-field">Policy document<textarea rows={18} value={draftText} onChange={(event) => setDraftText(event.target.value)} spellCheck={false} /></label>
+          {applyAnswer !== null && (
+            <div className="editor-code-field">
+              <span>{applyAnswer.tone === "refusal" ? "Refused by the engine. Nothing was stored." : "What the apply reported"}</span>
+              <pre><code>{applyAnswer.text}</code></pre>
+            </div>
+          )}
+          <div className="panel-actions">
+            <button className="studio-primary" type="button" disabled={applyBusy} onClick={() => void applyDraft()}>{applyBusy ? "Applying…" : "Apply document"}</button>
+            <button className="studio-secondary" type="button" disabled={applyBusy} onClick={() => setEditing(null)}>Cancel</button>
+          </div>
+        </div>
+      </section>
+    </div>;
+  }
+
   const findingFor = (table: string, name: string) =>
     live.findings.find((entry) => entry.table === table && entry.policy === `${table}.${name}`) ??
     live.findings.find((entry) => entry.table === table);
 
   return <div>
-    <ScreenTitle kicker="Policy engine" title="Policies" description="What this deployment exposes, read from the deployment itself. Documents are edited with the CLI, whose validator refuses a bad one before it is stored." action={<button className="studio-secondary" type="button" onClick={() => { void navigator.clipboard?.writeText(command); onNotice("CLI command copied. Policies are written with baseclf policy apply."); }}>Copy CLI command</button>} />
+    <ScreenTitle kicker="Policy engine" title="Policies" description="What this deployment exposes, read from the deployment itself. Edit through the local bridge, which runs the same validation and the same apply as the CLI." action={<div className="panel-actions">{selected !== undefined && <button className="studio-primary" type="button" onClick={() => void openEditor(selected.table)}>Edit document</button>}<button className="studio-secondary" type="button" onClick={() => { void navigator.clipboard?.writeText(command); onNotice("CLI command copied. Policies are written with baseclf policy apply."); }}>Copy CLI command</button></div>} />
     <div className="workspace-grid">
       <section className="list-panel"><header><span>{rows.length} {rows.length === 1 ? "policy" : "policies"}</span><span className="machine-label">{live.withheld > 0 ? `${live.withheld} withheld` : "live"}</span></header><div className="data-list">{rows.length === 0 ? <button type="button" className="is-selected"><span><strong>Nothing exposed yet</strong><small>Apply a policy document to expose a table.</small></span></button> : rows.map((row) => <button key={`${row.table}.${row.name}`} type="button" className={selected !== undefined && `${row.table}.${row.name}` === `${selected.table}.${selected.name}` ? "is-selected" : ""} onClick={() => setSelectedKey(`${row.table}.${row.name}`)}><span><strong>{row.name}</strong><small>{row.table} · {row.operation}</small></span><span className={`state-label ${findingFor(row.table, row.name) !== undefined ? "attention" : "active"}`}>{findingFor(row.table, row.name) !== undefined ? "Needs index" : "Active"}</span></button>)}</div></section>
       <section className="detail-panel">{selected === undefined ? <div className="editor-form"><p>Nothing to show until a table is exposed. Save a policy document and apply it:</p><div className="editor-code-field"><span>Terminal</span><pre><code>{command}</code></pre></div></div> : <><header><div><span className="machine-label">Policy</span><h3>{selected.name}</h3></div><span className={`state-label ${findingFor(selected.table, selected.name) !== undefined ? "attention" : "active"}`}>{findingFor(selected.table, selected.name) !== undefined ? "Needs index" : "Active"}</span></header><div className="editor-form"><div className="editor-fields"><label>Operation<select value={selected.operation} disabled><option>{selected.operation}</option></select></label><label>Roles<select value={selected.roles.join(", ")} disabled><option>{selected.roles.join(", ")}</option></select></label></div><div className="validation-line"><span>{selected.hasCheck ? "Carries WITH CHECK" : "No WITH CHECK"}</span><code>{selected.columns.length} columns granted</code></div><div className="editor-code-field"><span>Granted columns</span><pre><code>{selected.columns.join(", ")}</code></pre></div>{selected.serverSet.length > 0 && <div className="validation-line"><span>Server-set, never from the request body</span><code>{selected.serverSet.join(", ")}</code></div>}<div className="editor-code-field"><span>Predicates stay on the deployment. Edit with the CLI:</span><pre><code>{command}</code></pre></div>{findingFor(selected.table, selected.name) !== undefined && <div className="warning-strip"><strong>Index required</strong><span>{findingFor(selected.table, selected.name)?.detail}</span>{findingFor(selected.table, selected.name)?.remedy !== undefined && <code>{findingFor(selected.table, selected.name)?.remedy}</code>}</div>}</div><footer><span className="machine-label">table {selected.table} · version {selected.version}</span><button className="studio-secondary" type="button" onClick={() => { void navigator.clipboard?.writeText(command); onNotice("CLI command copied."); }}>Copy CLI command</button></footer></>}</section>

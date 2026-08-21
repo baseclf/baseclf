@@ -279,6 +279,71 @@ export const BRIDGE_URL = "http://127.0.0.1:4000";
  * key it printed at startup rides on every request and lives in page memory
  * only, like the admin token.
  */
+/**
+ * Read the stored source document for one table from the bridge, so the
+ * policies editor edits what is actually running. Null means not exposed yet.
+ */
+export async function readDocumentOnBridge(
+  key: string,
+  table: string,
+): Promise<ToolAnswer<{ readonly document: Record<string, unknown> | null }>> {
+  let response: Response;
+  try {
+    response = await fetch(`${BRIDGE_URL}/document?table=${encodeURIComponent(table)}`, {
+      headers: { "x-bridge-key": key },
+    });
+  } catch {
+    return {
+      kind: "error",
+      message: "The bridge could not be reached. Is npx baseclf studio running?",
+    };
+  }
+  if (response.status === 401) return { kind: "error", message: "The bridge refused the key." };
+  try {
+    return { kind: "data", data: (await response.json()) as { document: Record<string, unknown> | null } };
+  } catch {
+    return { kind: "error", message: `The bridge answered ${response.status} without a body.` };
+  }
+}
+
+/**
+ * Apply a policy document through the bridge, which runs the CLI's own apply.
+ * The page sends the document TEXT the operator edited, never SQL; the
+ * engine's validator decides on the bridge before anything leaves the machine,
+ * and a refusal comes back with the validator's own reason.
+ */
+export async function applyOnBridge(
+  key: string,
+  text: string,
+): Promise<ToolAnswer<{ readonly applied: boolean; readonly lines: readonly string[] }>> {
+  let response: Response;
+  try {
+    response = await fetch(`${BRIDGE_URL}/apply`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-bridge-key": key },
+      body: JSON.stringify({ text }),
+    });
+  } catch {
+    return {
+      kind: "error",
+      message: "The bridge could not be reached. Is npx baseclf studio running?",
+    };
+  }
+  if (response.status === 401) return { kind: "error", message: "The bridge refused the key." };
+
+  let body: { applied?: boolean; lines?: string[]; refusal?: string; error?: string };
+  try {
+    body = (await response.json()) as typeof body;
+  } catch {
+    return { kind: "error", message: `The bridge answered ${response.status} without a body.` };
+  }
+  if (body.refusal !== undefined) return { kind: "refusal", message: body.refusal };
+  if (body.applied !== undefined) {
+    return { kind: "data", data: { applied: body.applied, lines: body.lines ?? [] } };
+  }
+  return { kind: "error", message: body.error ?? `The bridge answered ${response.status}.` };
+}
+
 export async function runOnBridge(
   key: string,
   input: { table: string; role: string; claims?: { uid?: string; email?: string } },
