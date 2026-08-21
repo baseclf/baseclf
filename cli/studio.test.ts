@@ -338,7 +338,10 @@ describe('a fresh deployment, which has no engine tables yet', () => {
         const answer = answers(sql);
         if ('refusedWith' in answer) {
           return new Response(
-            JSON.stringify({ success: false, errors: [{ code: 7500, message: answer.refusedWith }] }),
+            JSON.stringify({
+              success: false,
+              errors: [{ code: 7500, message: answer.refusedWith }],
+            }),
             { status: 400 },
           );
         }
@@ -353,10 +356,7 @@ describe('a fresh deployment, which has no engine tables yet', () => {
     };
   }
 
-  function bridgeOver(
-    endpoint: D1Endpoint,
-    lines: string[],
-  ): BridgeHandler {
+  function bridgeOver(endpoint: D1Endpoint, lines: string[]): BridgeHandler {
     return createBridge({
       key: KEY,
       openExecutor: () => env.DB,
