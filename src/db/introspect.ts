@@ -110,6 +110,15 @@ export interface TableInfo {
    * provider's tables are ours too and are not named that way.
    */
   readonly isSystem: boolean;
+  /**
+   * True for a WITHOUT ROWID table, from the `wr` column of `PRAGMA table_list`.
+   *
+   * Carried for anything that wants insertion order: `rowid` is the only honest
+   * proxy for it, and it does not exist on these tables. False when the pragma
+   * does not report the column at all, which fails toward "order by rowid", and
+   * that path errs loudly on such a table rather than sorting wrongly.
+   */
+  readonly withoutRowid: boolean;
 }
 
 export interface Catalogue {
@@ -126,6 +135,8 @@ export interface Catalogue {
 interface PragmaTableListRow {
   name: string;
   type: string;
+  /** 1 for a WITHOUT ROWID table. Optional because only `name` and `type` were relied on before. */
+  wr?: number;
 }
 interface PragmaTableInfoRow {
   name: string;
@@ -324,6 +335,7 @@ export async function introspect(executor: D1Executor): Promise<Catalogue> {
         referencesColumn: row.to ?? 'rowid',
       })),
       isSystem: isReservedTableName(entry.name),
+      withoutRowid: entry.wr === 1,
     });
   }
 

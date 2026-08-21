@@ -37,6 +37,7 @@ function catalogue(columns: readonly string[]): Catalogue {
     // Invariant I8: the underscore prefix is what marks a system table, and the
     // catalogue carries the answer rather than every caller re-deriving it.
     isSystem: false,
+    withoutRowid: false,
     columns: new Map(
       columns.map((name) => [
         name,

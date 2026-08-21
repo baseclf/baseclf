@@ -105,6 +105,23 @@ describe('introspect', () => {
     await env.DB.prepare('DROP TABLE strict_probe').run();
   });
 
+  it('marks a WITHOUT ROWID table, and a plain table as having a rowid', async () => {
+    // Measured rather than assumed: `wr` in PRAGMA table_list is what tells
+    // insertion order (rowid) apart from key order, and rules/01 says not to
+    // infer D1 behaviour from general SQLite knowledge. The row browse orders
+    // by rowid unless this flag says the table has none.
+    await env.DB.prepare('DROP TABLE IF EXISTS wr_probe').run();
+    await env.DB.prepare(
+      'CREATE TABLE wr_probe (id TEXT PRIMARY KEY NOT NULL, note TEXT) WITHOUT ROWID',
+    ).run();
+
+    const catalogue = await introspect(env.DB);
+    expect(catalogue.tables.get('wr_probe')?.withoutRowid).toBe(true);
+    expect(catalogue.tables.get('articles')?.withoutRowid).toBe(false);
+
+    await env.DB.prepare('DROP TABLE wr_probe').run();
+  });
+
   it('matches identifiers exactly, never by case or prefix', async () => {
     // Double-quoted string literals are enabled on D1, so a misspelled column
     // returns the string instead of raising. Exact matching here is the only
