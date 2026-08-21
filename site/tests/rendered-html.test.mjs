@@ -74,6 +74,43 @@ test("keeps fixture surfaces labeled and the example wired to a real deployment"
   assert.doesNotMatch(example, /mockExamplePosts/);
 });
 
+test("keeps the matched studio screens on the deployment, not on fixtures", async () => {
+  const [overview, explorer, studio, client, deployment] = await Promise.all([
+    readFile(new URL("../app/studio/overview/OverviewApp.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/studio/api/ApiExplorerApp.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/studio/StudioApp.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/lib/api/studio.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/lib/api/deployment.ts", import.meta.url), "utf8"),
+  ]);
+
+  // Overview composes the three public surfaces and imports no fixture.
+  assert.doesNotMatch(overview, /mock-data/);
+  assert.match(deployment, /\/health/);
+  assert.match(deployment, /_diagnose/);
+  assert.match(deployment, /_schema/);
+
+  // The explorer sends real anonymous requests and shows what D1 actually
+  // scanned. Reads only: the method select never offers a write.
+  assert.doesNotMatch(explorer, /mock-data/);
+  assert.match(deployment, /x-baseclf-rows-read/);
+  assert.match(deployment, /x-d1-bookmark/);
+  assert.doesNotMatch(explorer, /<option>POST<\/option>|<option>PATCH<\/option>|<option>DELETE<\/option>/);
+
+  // The live Tables screen reads names and shapes from the deployment's own
+  // schema tools, and never claims a row count it would have to scan for.
+  assert.match(studio, /LiveTablesScreen/);
+  assert.match(client, /schema_list/);
+  assert.match(client, /schema_describe/);
+
+  // The shared connection carries the origin only: one string key in
+  // sessionStorage, no client object, no credential field. The admin token
+  // stays in the Studio page's memory.
+  const connection = await readFile(new URL("../app/studio/connection.ts", import.meta.url), "utf8");
+  assert.match(connection, /sessionStorage/);
+  assert.doesNotMatch(connection, /StudioClient|#token|authorization|Bearer/);
+  assert.doesNotMatch(studio, /setSharedOrigin\([^n)]*token/i);
+});
+
 test("keeps unfinished product contracts explicit", async () => {
   const [usage, realtime, keys] = await Promise.all([
     render("/studio/usage").then((response) => response.text()),

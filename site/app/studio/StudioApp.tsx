@@ -8,9 +8,12 @@ import {
   type LintFinding,
   type PolicyTable,
   runOnBridge,
+  type SchemaTable,
   type SimulateResult,
   StudioClient,
+  type TableDetail,
 } from "../lib/api/studio";
+import { setSharedOrigin } from "./connection";
 import {
   mockClaims,
   mockParameters,
@@ -29,11 +32,12 @@ type StudioScreen = "Simulator" | "Policies" | "Tables" | "Auth" | "Storage" | "
 /** Demo shows the fixtures; connect asks for a deployment; live talks to one. */
 type StudioMode = "demo" | "connect" | "live";
 
-/** What one connection learns up front: the exposed tables and what lint says. */
+/** What one connection learns up front: the tables, the policies, and what lint says. */
 interface LiveState {
   readonly policies: readonly PolicyTable[];
   readonly findings: readonly LintFinding[];
   readonly withheld: number;
+  readonly tables: readonly SchemaTable[];
 }
 
 function hostOf(origin: string): string {
@@ -83,17 +87,21 @@ export default function StudioApp() {
     setClient(nextClient);
     setLive(null);
     setMode("live");
+    // The origin only, for Overview and the API Explorer. Never the token.
+    setSharedOrigin(nextClient.origin);
     announce(`Connected to ${hostOf(nextClient.origin)}.`);
 
-    const [policyAnswer, lintAnswer] = await Promise.all([
+    const [policyAnswer, lintAnswer, schemaAnswer] = await Promise.all([
       nextClient.policies(),
       nextClient.lint(),
+      nextClient.schema(),
     ]);
     if (policyAnswer.kind === "error") announce(policyAnswer.message);
     setLive({
       policies: policyAnswer.kind === "data" ? policyAnswer.data.tables : [],
       findings: lintAnswer.kind === "data" ? lintAnswer.data.findings : [],
       withheld: lintAnswer.kind === "data" ? lintAnswer.data.withheld : 0,
+      tables: schemaAnswer.kind === "data" ? schemaAnswer.data.tables : [],
     });
   };
 
@@ -101,6 +109,7 @@ export default function StudioApp() {
     setClient(null);
     setLive(null);
     setMode("connect");
+    setSharedOrigin(null);
   };
 
   useEffect(() => {
@@ -185,7 +194,7 @@ export default function StudioApp() {
             ) : screen === "Simulator" ? (
               <SimulatorPanel client={mode === "live" ? client : null} live={live} onNotice={announce} />
             ) : (
-              <DataScreen screen={screen} live={mode === "live" ? live : null} onNotice={announce} onOpenDialog={() => setDialogOpen(true)} />
+              <DataScreen screen={screen} client={mode === "live" ? client : null} live={mode === "live" ? live : null} onNotice={announce} onOpenDialog={() => setDialogOpen(true)} />
             )}</div>
         </div>
 
@@ -474,7 +483,7 @@ function DemoSimulatorPanel({ onNotice }: { onNotice: (message: string) => void 
   );
 }
 
-function DataScreen({ screen, live, onNotice, onOpenDialog }: { screen: Exclude<StudioScreen, "Simulator">; live: LiveState | null; onNotice: (message: string) => void; onOpenDialog: () => void }) {
+function DataScreen({ screen, client, live, onNotice, onOpenDialog }: { screen: Exclude<StudioScreen, "Simulator">; client: StudioClient | null; live: LiveState | null; onNotice: (message: string) => void; onOpenDialog: () => void }) {
   if (screen === "Policies") {
     return live !== null ? (
       <LivePoliciesScreen live={live} onNotice={onNotice} />
@@ -482,7 +491,13 @@ function DataScreen({ screen, live, onNotice, onOpenDialog }: { screen: Exclude<
       <PoliciesScreen onNotice={onNotice} onOpenDialog={onOpenDialog} />
     );
   }
-  if (screen === "Tables") return <TablesScreen />;
+  if (screen === "Tables") {
+    return client !== null && live !== null ? (
+      <LiveTablesScreen client={client} live={live} onNotice={onNotice} />
+    ) : (
+      <TablesScreen />
+    );
+  }
   if (screen === "Auth") return <AuthScreen onNotice={onNotice} />;
   if (screen === "Storage") return <StorageScreen onNotice={onNotice} />;
   return <HealthScreen />;
@@ -529,6 +544,120 @@ function PoliciesScreen({ onNotice, onOpenDialog }: { onNotice: (message: string
     <div className="workspace-grid">
       <section className="list-panel"><header><span>3 policies</span><input aria-label="Search policies" placeholder="Search" /></header><div className="data-list">{mockPolicies.map((policy) => <button key={policy.name} type="button" className={selected.name === policy.name ? "is-selected" : ""} onClick={() => setSelected(policy)}><span><strong>{policy.name}</strong><small>{policy.table} · {policy.operation}</small></span><span className={`state-label ${policy.state}`}>{policy.state === "attention" ? "Needs index" : "Active"}</span></button>)}</div></section>
       <section className="detail-panel"><header><div><span className="machine-label">Policy</span><h3>{selected.name}</h3></div><span className={`state-label ${selected.state}`}>{selected.state === "attention" ? "Needs index" : "Active"}</span></header><div className="editor-form"><div className="editor-fields"><label>Operation<select defaultValue={selected.operation.split(",")[0]}><option>select</option><option>insert</option><option>update</option></select></label><label>Role<select defaultValue={selected.role}><option>authenticated</option><option>anon</option></select></label></div><label>Expression<textarea value={expression} onChange={(event) => setExpression(event.target.value)} spellCheck={false} /></label><div className="validation-line"><span>Valid expression</span><code>2 predicates</code></div><div className="editor-code-field"><span>Generated SQL</span><pre><code>WHERE ({expression.replace("$auth.sub", "?1")})</code></pre></div>{selected.state === "attention" && <div className="warning-strip"><strong>Index required</strong><span>`posts.author_id` has no index.</span><code>CREATE INDEX idx_posts_author_id ON posts(author_id);</code></div>}</div><footer><button className="danger-link" type="button" onClick={onOpenDialog}>Delete</button><button className="studio-secondary" type="button">Discard</button><button className="studio-primary" type="button" onClick={() => onNotice(`Policy ${selected.name} saved.`)}>Save policy</button></footer></section>
+    </div>
+  </div>;
+}
+
+/**
+ * The deployment's own tables, from `schema_list` and `schema_describe`.
+ *
+ * What shows is names and shapes, never rows and never a row count: counting
+ * rows on D1 scans the table, and scans are what D1 bills for. Reads and
+ * writes stay with the API and the CLI; this screen is read-only by the same
+ * decision (Q5) that keeps the policies screen read-only.
+ */
+function LiveTablesScreen({ client, live, onNotice }: { client: StudioClient; live: LiveState; onNotice: (message: string) => void }) {
+  const [selectedName, setSelectedName] = useState("");
+  // The description remembers which table it belongs to, so changing the
+  // selection needs no synchronous reset: a description for another table is
+  // simply not current, and the loading state falls out of that.
+  const [described, setDescribed] = useState<{ table: string; detail?: TableDetail; error?: string } | null>(null);
+
+  const selected = live.tables.find((table) => table.name === selectedName) ?? live.tables[0];
+  const policyEntry = selected === undefined ? undefined : live.policies.find((entry) => entry.table === selected.name);
+  const finding = selected === undefined ? undefined : live.findings.find((entry) => entry.table === selected.name);
+
+  useEffect(() => {
+    if (selected === undefined) return;
+    const name = selected.name;
+    let stale = false;
+    void client.describeTable(name).then((answer) => {
+      if (stale) return;
+      setDescribed(
+        answer.kind === "data" ? { table: name, detail: answer.data } : { table: name, error: answer.message },
+      );
+    });
+    return () => {
+      stale = true;
+    };
+  }, [client, selected]);
+
+  const current = described !== null && selected !== undefined && described.table === selected.name ? described : null;
+  const detail = current?.detail ?? null;
+  const detailError = current?.error ?? "";
+
+  return <div>
+    <ScreenTitle kicker="Database" title="Tables" description="Every application table, read from the deployment itself. Columns and indexes are shown; rows are not, because counting them is a full scan D1 would bill for." action={<button className="studio-secondary" type="button" onClick={() => { void navigator.clipboard?.writeText("npx baseclf policy apply <document>.json"); onNotice("CLI command copied. Exposing a table is a policy document."); }}>Copy CLI command</button>} />
+    <div className="workspace-grid">
+      <section className="list-panel">
+        <header><span>{live.tables.length} {live.tables.length === 1 ? "table" : "tables"}</span><span className="machine-label">live</span></header>
+        <div className="data-list">
+          {live.tables.length === 0 ? (
+            <button type="button" className="is-selected"><span><strong>No application tables yet</strong><small>Create one with wrangler d1 execute, then expose it with a policy.</small></span></button>
+          ) : (
+            live.tables.map((table) => (
+              <button key={table.name} type="button" className={selected !== undefined && table.name === selected.name ? "is-selected" : ""} onClick={() => setSelectedName(table.name)}>
+                <span><strong>{table.name}</strong><small>{table.columns} columns · {table.indexes} {table.indexes === 1 ? "index" : "indexes"}</small></span>
+                <span className={`state-label ${table.exposed ? "active" : "blocked"}`}>{table.exposed ? "Exposed" : "Not exposed"}</span>
+              </button>
+            ))
+          )}
+        </div>
+      </section>
+      <section className="detail-panel">
+        {selected === undefined ? (
+          <div className="editor-form"><p>Nothing to show yet. Tables appear here as soon as the database has one.</p></div>
+        ) : (
+          <>
+            <header>
+              <div><span className="machine-label">Table</span><h3>{selected.name}</h3></div>
+              <span className={`state-label ${selected.exposed ? "active" : "blocked"}`}>{selected.exposed ? `${policyEntry?.policies.length ?? 0} ${policyEntry?.policies.length === 1 ? "policy" : "policies"}` : "Not exposed"}</span>
+            </header>
+            {finding !== undefined && <div className="warning-strip page-strip"><strong>Policy requires an index</strong><span>{finding.detail}</span></div>}
+            {detailError !== "" ? (
+              <div className="editor-form"><p>{detailError}</p></div>
+            ) : detail === null ? (
+              <div className="editor-form"><p>Reading the table shape…</p></div>
+            ) : (
+              <div className="table-scroll">
+                <table className="compact-table">
+                  <thead><tr><th>Column</th><th>Type</th><th>Constraints</th><th>Default</th></tr></thead>
+                  <tbody>
+                    {detail.columns.map((column) => (
+                      <tr key={column.name}>
+                        <td><code>{column.name}</code></td>
+                        <td>{column.type === "" ? "any" : column.type}</td>
+                        <td>{[column.primaryKey ? "primary key" : "", column.notNull ? "not null" : ""].filter((part) => part !== "").join(", ") || "—"}</td>
+                        <td>{column.hasDefault ? "yes" : "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {detail.indexes.length > 0 && (
+                  <table className="compact-table">
+                    <thead><tr><th>Index</th><th>Columns</th><th>Unique</th></tr></thead>
+                    <tbody>
+                      {detail.indexes.map((index) => (
+                        <tr key={index.name}><td><code>{index.name}</code></td><td>{index.columns.join(", ")}</td><td>{index.unique ? "yes" : "—"}</td></tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+                {detail.foreignKeys.length > 0 && (
+                  <table className="compact-table">
+                    <thead><tr><th>Foreign key</th><th>References</th></tr></thead>
+                    <tbody>
+                      {detail.foreignKeys.map((key) => (
+                        <tr key={`${key.column}-${key.referencesTable}`}><td><code>{key.column}</code></td><td><code>{key.referencesTable}.{key.referencesColumn}</code></td></tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            )}
+          </>
+        )}
+      </section>
     </div>
   </div>;
 }

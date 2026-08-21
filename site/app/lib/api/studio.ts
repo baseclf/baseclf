@@ -58,6 +58,36 @@ export interface LintFinding {
   readonly remedy?: string;
 }
 
+/** One row of schema_list: every application table, exposed or not. */
+export interface SchemaTable {
+  readonly name: string;
+  readonly columns: number;
+  readonly indexes: number;
+  readonly exposed: boolean;
+}
+
+/** schema_describe: names and shapes, never values. hasDefault is a boolean on purpose. */
+export interface TableDetail {
+  readonly table: string;
+  readonly columns: readonly {
+    readonly name: string;
+    readonly type: string;
+    readonly notNull: boolean;
+    readonly primaryKey: boolean;
+    readonly hasDefault: boolean;
+  }[];
+  readonly indexes: readonly {
+    readonly name: string;
+    readonly unique: boolean;
+    readonly columns: readonly string[];
+  }[];
+  readonly foreignKeys: readonly {
+    readonly column: string;
+    readonly referencesTable: string;
+    readonly referencesColumn: string;
+  }[];
+}
+
 /**
  * The three ways a call ends, kept apart on purpose. `error` means the request
  * never reached the tool (network, CORS, token, protocol); `refusal` means the
@@ -203,6 +233,14 @@ export class StudioClient {
 
   lint(): Promise<ToolAnswer<{ readonly findings: readonly LintFinding[]; readonly withheld: number }>> {
     return this.#call("policy_lint", {});
+  }
+
+  schema(): Promise<ToolAnswer<{ readonly tables: readonly SchemaTable[] }>> {
+    return this.#call("schema_list", {});
+  }
+
+  describeTable(table: string): Promise<ToolAnswer<TableDetail>> {
+    return this.#call<TableDetail>("schema_describe", { table });
   }
 }
 
