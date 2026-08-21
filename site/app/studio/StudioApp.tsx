@@ -326,7 +326,7 @@ const EMPTY_WIZARD: WizardState = {
   bridge: "unchecked",
 };
 
-type ConnectStage = "choice" | "create" | "token" | "bridge" | "summary" | "direct";
+type ConnectStage = "choice" | "prepare" | "create" | "token" | "bridge" | "summary" | "direct";
 
 /**
  * A terminal window showing what the command really prints. Every line is
@@ -343,6 +343,18 @@ function TerminalShot({ command, lines }: { command: string; lines: readonly str
     </figure>
   );
 }
+
+const WHOAMI_OUTPUT: readonly string[] = [
+  " ⛅️ wrangler 4.115.0",
+  "───────────────────────",
+  "Getting User settings...",
+  "👋 You are logged in with an OAuth Token, associated with the email you@example.com.",
+  "┌──────────────┬──────────────────────┐",
+  "│ Account Name │ Account ID           │",
+  "├──────────────┼──────────────────────┤",
+  "│ Your Account │ <your-account-id>    │",
+  "└──────────────┴──────────────────────┘",
+];
 
 const CREATE_OUTPUT: readonly string[] = [
   "Project name",
@@ -390,6 +402,13 @@ function ConnectFlow({ onConnected, onDemo, onNotice, onBridgeKey }: { onConnect
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState("");
   const [includeToken, setIncludeToken] = useState(false);
+  // The two account prerequisites live on the person's machine and in their
+  // Cloudflare account, where this page cannot reach. Unlike every later step,
+  // these are confirmed by the person, not proven by a round trip - so they are
+  // checkboxes, and the page says plainly that they are the one check it cannot
+  // make for them.
+  const [authReady, setAuthReady] = useState(false);
+  const [r2Ready, setR2Ready] = useState(false);
   // Safe to read lazily: this component only ever mounts client-side, after a
   // person chose Connect (or the ?connect deep link fired post-hydration).
   const [pageOrigin] = useState(() => (typeof window === "undefined" ? "" : window.location.origin));
@@ -537,9 +556,9 @@ function ConnectFlow({ onConnected, onDemo, onNotice, onBridgeKey }: { onConnect
           </dl>
         </section>
         <div className="wizard-doors">
-          <button className="wizard-door is-primary" type="button" onClick={() => go("create")}>
+          <button className="wizard-door is-primary" type="button" onClick={() => go("prepare")}>
             <strong>First deployment? Set up step by step</strong>
-            <small>Three commands, each one checked for real before the next.</small>
+            <small>Get the account ready, then three commands, each one checked before the next.</small>
           </button>
           <button className="wizard-door" type="button" onClick={() => go("direct")}>
             <strong>I already have a deployment</strong>
@@ -573,10 +592,35 @@ function ConnectFlow({ onConnected, onDemo, onNotice, onBridgeKey }: { onConnect
     );
   }
 
+  if (stage === "prepare") {
+    return (
+      <div className="wizard">
+        <p className="wizard-progress">Step 1 of 4 · Get the account ready</p>
+        <section className="wizard-card">
+          <h3>Two things the next command needs.</h3>
+          <p>The create command provisions onto <strong>your own Cloudflare account</strong> — it needs a Cloudflare login on this machine, and an account with R2 storage turned on. Both live outside this page, so these two are the checks only you can make.</p>
+          <p className="wizard-item">1 · Cloudflare login</p>
+          <div className="wizard-command"><code>npx wrangler whoami</code><button type="button" onClick={() => copy("npx wrangler whoami")}>Copy</button></div>
+          <TerminalShot command="npx wrangler whoami" lines={WHOAMI_OUTPUT} />
+          <p className="form-help">A logged-in machine answers like that, and the account in the table is where the deployment will land. If it says you are not logged in instead, run the command below — it opens your browser to sign in and approve — then run the check again and compare with the window above.</p>
+          <div className="wizard-command"><code>npx wrangler login</code><button type="button" onClick={() => copy("npx wrangler login")}>Copy</button></div>
+          <label className="wizard-include"><input type="checkbox" checked={authReady} onChange={(event) => setAuthReady(event.target.checked)} /> whoami answers, and it names the account I want to deploy to.</label>
+          <p className="wizard-item">2 · R2 storage</p>
+          <p className="form-help">Files live in R2, and on a new account R2 is off until you open it once. In the <a href="https://dash.cloudflare.com/?to=/:account/r2" target="_blank" rel="noreferrer">Cloudflare dashboard, open R2 Object Storage</a> and follow what it asks of you. Skipping this stops the create run at its bucket step.</p>
+          <label className="wizard-include"><input type="checkbox" checked={r2Ready} onChange={(event) => setR2Ready(event.target.checked)} /> R2 is enabled on that account.</label>
+          <div className="wizard-actions">
+            <button className="studio-secondary" type="button" onClick={() => go("choice")}>Back</button>
+            <button className="studio-primary" type="button" disabled={!authReady || !r2Ready} onClick={() => go("create")}>Next</button>
+          </div>
+        </section>
+      </div>
+    );
+  }
+
   if (stage === "create") {
     return (
       <div className="wizard">
-        <p className="wizard-progress">Step 1 of 3 · Create the deployment</p>
+        <p className="wizard-progress">Step 2 of 4 · Create the deployment</p>
         <section className="wizard-card">
           <h3>One command creates everything.</h3>
           <p>It provisions the database, the bucket and the Worker on your own Cloudflare account, then <strong>prints your deployment URL</strong>. It asks two questions: a project name, and the <strong>Frontend origin</strong>. Answer the second with exactly this page&apos;s origin, or the deployment will refuse this browser.</p>
@@ -593,7 +637,7 @@ function ConnectFlow({ onConnected, onDemo, onNotice, onBridgeKey }: { onConnect
             <p className="form-help">Check makes a real request to /health. Nothing advances on trust.</p>
           )}
           <div className="wizard-actions">
-            <button className="studio-secondary" type="button" onClick={() => go("choice")}>Back</button>
+            <button className="studio-secondary" type="button" onClick={() => go("prepare")}>Back</button>
             <button className="studio-secondary" type="button" disabled={busy || wizard.url.trim() === ""} onClick={() => void checkUrl()}>{busy ? "Checking…" : "Check"}</button>
             <button className="studio-primary" type="button" disabled={wizard.version === null} onClick={() => go("token")}>Next</button>
           </div>
@@ -605,7 +649,7 @@ function ConnectFlow({ onConnected, onDemo, onNotice, onBridgeKey }: { onConnect
   if (stage === "token") {
     return (
       <div className="wizard">
-        <p className="wizard-progress">Step 2 of 3 · Set the admin token</p>
+        <p className="wizard-progress">Step 3 of 4 · Set the admin token</p>
         <section className="wizard-card">
           <h3>The one credential, on your own Worker.</h3>
           <p>Pick any strong value and set it as the MCP_TOKEN secret. It is what unlocks the management surface of your deployment, and it never leaves this page&apos;s memory.</p>
@@ -633,7 +677,7 @@ function ConnectFlow({ onConnected, onDemo, onNotice, onBridgeKey }: { onConnect
   if (stage === "bridge") {
     return (
       <div className="wizard">
-        <p className="wizard-progress">Step 3 of 3 · The local bridge, if you want rows</p>
+        <p className="wizard-progress">Step 4 of 4 · The local bridge, if you want rows</p>
         <section className="wizard-card">
           <h3>Rows and policy editing run on your machine.</h3>
           <p>The bridge holds your Cloudflare credential and answers this page on 127.0.0.1 only. Skipping it is fine: compiling SQL and reading policies work without it.</p>

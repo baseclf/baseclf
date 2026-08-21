@@ -121,7 +121,10 @@
 .wizard-summary > div { min-height: 46px; padding: 6px 0; display: grid; grid-template-columns: 140px 1fr; align-items: center; gap: 10px; border-bottom: 1px solid var(--line); }
 .wizard-summary dt { color: var(--ink-soft); font-size: 11px; }
 .wizard-summary dd { margin: 0; display: flex; align-items: center; gap: 8px; font-size: 11px; overflow-wrap: anywhere; }
-.wizard-include { display: flex; align-items: center; gap: 8px; color: var(--ink-soft); font-size: 11px; }
+.wizard-include { display: flex; align-items: center; gap: 8px; color: var(--ink-soft); font-size: 12px; }
+.wizard-include input { width: 15px; height: 15px; accent-color: var(--ink); }
+.wizard-item { margin: 6px 0 0; color: var(--ink); font: 11px var(--font-geist-mono); text-transform: uppercase; letter-spacing: .08em; }
+.wizard-card a { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
 .wizard-terminal { margin: 0; border: 1px solid var(--line); border-radius: 5px; overflow: hidden; }
 .wizard-terminal figcaption { min-height: 30px; padding: 0 11px; display: flex; align-items: center; gap: 6px; border-bottom: 1px solid var(--line); background: var(--canvas); }
 .wizard-terminal figcaption i { width: 9px; height: 9px; border-radius: 50%; background: color-mix(in srgb, var(--ink) 18%, transparent); }

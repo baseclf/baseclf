@@ -193,9 +193,18 @@ test("ships the guided motion system and real product captures", async () => {
   // The wizard's promise, pinned: every check mark is a real round trip, the
   // token stays out of the downloaded notes unless explicitly included, and
   // the flow ends in a download plus a connect that reuses the proven client.
-  assert.match(studioApp, /Step 1 of 3/);
+  assert.match(studioApp, /Step 1 of 4/);
+  assert.match(studioApp, /Step 4 of 4/);
   assert.match(studioApp, /Download setup notes/);
   assert.match(studioApp, /includeToken \? wizard\.token : /);
+  // The account prerequisites come before the first command, and Next stays
+  // dark until both are confirmed: a Cloudflare login on the machine, and R2
+  // turned on in the account. The page cannot see either, so they are the two
+  // checks the person makes rather than round trips the page proves.
+  assert.match(studioApp, /npx wrangler whoami/);
+  assert.match(studioApp, /npx wrangler login/);
+  assert.match(studioApp, /disabled=\{!authReady \|\| !r2Ready\}/);
+  assert.match(studioApp, /R2 Object Storage/);
 
   assert.match(home, /The operational suite/);
   assert.match(home, /name="overview"/);
