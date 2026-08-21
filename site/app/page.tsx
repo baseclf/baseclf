@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import MotionEffects from "./MotionEffects";
+import NavCta from "./NavCta";
 import PolicyDemo from "./PolicyDemo";
 import ThemeToggle from "./ThemeToggle";
 
@@ -61,7 +62,7 @@ export default function Home() {
         <div className="nav-actions">
           <ThemeToggle />
           <a className="nav-cta-quiet" href="/studio">View demo</a>
-          <a className="nav-cta" href="/studio?connect=1">Connect live <span aria-hidden="true">↗</span></a>
+          <NavCta />
         </div>
       </nav>
 

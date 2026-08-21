@@ -17,6 +17,7 @@ import {
 } from "../lib/api/studio";
 import { formatCell } from "../lib/format";
 import { setSharedOrigin } from "./connection";
+import { clearStoredSession, readStoredSession, writeStoredSession } from "./session";
 import {
   mockClaims,
   mockParameters,
@@ -105,51 +106,6 @@ const guidance: Record<StudioScreen, { label: string; copy: string }> = {
   Storage: { label: "Access first", copy: "Choose a bucket and confirm its policy before uploading an object." },
   Health: { label: "What matters", copy: "Start with failures, then inspect the request trend." },
 };
-
-/**
- * The tab's saved session, so a reload does not sign the person out.
- *
- * sessionStorage on purpose, and the scope is the decision: it survives F5 in
- * this tab and is forgotten when the tab closes. Never localStorage - an admin
- * token on disk with no expiry is a different promise than the one this page
- * makes. Every reconnect is still proven by a real round trip before anything
- * trusts it; the stored copy only spares the retyping.
- */
-const SESSION_KEY = "baseclf-studio-session";
-
-interface StoredSession {
-  readonly url: string;
-  readonly token: string;
-  readonly bridgeKey: string;
-}
-
-function readStoredSession(): StoredSession | null {
-  try {
-    const raw = window.sessionStorage.getItem(SESSION_KEY);
-    if (raw === null) return null;
-    const parsed = JSON.parse(raw) as Partial<StoredSession>;
-    if (typeof parsed.url !== "string" || typeof parsed.token !== "string") return null;
-    return { url: parsed.url, token: parsed.token, bridgeKey: typeof parsed.bridgeKey === "string" ? parsed.bridgeKey : "" };
-  } catch {
-    return null;
-  }
-}
-
-function writeStoredSession(session: StoredSession): void {
-  try {
-    window.sessionStorage.setItem(SESSION_KEY, JSON.stringify(session));
-  } catch {
-    // Storage can be unavailable; the in-memory session still serves this page.
-  }
-}
-
-function clearStoredSession(): void {
-  try {
-    window.sessionStorage.removeItem(SESSION_KEY);
-  } catch {
-    // Nothing stored is nothing to clear.
-  }
-}
 
 export default function StudioApp() {
   const [screen, setScreen] = useState<StudioScreen>("Simulator");
@@ -998,9 +954,9 @@ function LiveSimulatorPanel({ client, live, bridgeKey, onBridgeKey, onNotice }: 
             <header><span>Result</span><span>{rowsAnswer === null ? "local bridge" : `${rowsAnswer.rows.length} row(s), ${rowsAnswer.rowsRead ?? "?"} scanned`}</span></header>
             <div className="result-list">
               {rowsAnswer === null ? (
-                <div><span><strong>The deployment compiles without touching data.</strong><small>Rows come from the local bridge: run npx baseclf studio, paste its key on the left, and rerun. Your credential stays on your machine.</small></span></div>
+                <div className="result-empty"><span><strong>The deployment compiles without touching data.</strong><small>Rows come from the local bridge: run npx baseclf studio, paste its key on the left, and rerun. Your credential stays on your machine.</small></span></div>
               ) : rowsAnswer.rows.length === 0 ? (
-                <div><span><strong>No rows for this caller.</strong><small>Either there are none, or none are theirs. The engine answers both the same way on purpose.</small></span></div>
+                <div className="result-empty"><span><strong>No rows for this caller.</strong><small>Either there are none, or none are theirs. The engine answers both the same way on purpose.</small></span></div>
               ) : (
                 rowsAnswer.rows.map((row, index) => {
                   const parts = Object.entries(row)

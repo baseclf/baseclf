@@ -184,9 +184,15 @@ test("ships the guided motion system and real product captures", async () => {
 
   // The funnel has both doors: view the demo, or connect a real deployment,
   // which deep-links straight into the connect screen with its setup guide.
+  // The connect door lives in its own client component so it can read this
+  // tab's saved session and swap to "Dashboard" once the person is signed in.
   assert.match(home, /View demo/);
-  assert.match(home, /Connect live/);
-  assert.match(home, /\/studio\?connect=1/);
+  assert.match(home, /<NavCta \/>/);
+  const navCta = await readFile(new URL("../app/NavCta.tsx", import.meta.url), "utf8");
+  assert.match(navCta, /Connect live/);
+  assert.match(navCta, /Dashboard/);
+  assert.match(navCta, /\/studio\?connect=1/);
+  assert.match(navCta, /hasStoredSession/);
   const studioApp = await readFile(new URL("../app/studio/StudioApp.tsx", import.meta.url), "utf8");
   assert.match(studioApp, /First deployment\?/);
   assert.match(studioApp, /npx create-baseclf/);
