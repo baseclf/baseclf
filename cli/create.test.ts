@@ -26,6 +26,7 @@ import {
   REQUIRED_BINDING_NAMES,
   SECRET_BYTES,
   SIGNING_SECRET_NAME,
+  STUDIO_ORIGIN,
   varsFor,
 } from './create.js';
 import { findVoiceViolations } from './output.js';
@@ -88,6 +89,23 @@ describe('the frontend origin, whose failure mode is an opaque CORS error', () =
 
   it('refuses something that is not a URL at all', () => {
     expect(checkFrontendOrigin('localhost:3000').ok).toBe(false);
+  });
+
+  it('accepts a comma separated list, since the engine reads the var as one', () => {
+    // A single-origin prompt forced a choice between the app's origin and the
+    // hosted Studio's, and whichever was dropped failed later as opaque CORS.
+    expect(checkFrontendOrigin('http://localhost:3000, https://baseclf.dev').ok).toBe(true);
+  });
+
+  it('refuses a list by naming the entry that is wrong, not the whole line', () => {
+    const check = checkFrontendOrigin('http://localhost:3000,https://app.example.com/dashboard');
+
+    expect(check.ok).toBe(false);
+    expect(check.ok === false && check.reason).toContain('https://app.example.com/dashboard');
+  });
+
+  it('refuses a trailing comma rather than trusting an empty entry', () => {
+    expect(checkFrontendOrigin('http://localhost:3000,').ok).toBe(false);
   });
 });
 
@@ -173,6 +191,20 @@ describe('the variables a deployment cannot start without', () => {
     expect(vars.BETTER_AUTH_URL).toBe('https://shop.someone.workers.dev');
     // The frontend the reader named, plus the studio's fixed origin, so the
     // simulator works without a config edit and a redeploy later.
+    expect(vars.BETTER_AUTH_TRUSTED_ORIGINS).toBe('http://localhost:5173,http://localhost:4000');
+  });
+
+  it('keeps every origin the reader listed, and appends the studio origin once', () => {
+    const vars = varsFor('https://x.dev', 'http://localhost:5173, https://baseclf.dev');
+
+    expect(vars.BETTER_AUTH_TRUSTED_ORIGINS).toBe(
+      'http://localhost:5173,https://baseclf.dev,http://localhost:4000',
+    );
+  });
+
+  it('does not duplicate the studio origin when the reader already listed it', () => {
+    const vars = varsFor('https://x.dev', `http://localhost:5173,${STUDIO_ORIGIN}`);
+
     expect(vars.BETTER_AUTH_TRUSTED_ORIGINS).toBe('http://localhost:5173,http://localhost:4000');
   });
 
@@ -294,6 +326,18 @@ describe('asking the two questions', () => {
     for (const prompt of harness.asked) {
       expect(prompt.split('\n')[1]?.trim().length).toBeGreaterThan(20);
     }
+  });
+
+  it('tells the reader the origin answer is a list, and what the hosted Studio needs', async () => {
+    // The first real user pressed enter through this prompt and got a deployment
+    // the hosted Studio could not talk to. The prompt has to say both things.
+    const harness = answering(['', '']);
+
+    await collectAnswers(harness.ask, harness.write);
+
+    const originPrompt = harness.asked[1] ?? '';
+    expect(originPrompt).toContain('Comma separate');
+    expect(originPrompt).toContain('https://baseclf.dev');
   });
 
   it('asks again when the answer cannot be used, and says what was wrong', async () => {

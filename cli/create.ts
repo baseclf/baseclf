@@ -110,8 +110,8 @@ export function checkProjectName(name: string): NameCheck {
   return { ok: true };
 }
 
-/** Whether an origin is one, and bare: a scheme and a host, with no path on the end. */
-export function checkFrontendOrigin(value: string): NameCheck {
+/** Whether one entry is an origin, and bare: a scheme and a host, with no path on the end. */
+function checkOneOrigin(value: string): NameCheck {
   let parsed: URL;
   try {
     parsed = new URL(value.trim());
@@ -133,6 +133,38 @@ export function checkFrontendOrigin(value: string): NameCheck {
       ok: false,
       reason: `An origin is the scheme and host only. Try ${parsed.origin} without the rest.`,
     };
+  }
+
+  return { ok: true };
+}
+
+/**
+ * Whether an answer is one origin or a comma separated list of them.
+ *
+ * A list, because the engine already reads `BETTER_AUTH_TRUSTED_ORIGINS` as one and
+ * a single-origin prompt forced a real choice nobody should face: the first person
+ * to set up from the hosted Studio had to pick between the origin their app runs on
+ * and the origin the Studio runs on, and whichever they dropped failed later with
+ * an opaque CORS error.
+ */
+export function checkFrontendOrigin(value: string): NameCheck {
+  const entries = value.split(',').map((entry) => entry.trim());
+  if (entries.some((entry) => entry === '')) {
+    return {
+      ok: false,
+      reason: 'That list has an empty entry in it. Drop the extra comma.',
+    };
+  }
+
+  for (const entry of entries) {
+    const verdict = checkOneOrigin(entry);
+    if (!verdict.ok) {
+      // Name the entry when there is more than one, so the reader fixes the right
+      // part of the list instead of rereading all of it.
+      return entries.length === 1
+        ? verdict
+        : { ok: false, reason: `In "${entry}": ${verdict.reason}` };
+    }
   }
 
   return { ok: true };
@@ -252,8 +284,14 @@ export const REQUIRED_BINDING_NAMES: readonly string[] = Object.freeze(['DB', 'B
 export const STUDIO_ORIGIN = 'http://localhost:4000';
 
 export function varsFor(deploymentUrl: string, frontendOrigin: string): Record<string, string> {
-  const origins =
-    frontendOrigin === STUDIO_ORIGIN ? frontendOrigin : `${frontendOrigin},${STUDIO_ORIGIN}`;
+  // The answer may be a comma separated list. Normalise the spacing, keep the
+  // reader's order, and append the studio origin once rather than blindly: an
+  // answer that already lists it must not produce a duplicate entry.
+  const entries = frontendOrigin
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry !== '');
+  const origins = [...new Set([...entries, STUDIO_ORIGIN])].join(',');
   return {
     BETTER_AUTH_URL: deploymentUrl,
     BETTER_AUTH_TRUSTED_ORIGINS: origins,
@@ -372,7 +410,10 @@ export async function collectAnswers(ask: Ask, write: Writer): Promise<Collected
     write,
     promptFor(
       'Frontend origin',
-      'Where your app runs. Without it the browser blocks every call to this API.',
+      'Browsers can call this API only from origins listed here. The default\n' +
+        '  suits an app running on your machine, and nothing else. Comma separate\n' +
+        '  more than one; include https://baseclf.dev to also manage this\n' +
+        '  deployment from the hosted Studio.',
       DEFAULT_FRONTEND_ORIGIN,
     ),
     DEFAULT_FRONTEND_ORIGIN,
