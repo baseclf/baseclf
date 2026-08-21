@@ -184,6 +184,73 @@ export async function endpointFor(
   return { fetcher: host.fetcher, credentials, databaseId: database.uuid };
 }
 
+/**
+ * The stored document for one table, reassembled from the source the apply
+ * wrote, or null when the table is not exposed.
+ *
+ * For the studio bridge, which seeds its editor with what is actually running.
+ * The rows hold the SOURCE grammar verbatim (the store-the-source rule in
+ * `policy-document.ts`), so this is reassembly rather than reconstruction, and
+ * the field mapping mirrors the registry's own reader: `for`/`to` from
+ * `operation`/`roles`, and `using`/`check`/`set` present only when stored.
+ * Policies come back in insertion order, which is the order the document wrote.
+ */
+export async function readStoredDocument(
+  endpoint: D1Endpoint,
+  table: string,
+): Promise<Record<string, unknown> | null> {
+  const [exposed] = await runSql(
+    endpoint,
+    'SELECT "enabled" FROM "_exposed_tables" WHERE "table_name" = ?',
+    [table],
+  );
+  const exposedRow = exposed?.rows[0] as { enabled?: number } | undefined;
+  if (exposedRow === undefined) return null;
+
+  const [bindRows] = await runSql(
+    endpoint,
+    'SELECT "name", "expression" FROM "_policy_binds" WHERE "table_name" = ? ORDER BY rowid',
+    [table],
+  );
+  const binds: Record<string, unknown> = {};
+  for (const raw of (bindRows?.rows ?? []) as { name: string; expression: string }[]) {
+    binds[raw.name] = JSON.parse(raw.expression);
+  }
+
+  const [policyRows] = await runSql(
+    endpoint,
+    'SELECT "name", "operation", "roles", "using_expr", "check_expr", "columns", "set_expr" ' +
+      'FROM "_policies" WHERE "table_name" = ? ORDER BY rowid',
+    [table],
+  );
+  const policies = (
+    (policyRows?.rows ?? []) as {
+      name: string;
+      operation: string;
+      roles: string;
+      using_expr: string | null;
+      check_expr: string | null;
+      columns: string | null;
+      set_expr: string | null;
+    }[]
+  ).map((row) => ({
+    name: row.name,
+    for: row.operation,
+    to: JSON.parse(row.roles),
+    ...(row.using_expr === null ? {} : { using: JSON.parse(row.using_expr) }),
+    ...(row.check_expr === null ? {} : { check: JSON.parse(row.check_expr) }),
+    ...(row.columns === null ? {} : { columns: JSON.parse(row.columns) }),
+    ...(row.set_expr === null ? {} : { set: JSON.parse(row.set_expr) }),
+  }));
+
+  return {
+    table,
+    enabled: (exposedRow.enabled ?? 0) !== 0,
+    ...(Object.keys(binds).length === 0 ? {} : { binds }),
+    policies,
+  };
+}
+
 /** The version currently stored for a table, or null when it is not exposed. */
 async function storedVersion(endpoint: D1Endpoint, table: string): Promise<number | null> {
   const [first] = await runSql(
@@ -344,10 +411,16 @@ function explain(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
 }
 
-async function apply(
+/**
+ * Exported for the studio bridge, which is the second caller and deliberately
+ * not a second implementation: the browser's apply IS this function, so the
+ * lock, the closed-on-interruption ordering and the replace semantics cannot
+ * drift between the CLI and the Studio.
+ */
+export async function applyDocument(
   endpoint: D1Endpoint,
   document: ReturnType<typeof readPolicyDocument>,
-  host: PolicyHost,
+  host: Pick<PolicyHost, 'newId'>,
   write: Write,
   style: Style,
 ): Promise<PolicyOutcome> {
@@ -699,7 +772,7 @@ export async function runPolicy(
     if (verb === 'rm') return await remove(endpoint, target ?? '', write, style);
 
     if (document === null) return 'usage';
-    const outcome = await apply(endpoint, document, host, write, style);
+    const outcome = await applyDocument(endpoint, document, host, write, style);
 
     if (outcome === 'ok') {
       // ⚠️ The table comes from the document, not from the arguments. An earlier

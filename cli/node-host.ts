@@ -311,9 +311,11 @@ function serveBridge(
         bodyText += chunk;
       });
       incoming.on('end', () => {
+        const requestUrl = new URL(incoming.url ?? '/', 'http://127.0.0.1');
         void handler({
           method: incoming.method ?? 'GET',
-          path: new URL(incoming.url ?? '/', 'http://127.0.0.1').pathname,
+          path: requestUrl.pathname,
+          search: requestUrl.search,
           header: (name: string) => {
             const value = incoming.headers[name.toLowerCase()];
             return Array.isArray(value) ? (value[0] ?? null) : (value ?? null);

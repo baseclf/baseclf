@@ -18,8 +18,13 @@ import {
   registerPolicies,
   seedDatabase,
 } from '../src/policy/__fixtures__/schema.js';
+import type { D1Endpoint } from './d1-api.js';
 import { findVoiceViolations, PLAIN } from './output.js';
-import type { PolicyOutcome } from './policy.js';
+import {
+  applyDocument as applyPolicyDocument,
+  type PolicyOutcome,
+  readStoredDocument,
+} from './policy.js';
 import {
   type BridgeHandler,
   type BridgeRequest,
@@ -31,13 +36,56 @@ import {
 
 const KEY = 'bridge-key-under-test';
 
-function post(body: Record<string, unknown>, key = KEY): BridgeRequest {
+function post(body: Record<string, unknown>, key = KEY, path = '/run'): BridgeRequest {
   const headers: Record<string, string> = { 'x-bridge-key': key, origin: 'http://localhost:3000' };
   return {
     method: 'POST',
-    path: '/run',
+    path,
+    search: '',
     header: (name) => headers[name.toLowerCase()] ?? null,
     bodyText: JSON.stringify(body),
+  };
+}
+
+function get(path: string, search: string, key = KEY): BridgeRequest {
+  const headers: Record<string, string> = { 'x-bridge-key': key, origin: 'http://localhost:3000' };
+  return {
+    method: 'GET',
+    path,
+    search,
+    header: (name) => headers[name.toLowerCase()] ?? null,
+    bodyText: '',
+  };
+}
+
+/**
+ * A REST endpoint whose transport is the test database. Every statement the
+ * CLI's apply sends over "the network" lands on the same D1 the assertions
+ * read, so the full path runs for real: schema floor, lock, close-first
+ * ordering, expose-last guard.
+ */
+function endpointOn(db: D1Database, onStatement: () => void): D1Endpoint {
+  return {
+    databaseId: 'database-under-test',
+    credentials: { accountId: 'account-id-under-test', token: 'token-under-test' },
+    fetcher: async (_url, init) => {
+      onStatement();
+      const { sql, params } = JSON.parse(String(init?.body ?? '{}')) as {
+        sql: string;
+        params?: unknown[];
+      };
+      const result = await db
+        .prepare(sql)
+        .bind(...(params ?? []))
+        .all();
+      return new Response(
+        JSON.stringify({
+          success: true,
+          result: [{ success: true, results: result.results, meta: result.meta }],
+        }),
+        { status: 200 },
+      );
+    },
   };
 }
 
@@ -46,25 +94,52 @@ interface RunAnswer {
   rowsRead?: number | null;
   refusal?: string;
   error?: string;
+  applied?: boolean;
+  lines?: string[];
 }
 
-async function runOn(handler: BridgeHandler, body: Record<string, unknown>, key = KEY) {
-  const response = await handler(post(body, key));
+async function runOn(
+  handler: BridgeHandler,
+  body: Record<string, unknown>,
+  key = KEY,
+  path = '/run',
+) {
+  const response = await handler(post(body, key, path));
   return { status: response.status, body: JSON.parse(response.body) as RunAnswer };
 }
 
 let opened = 0;
+let statementsSent = 0;
+let applies = 0;
 let handler: BridgeHandler;
+let endpoint: D1Endpoint;
 
 beforeAll(async () => {
   await seedDatabase(env.DB);
   await registerPolicies(env.DB, { table: 'posts', binds: POST_BINDS, policies: POST_POLICIES });
+
+  endpoint = endpointOn(env.DB, () => {
+    statementsSent += 1;
+  });
 
   handler = createBridge({
     key: KEY,
     openExecutor: () => {
       opened += 1;
       return env.DB;
+    },
+    readDocument: (table) => readStoredDocument(endpoint, table),
+    applyDocument: async (document) => {
+      applies += 1;
+      const lines: string[] = [];
+      const outcome = await applyPolicyDocument(
+        endpoint,
+        document,
+        { newId: () => `holder-${applies}` },
+        (line) => lines.push(line),
+        PLAIN,
+      );
+      return { outcome, lines };
     },
     log: () => {},
   });
@@ -134,6 +209,7 @@ describe('the gate in front of the credential', () => {
     const response = await handler({
       method: 'OPTIONS',
       path: '/run',
+      search: '',
       header: (name) => (name === 'origin' ? 'http://localhost:3000' : null),
       bodyText: '',
     });
@@ -143,14 +219,105 @@ describe('the gate in front of the credential', () => {
     expect(response.headers['access-control-allow-origin']).toBe('http://localhost:3000');
   });
 
-  it('anything that is not POST /run is a 404', async () => {
+  it('anything that is not a bridge route is a 404', async () => {
     const response = await handler({
       method: 'GET',
       path: '/anything',
+      search: '',
       header: () => null,
       bodyText: '',
     });
     expect(response.status).toBe(404);
+  });
+});
+
+describe('the write lane, which is the CLI apply wearing a route', () => {
+  const DOCUMENT = {
+    table: 'posts',
+    enabled: true,
+    binds: {
+      isPublished: { status: { _eq: 'published' } },
+      isAuthor: { author_id: { _eq: '$auth.uid' } },
+    },
+    policies: [
+      {
+        name: 'read_published',
+        for: 'select',
+        to: ['anon', 'authenticated'],
+        using: { $bind: 'isPublished' },
+        columns: ['id', 'title', 'status', 'author_id'],
+      },
+      {
+        name: 'read_own',
+        for: 'select',
+        to: ['authenticated'],
+        using: { $bind: 'isAuthor' },
+        columns: ['id', 'title', 'status', 'author_id'],
+      },
+    ],
+  };
+
+  it('refuses a document naming user_metadata before anything leaves the machine', async () => {
+    // 🔴 Invariant I4 at the newest surface. The count proves the shape of the
+    // refusal, not just its status: zero statements were sent, and the CLI's
+    // apply was never entered.
+    const appliesBefore = applies;
+    const statementsBefore = statementsSent;
+
+    const forbidden = {
+      ...DOCUMENT,
+      policies: [
+        {
+          name: 'escalate',
+          for: 'select',
+          to: ['authenticated'],
+          using: { author_id: { _eq: '$auth.user.role' } },
+          columns: ['id'],
+        },
+      ],
+    };
+    const answer = await runOn(handler, { text: JSON.stringify(forbidden) }, KEY, '/apply');
+
+    expect(answer.status).toBe(400);
+    expect(answer.body.refusal).toBeDefined();
+    expect(applies).toBe(appliesBefore);
+    expect(statementsSent).toBe(statementsBefore);
+  });
+
+  it('a wrong key is refused before the apply path is touched', async () => {
+    const appliesBefore = applies;
+    const answer = await runOn(
+      handler,
+      { text: JSON.stringify(DOCUMENT) },
+      'not-the-key',
+      '/apply',
+    );
+
+    expect(answer.status).toBe(401);
+    expect(applies).toBe(appliesBefore);
+  });
+
+  it('applies a valid document through the same path the CLI runs, and reads it back', async () => {
+    const answer = await runOn(handler, { text: JSON.stringify(DOCUMENT) }, KEY, '/apply');
+
+    expect(answer.status).toBe(200);
+    expect(answer.body.applied).toBe(true);
+    expect((answer.body.lines ?? []).join('\n')).toContain('is exposed with 2 rules');
+
+    // The read-back is the document that was submitted: stored as source,
+    // reassembled as source. This is also the editor's seed lane.
+    const readBack = await handler(get('/document', '?table=posts'));
+    expect(readBack.status).toBe(200);
+    const { document } = JSON.parse(readBack.body) as { document: Record<string, unknown> };
+    expect(document).toEqual(DOCUMENT);
+  });
+
+  it('answers null for a table that is not exposed, and 401 without the key', async () => {
+    const missing = await handler(get('/document', '?table=not_exposed_anywhere'));
+    expect(JSON.parse(missing.body)).toEqual({ document: null });
+
+    const refused = await handler(get('/document', '?table=posts', 'not-the-key'));
+    expect(refused.status).toBe(401);
   });
 });
 
@@ -217,7 +384,7 @@ describe('the command around it', () => {
     expect(outcome).toBe('ok');
     expect(text()).toContain('127.0.0.1:4000');
     expect(text()).toContain('the-printed-key');
-    expect(text()).toContain('Reads only');
+    expect(text()).toContain('Reads, plus the policy documents you apply');
   });
 
   it('a busy port is a refusal, not a stack trace', async () => {

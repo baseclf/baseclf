@@ -16,11 +16,26 @@
  * code. Accepting a statement instead would make this a run-anything endpoint
  * one XSS away from the page, which is why it is not expressible.
  *
- * ## Reads only
+ * ## What the bridge will and will not do
  *
- * `select` is the only operation. The compiled SQL for a write is already on
- * screen; running it would change the operator's data, and a simulator that
- * writes is not a simulator.
+ * On `/run`, `select` is the only operation. The compiled SQL for a write is
+ * already on screen; running it would change the operator's data, and a
+ * simulator that writes is not a simulator.
+ *
+ * On `/apply`, the bridge stores a policy document the operator explicitly
+ * submitted. The page sends the document text, never SQL, and the bridge runs
+ * the exact code path `baseclf policy apply` runs: the engine's own validator
+ * decides first (a document naming `$auth.user.*` is refused before anything
+ * leaves this machine), then the CLI's apply takes the same lock, writes the
+ * same close-first-open-last statements, and reports the same lint findings.
+ * There is no second implementation to drift. Deleting rules stays with the
+ * CLI and its typed `--confirm`.
+ *
+ * On `/document`, the bridge reads back the stored source document for one
+ * table, so the editor edits what is actually running. Predicates reach the
+ * operator's own page over loopback with the session key, which is the same
+ * trust as the CLI reading their file; `policy_list` over the network still
+ * withholds them.
  *
  * ## The key
  *
@@ -44,13 +59,21 @@ import { loadRegistry } from '../src/policy/registry.js';
 import { readTable } from '../src/rest/router.js';
 import { BaseclfError } from '../src/utils/errors.js';
 import { restExecutor } from './d1-api.js';
-import { copyable, note, type Style, styledResultLine } from './output.js';
-import { DEFAULT_PROJECT, endpointFor, type PolicyHost, type PolicyOutcome } from './policy.js';
+import { copyable, note, PLAIN, type Style, styledResultLine } from './output.js';
+import {
+  applyDocument as applyPolicyDocument,
+  DEFAULT_PROJECT,
+  endpointFor,
+  type PolicyHost,
+  type PolicyOutcome,
+  readStoredDocument,
+} from './policy.js';
+import { type PolicyDocument, readPolicyDocument } from './policy-document.js';
 
 type Write = (text: string) => void;
 
 export const STUDIO_USAGE = [
-  'baseclf studio            Start the local result bridge for the Studio simulator',
+  'baseclf studio            Start the local bridge for the Studio',
   '',
   'Options:',
   '  --project <name>   Which deployment. Defaults to "baseclf", the same default',
@@ -58,16 +81,17 @@ export const STUDIO_USAGE = [
   '  --port <number>    Where the bridge listens on 127.0.0.1. Defaults to 4000.',
   '',
   'The Studio compiles a request into SQL through your deployment and never touches',
-  'data. This bridge is where rows come from: it holds your Cloudflare credential,',
-  'runs the same read the deployment would run, and answers the page on this',
-  'machine only. It runs reads only, and every request needs the key it prints.',
+  'data. This bridge holds your Cloudflare credential and answers the page on this',
+  'machine only: it runs the same read the deployment would run, and it applies a',
+  'policy document you explicitly submit, through the same validation and the same',
+  'steps as baseclf policy apply. Every request needs the key it prints.',
 ].join('\n');
 
 const READS_ONLY =
-  'The bridge runs reads only. The compiled SQL for a write is already on screen, and running it would change your data.';
+  'The bridge runs reads only here. The compiled SQL for a write is already on screen, and running it would change your data.';
 
 const CLOSE_HINT =
-  'Reads only, on this machine only. Every run costs three requests against the D1 REST ceiling of 1,200 per five minutes. Stop it with Ctrl+C.';
+  'Reads, plus the policy documents you apply. On this machine only. Requests count against the D1 REST ceiling of 1,200 per five minutes. Stop it with Ctrl+C.';
 
 /** Every fixed sentence this command can print, for the voice rules. */
 export const STUDIO_FIXED_TEXT: readonly string[] = Object.freeze([
@@ -82,6 +106,8 @@ const ROW_LIMIT = 50;
 export interface BridgeRequest {
   readonly method: string;
   readonly path: string;
+  /** The query string, "?"-prefixed or empty, for routes that take one. */
+  readonly search: string;
   readonly header: (name: string) => string | null;
   readonly bodyText: string;
 }
@@ -133,7 +159,14 @@ function corsHeaders(origin: string): Record<string, string> {
   return {
     'access-control-allow-origin': origin,
     'access-control-allow-headers': 'content-type, x-bridge-key',
-    'access-control-allow-methods': 'POST, OPTIONS',
+    'access-control-allow-methods': 'GET, POST, OPTIONS',
+    // Private Network Access. A public https page reaching into 127.0.0.1 is
+    // exactly what this bridge is for, and Chromium gates that behind a
+    // preflight the server has to opt into; without this header the fetch
+    // dies before the bridge ever sees a request. Measured from the deployed
+    // Studio on 2026-08-21; a localhost page never trips it, which is why no
+    // local test could. The key remains the actual gate.
+    'access-control-allow-private-network': 'true',
     'access-control-max-age': '600',
   };
 }
@@ -157,15 +190,30 @@ function asOptionalString(value: unknown): string | null {
   return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
+/** What one apply came back with: the CLI's own outcome and its printed lines. */
+export interface BridgeApplyAnswer {
+  readonly outcome: PolicyOutcome;
+  readonly lines: readonly string[];
+}
+
 /**
  * The bridge itself, separated from the server so a test can hand it requests.
  *
  * The key is checked before anything else runs: a request that fails it never
- * touches the executor, which is the object holding the credential.
+ * touches the executor or the apply path, which are what hold the credential.
  */
 export function createBridge(options: {
   readonly key: string;
   readonly openExecutor: () => D1Executor;
+  /** The stored source document for a table, or null when it is not exposed. */
+  readonly readDocument: (table: string) => Promise<Record<string, unknown> | null>;
+  /**
+   * Store one already-validated document, through the CLI's own apply.
+   *
+   * Takes the PARSED document on purpose: validation lives in the route, before
+   * this is called, so a refused document provably never reaches the network.
+   */
+  readonly applyDocument: (document: PolicyDocument) => Promise<BridgeApplyAnswer>;
   readonly log: (line: string) => void;
 }): BridgeHandler {
   return async (request) => {
@@ -175,13 +223,75 @@ export function createBridge(options: {
       return { status: 204, headers: corsHeaders(origin), body: '' };
     }
 
-    if (request.method !== 'POST' || request.path !== '/run') {
+    const route =
+      request.method === 'POST' && request.path === '/run'
+        ? 'run'
+        : request.method === 'POST' && request.path === '/apply'
+          ? 'apply'
+          : request.method === 'GET' && request.path === '/document'
+            ? 'document'
+            : null;
+
+    if (route === null) {
       return answer(404, origin, { error: 'Not found.' });
     }
 
     if (!(await keysMatch(request.header('x-bridge-key') ?? '', options.key))) {
-      options.log('refused a run: the key did not match');
+      options.log(`refused a ${route}: the key did not match`);
       return answer(401, origin, { error: 'The bridge refused the key.' });
+    }
+
+    if (route === 'document') {
+      const table = new URLSearchParams(request.search).get('table') ?? '';
+      if (table === '') {
+        return answer(400, origin, { error: 'A table is required.' });
+      }
+      try {
+        const document = await options.readDocument(table);
+        options.log(`read the stored document for "${table}"`);
+        return answer(200, origin, { document });
+      } catch {
+        options.log('a document read failed before it finished');
+        return answer(500, origin, { error: 'The deployment could not be read.' });
+      }
+    }
+
+    if (route === 'apply') {
+      let text: string;
+      try {
+        const parsed = JSON.parse(request.bodyText) as Record<string, unknown>;
+        text = typeof parsed.text === 'string' ? parsed.text : '';
+      } catch {
+        return answer(400, origin, { error: 'The request body has to be JSON.' });
+      }
+      if (text === '') {
+        return answer(400, origin, { error: 'A document is required, as text.' });
+      }
+
+      // The engine's own validator, before anything touches the network. A
+      // document it refuses, a forbidden claim included, ends here: the answer
+      // carries the reason, and provably zero statements have left this machine.
+      let document: PolicyDocument;
+      try {
+        document = readPolicyDocument(text);
+      } catch (cause) {
+        options.log('refused a document: the engine would not store it');
+        return answer(400, origin, {
+          refusal: cause instanceof Error ? cause.message : String(cause),
+        });
+      }
+
+      try {
+        const applied = await options.applyDocument(document);
+        options.log(`applied a document to "${document.definition.table}": ${applied.outcome}`);
+        return answer(200, origin, {
+          applied: applied.outcome === 'ok',
+          lines: applied.lines,
+        });
+      } catch {
+        options.log('an apply failed before the CLI path answered');
+        return answer(500, origin, { error: 'The deployment could not be written.' });
+      }
     }
 
     let parsed: Record<string, unknown>;
@@ -310,6 +420,21 @@ export async function runStudio(
   const handler = createBridge({
     key,
     openExecutor: () => restExecutor(endpoint),
+    readDocument: (table) => readStoredDocument(endpoint, table),
+    // The CLI's own apply, with its lines collected for the page instead of a
+    // terminal. PLAIN on purpose: colour codes are for terminals, and these
+    // lines end up rendered in a browser.
+    applyDocument: async (document) => {
+      const lines: string[] = [];
+      const outcome = await applyPolicyDocument(
+        endpoint,
+        document,
+        { newId: host.newId },
+        (line) => lines.push(line),
+        PLAIN,
+      );
+      return { outcome, lines };
+    },
     log: (line) => write(note(line)),
   });
 
