@@ -351,8 +351,8 @@ describe('reading the value', () => {
     const typed = await run(['BETTER_AUTH_SECRET', '--script', 'baseclf'], { interactive: true });
     const piped = await run(['BETTER_AUTH_SECRET', '--script', 'baseclf']);
 
-    expect(typed.out).toContain('Type the value for BETTER_AUTH_SECRET');
-    expect(piped.out).not.toContain('Type the value');
+    expect(typed.out).toContain('generate a strong value for BETTER_AUTH_SECRET');
+    expect(piped.out).not.toContain('generate a strong value');
   });
 
   it('⭐ does not ask for a value it has nowhere to send', async () => {
@@ -384,13 +384,14 @@ describe('⭐ typing the value twice', () => {
     expect(JSON.parse(sent[0]?.body ?? '{}').text).toBe(VALUE);
   });
 
-  it('says to pick something memorable before the first prompt', async () => {
+  it('says what each path costs before the first prompt', async () => {
     const { out } = await run(['KEY', '--script', 'baseclf'], {
       interactive: true,
       values: [VALUE, VALUE],
     });
 
-    expect(out).toContain('Pick something you will remember');
+    expect(out).toContain('asked for twice');
+    expect(out).toContain('cannot be mistyped');
   });
 
   it('tells the MCP_TOKEN reader what this value is, since the Studio asks for it', async () => {
@@ -439,6 +440,70 @@ describe('⭐ typing the value twice', () => {
 
     expect(out).not.toContain('secret-attempt-one');
     expect(out).not.toContain('secret-attempt-two');
+  });
+});
+
+describe('⭐ pressing Enter to generate', () => {
+  it('generates a strong value, sends it, and never asks to confirm', async () => {
+    const { outcome, out, sent, reads, copied } = await run(['MCP_TOKEN', '--script', 'baseclf'], {
+      interactive: true,
+      values: [''],
+      clipboardWorks: true,
+    });
+
+    expect(outcome).toBe('ok');
+    expect(reads).toBe(1);
+    expect(out).toContain('Generated a strong value');
+    expect(out).not.toContain('Type it again');
+
+    const sentValue = JSON.parse(sent[0]?.body ?? '{}').text as string;
+    // 32 bytes, base64url: long enough that nobody typed it.
+    expect(sentValue.length).toBeGreaterThanOrEqual(40);
+    expect(copied).toEqual([sentValue]);
+    expect(out).not.toContain(sentValue);
+  });
+
+  it('offers the choice in the prompt, so Enter is a decision and not an accident', async () => {
+    const { out } = await run(['KEY', '--script', 'baseclf'], {
+      interactive: true,
+      values: [VALUE, VALUE],
+    });
+
+    expect(out).toContain('Press Enter to generate a strong value');
+  });
+
+  it('🔴 prints a generated value exactly once when no clipboard can carry it', async () => {
+    // The one deliberate exception to never-printed: a generated value that
+    // reaches neither the clipboard nor the person is a credential nobody
+    // holds, on a deployment that now requires it.
+    const { outcome, out, sent } = await run(['MCP_TOKEN', '--script', 'baseclf'], {
+      interactive: true,
+      values: [''],
+      clipboardWorks: false,
+    });
+
+    expect(outcome).toBe('ok');
+    const sentValue = JSON.parse(sent[0]?.body ?? '{}').text as string;
+    expect(out).toContain('printed this once');
+    expect(out.split(sentValue)).toHaveLength(2);
+  });
+
+  it('does not print a typed value when the clipboard fails, since the person holds it', async () => {
+    const { out, sent } = await run(['MCP_TOKEN', '--script', 'baseclf'], {
+      interactive: true,
+      values: [VALUE, VALUE],
+      clipboardWorks: false,
+    });
+
+    expect(out).toContain('Use the value you just typed');
+    expect(out).not.toContain(JSON.parse(sent[0]?.body ?? '{}').text);
+  });
+
+  it('does not generate for a pipe, whose empty read stays a refusal', async () => {
+    const { outcome, sent } = await run(['KEY', '--script', 'baseclf'], { value: '' });
+
+    expect(outcome).toBe('usage');
+    expect(sent).toEqual([]);
   });
 });
 

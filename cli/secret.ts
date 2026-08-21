@@ -37,6 +37,7 @@ import {
   putSecret,
   REQUIRED_TOKEN_PERMISSIONS,
 } from './cloudflare.js';
+import { generateSecret } from './create.js';
 import { copyable, nextAction, note, type Style, styledResultLine } from './output.js';
 import { decideToken, explainRefusal, type TokenDecision } from './token.js';
 
@@ -96,8 +97,9 @@ export const SECRET_USAGE = [
   'Sets one secret on a deployed Worker. The value is read from stdin: type it at',
   'the prompt, or pipe it in. No option takes the value, and that is deliberate.',
   '',
-  'Typed at the prompt, the value is asked for twice and has to match, and the',
-  'confirmed value is placed on your clipboard for the paste that comes next.',
+  'At the prompt, pressing Enter generates a strong value; a typed value is asked',
+  'for twice and has to match. Either way the result is placed on your clipboard',
+  'for the paste that comes next.',
   '',
   'Options:',
   '  --script <name>   The Worker to set it on. The "name" field in wrangler.jsonc',
@@ -429,12 +431,12 @@ export async function runSecretSet(
   // accepted by Cloudflare, stored, and then fails every signature check with nothing
   // in any log that mentions whitespace.
   let value = '';
+  let generated = false;
 
   if (host.interactive) {
-    write(`Type the value for ${key}, then press Enter.`);
-    write(note('It is not echoed, not written to disk, and not printed back.'));
-    write(note('Pick something you will remember: it is asked for twice, and you'));
-    write(note('will need it again wherever this deployment is managed from.'));
+    write(`Press Enter to generate a strong value for ${key}, or type your own.`);
+    write(note('Nothing you type is echoed, written to disk, or printed back.'));
+    write(note('A typed value is asked for twice; a generated one cannot be mistyped.'));
     if (key === 'MCP_TOKEN') {
       write(note('This value is the admin token. The Studio asks for it, and anyone'));
       write(note('holding it can do everything the engine allows.'));
@@ -442,7 +444,18 @@ export async function runSecretSet(
 
     for (let attempt = 1; attempt <= CONFIRM_ATTEMPTS; attempt++) {
       const first = (await host.readSecret()).trim();
-      if (first === '') break;
+
+      // The empty answer is the recommended one: a machine-made value, never
+      // seen, never typed, so there is nothing to confirm. The project already
+      // records why this is the default worth having: a person prompted for a
+      // secret types something memorable, and a memorable admin token is the
+      // whole problem.
+      if (first === '') {
+        value = generateSecret();
+        generated = true;
+        write(styledResultLine('allow', 'Generated a strong value.', style));
+        break;
+      }
 
       write('Type it again to confirm.');
       const second = (await host.readSecret()).trim();
@@ -487,11 +500,13 @@ export async function runSecretSet(
 
   write(styledResultLine('allow', `${key} is set on the Worker "${script}".`, style));
 
-  // The clipboard, so the value typed twice does not have to be typed a third time
-  // into whatever asked for it. Only for a person at a keyboard: a script piping a
+  // The clipboard, so the value does not have to be typed a third time into
+  // whatever asked for it. Only for a person at a keyboard: a script piping a
   // value in did not ask to have its clipboard replaced.
-  if (host.interactive && host.copyToClipboard !== undefined) {
-    if (await host.copyToClipboard(value)) {
+  if (host.interactive) {
+    const copied = host.copyToClipboard !== undefined && (await host.copyToClipboard(value));
+
+    if (copied) {
       write(
         note(
           key === 'MCP_TOKEN'
@@ -500,7 +515,17 @@ export async function runSecretSet(
         ),
       );
       if (key === 'MCP_TOKEN') write(note('Studio connect screen.'));
-    } else {
+    } else if (generated) {
+      // The one place the value is ever printed, and it is not optional: a
+      // generated value that reaches neither the clipboard nor the person is a
+      // credential nobody holds, on a deployment that now requires it. Said
+      // once, marked, so it can be copied and the terminal closed.
+      write(note('The clipboard was not reachable here, and this value exists nowhere'));
+      write(note('else, so it is printed this once. Copy it, then clear your terminal:'));
+      write('');
+      write(copyable(value));
+      write('');
+    } else if (host.copyToClipboard !== undefined) {
       write(note('The clipboard was not reachable here. Use the value you just typed.'));
     }
   }
