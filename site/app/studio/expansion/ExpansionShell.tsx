@@ -4,11 +4,16 @@ import Link from "next/link";
 import { ReactNode, useState } from "react";
 import ThemeToggle from "../../ThemeToggle";
 
+// Q4 verdicts, encoded in what the sidebar offers: screens with a real
+// development path stay as Coming-soon previews; Team, API Keys and
+// Functions are gone because they describe a product this is not — the
+// deployment belongs to one Cloudflare account, the admin credential is
+// MCP_TOKEN (see Settings), and app logic is the customer's own Worker.
 const routeGroups = [
   { label: "Workspace", routes: [["Overview", "/studio/overview"], ["API Explorer", "/studio/api"], ["Request Logs", "/studio/logs"]] },
   { label: "Data", routes: [["SQL Editor", "/studio/sql"], ["Migrations", "/studio/migrations"], ["Backups", "/studio/backups"], ["Realtime", "/studio/realtime"]] },
-  { label: "Compute", routes: [["Functions & Cron", "/studio/functions"], ["Webhooks & Queues", "/studio/webhooks"], ["Deployments", "/studio/deployments"]] },
-  { label: "Project", routes: [["Team", "/studio/team"], ["API Keys", "/studio/api-keys"], ["Usage & Billing", "/studio/usage"], ["Settings", "/studio/settings"]] },
+  { label: "Compute", routes: [["Webhooks & Queues", "/studio/webhooks"], ["Deployments", "/studio/deployments"]] },
+  { label: "Project", routes: [["Usage & Billing", "/studio/usage"], ["Settings", "/studio/settings"]] },
   { label: "Setup", routes: [["New project", "/studio/new-project"], ["Provisioning", "/studio/provisioning"]] },
 ] as const;
 

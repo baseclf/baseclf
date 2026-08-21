@@ -128,22 +128,6 @@ export const mockRequestLogs = [
   { id: "req_7f36", time: "14:28:19.930", method: "PATCH", path: "/rest/v1/profiles", status: 200, duration: "55 ms", severity: "info", region: "NRT", role: "authenticated", message: "1 row updated" },
 ] as const;
 
-export const mockFunctions = [
-  { name: "send-welcome-email", trigger: "HTTP", path: "/functions/v1/send-welcome-email", state: "deployed", updated: "8 min ago" },
-  { name: "cleanup-expired-sessions", trigger: "Scheduled", path: "scheduled()", state: "deployed", updated: "2 hours ago" },
-  { name: "sync-profile-photo", trigger: "HTTP", path: "/functions/v1/sync-profile-photo", state: "draft", updated: "Yesterday" },
-] as const;
-
-export const mockSchedules = [
-  { expression: "0 3 * * *", label: "Daily at 03:00 UTC", target: "cleanup-expired-sessions", state: "active" },
-  { expression: "0 */6 * * *", label: "Every 6 hours", target: "refresh-public-cache", state: "paused" },
-] as const;
-
-export const mockEnvironments = [
-  { name: "Production", worker: "field-notes", branch: "main", state: "active" },
-  { name: "Preview", worker: "field-notes-preview", branch: "preview", state: "active" },
-] as const;
-
 export const mockSecrets = [
   { name: "GOOGLE_CLIENT_SECRET", environment: "Production", updated: "Aug 18", state: "configured" },
   { name: "GITHUB_CLIENT_SECRET", environment: "Production", updated: "Aug 17", state: "configured" },
@@ -198,28 +182,11 @@ export const mockDeployments = [
   { version: "v16", hash: "089a42c", message: "Storage policy fix", actor: "Maya", time: "Aug 17", traffic: 0, state: "ready" },
 ] as const;
 
-export const mockTeamMembers = [
-  { name: "Maya Chen", email: "maya@example.dev", role: "Owner", access: "All projects", state: "active" },
-  { name: "Leo Martins", email: "leo@example.dev", role: "Developer", access: "Production + Preview", state: "active" },
-  { name: "Ana Silva", email: "ana@example.dev", role: "Analyst", access: "Read-only", state: "invited" },
-] as const;
-
-export const mockApiKeys = [
-  { name: "Browser client", prefix: "bclf_public_7pk…", scope: "Public API", lastUsed: "2 min ago", created: "Aug 12" },
-  { name: "CI deploy", prefix: "bclf_secret_9da…", scope: "Deployments: write", lastUsed: "Yesterday", created: "Aug 08" },
-  { name: "Analytics export", prefix: "bclf_secret_2mh…", scope: "Logs: read", lastUsed: "Never", created: "Aug 18" },
-] as const;
-
 export const mockUsage = [
   { label: "API requests", value: "184.2K", limit: "1M included", percent: 18 },
   { label: "D1 rows read", value: "2.8M", limit: "Mock allowance", percent: 42 },
   { label: "R2 storage", value: "1.7 GB", limit: "10 GB mock cap", percent: 17 },
   { label: "Function invocations", value: "24.6K", limit: "100K included", percent: 25 },
-] as const;
-
-export const mockInvoices = [
-  { period: "August 2026", amount: "$24.00", state: "Projected", date: "Sep 01" },
-  { period: "July 2026", amount: "$19.00", state: "Paid", date: "Aug 01" },
 ] as const;
 
 export const mockRealtimeChannels = [

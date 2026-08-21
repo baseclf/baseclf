@@ -18,7 +18,6 @@ $shots = @(
   @{ Name = "provisioning"; Route = "/studio/provisioning" },
   @{ Name = "api-explorer"; Route = "/studio/api" },
   @{ Name = "request-logs"; Route = "/studio/logs" },
-  @{ Name = "functions"; Route = "/studio/functions" },
   @{ Name = "deployments"; Route = "/studio/deployments" },
   @{ Name = "backups"; Route = "/studio/backups" }
 )

@@ -23,14 +23,11 @@ test("server-renders every BaseCLF product surface", async () => {
     ["/studio/overview", /Ready to connect/i],
     ["/studio/api", /Try the API before writing app code/i],
     ["/studio/logs", /Find what happened/i],
-    ["/studio/functions", /Run app logic/i],
     ["/studio/sql", /Ask the database directly/i],
     ["/studio/migrations", /Move the database forward/i],
     ["/studio/backups", /Go back to a known moment/i],
     ["/studio/webhooks", /Send the signal now/i],
     ["/studio/deployments", /A version is a snapshot/i],
-    ["/studio/team", /Give people the work they need/i],
-    ["/studio/api-keys", /Know which key exists/i],
     ["/studio/usage", /See what your app uses/i],
     ["/studio/realtime", /Understand the channel/i],
     ["/studio/settings", /without exposing its secrets/i],
@@ -112,15 +109,53 @@ test("keeps the matched studio screens on the deployment, not on fixtures", asyn
 });
 
 test("keeps unfinished product contracts explicit", async () => {
-  const [usage, realtime, keys] = await Promise.all([
+  const [usage, realtime, settings] = await Promise.all([
     render("/studio/usage").then((response) => response.text()),
     render("/studio/realtime").then((response) => response.text()),
-    render("/studio/api-keys").then((response) => response.text()),
+    readFile(new URL("../app/studio/settings/SettingsApp.tsx", import.meta.url), "utf8"),
   ]);
 
   assert.match(usage, /Illustrative numbers only/i);
   assert.match(realtime, /Planned — not enabled/i);
-  assert.match(keys, /No usable credential/i);
+  // The API Keys screen collapsed into a Settings section: the product's one
+  // admin credential is the MCP_TOKEN secret, set with wrangler, never typed
+  // here. Read from the source because the tab renders on selection.
+  assert.match(settings, /Admin token/);
+  assert.match(settings, /MCP_TOKEN/);
+  assert.match(settings, /wrangler secret put/);
+  assert.doesNotMatch(settings, /mockEnvironments/);
+});
+
+test("a screen without a backend says COMING SOON and disables everything below it", async () => {
+  // Every Q4 "coming soon" verdict, as rendered output: the banner is present
+  // and the preview below it is inert, which is what ended the fake toasts.
+  const surfaces = [
+    "/studio/logs",
+    "/studio/sql",
+    "/studio/migrations",
+    "/studio/backups",
+    "/studio/webhooks",
+    "/studio/deployments",
+    "/studio/usage",
+    "/studio/new-project",
+    "/studio/provisioning",
+  ];
+  for (const path of surfaces) {
+    const html = await render(path).then((response) => response.text());
+    assert.match(html, /COMING SOON/, path);
+    assert.match(html, /planned-scope/, path);
+    assert.match(html, /inert/, path);
+  }
+
+  // The removed screens are gone from the product, not merely unlinked.
+  for (const path of ["/studio/team", "/studio/api-keys", "/studio/functions"]) {
+    const response = await render(path);
+    assert.notEqual(response.status, 200, path);
+  }
+
+  // And the sidebar no longer offers them anywhere.
+  const anySuitePage = await render("/studio/logs").then((response) => response.text());
+  assert.doesNotMatch(anySuitePage, /studio\/(team|api-keys|functions)/);
 });
 
 test("ships the guided motion system and real product captures", async () => {
@@ -136,9 +171,13 @@ test("ships the guided motion system and real product captures", async () => {
 
   assert.match(home, /The operational suite/);
   assert.match(home, /name="overview"/);
-  assert.match(home, /name="functions"/);
+  assert.match(home, /name="request-logs"/);
   assert.match(home, /name="deployments"/);
   assert.match(home, /name="backups"/);
+  // The landing tour only points at screens that exist. Functions was removed
+  // by decision Q4: the customer owns the Worker, so "deploy a function" is
+  // not this product.
+  assert.doesNotMatch(home, /studio\/(functions|team|api-keys)/);
   assert.match(home, /srcSet=/);
   assert.match(home, /Three clear steps/);
   assert.match(home, /A calmer way to run it/);
@@ -160,7 +199,9 @@ test("ships the guided motion system and real product captures", async () => {
   assert.match(globals, /route-content-enter/);
   assert.match(globals, /object-fit:contain/);
 
-  const shotNames = ["overview", "policy-studio", "sql-editor", "new-project", "provisioning", "api-explorer", "request-logs", "functions", "deployments", "backups"];
+  // "functions" left this list with its screen (decision Q4); its orphaned
+  // capture files are P6 cleanup.
+  const shotNames = ["overview", "policy-studio", "sql-editor", "new-project", "provisioning", "api-explorer", "request-logs", "deployments", "backups"];
   const pairs = await Promise.all(shotNames.map(async (name) => ({
     png: await stat(new URL(`../public/product-shots/${name}.png`, import.meta.url)),
     webp: await stat(new URL(`../public/product-shots/${name}.webp`, import.meta.url)),
