@@ -373,8 +373,11 @@ const CREATE_OUTPUT: readonly string[] = [
   "  Names the database, the bucket and the Worker on your account.",
   "  [baseclf]",
   "Frontend origin",
-  "  Where your app runs. Without it the browser blocks every call to this API.",
-  "  [http://localhost:3000] https://baseclf.dev",
+  "  Browsers can call this API only from origins listed here. The default",
+  "  suits an app running on your machine, and nothing else. Comma separate",
+  "  more than one; include https://baseclf.dev to also manage this",
+  "  deployment from the hosted Studio.",
+  "  [http://localhost:3000] http://localhost:3000,https://baseclf.dev",
   "✓ Check the Cloudflare login",
   "✓ Create the database",
   "✓ Create the bucket",
@@ -467,7 +470,7 @@ function ConnectFlow({ onConnected, onDemo, onNotice, onBridgeKey }: { onConnect
       // only rejects when nothing did, so each failure gets its own fix.
       try {
         await fetch(`${target}/health`, { mode: "no-cors" });
-        setProblem(`The deployment is alive, but it does not trust this page's origin, so the browser refuses to read its answers. Re-run npx create-baseclf with the same project name and answer the Frontend origin prompt with ${pageOrigin} — everything already created is kept.`);
+        setProblem(`The deployment is alive, but it does not trust this page's origin, so the browser refuses to read its answers. Re-run npx create-baseclf with the same project name and include ${pageOrigin} in the Frontend origin answer, comma separated with your app's origin — everything already created is kept.`);
       } catch {
         setProblem("Could not reach that address. Check the URL, and that the create run finished.");
       }
@@ -638,9 +641,9 @@ function ConnectFlow({ onConnected, onDemo, onNotice, onBridgeKey }: { onConnect
         <p className="wizard-progress">Step 2 of 4 · Create the deployment</p>
         <section className="wizard-card">
           <h3>One command creates everything.</h3>
-          <p>It provisions the database, the bucket and the Worker on your own Cloudflare account, then <strong>prints your deployment URL</strong>. It asks two questions: a project name, and the <strong>Frontend origin</strong>. Answer the second with exactly this page&apos;s origin, or the deployment will refuse this browser.</p>
+          <p>It provisions the database, the bucket and the Worker on your own Cloudflare account, then <strong>prints your deployment URL</strong>. It asks two questions: a project name, and the <strong>Frontend origin</strong>. Answer the second with your app&apos;s origin plus this page&apos;s, comma separated — a deployment that does not list this page&apos;s origin refuses this browser.</p>
           <div className="wizard-command"><code>npx create-baseclf</code><button type="button" onClick={() => copy("npx create-baseclf")}>Copy</button></div>
-          <div className="wizard-command"><code>{pageOrigin}</code><button type="button" onClick={() => copy(pageOrigin)}>Copy origin</button></div>
+          <div className="wizard-command"><code>{`http://localhost:3000,${pageOrigin}`}</code><button type="button" onClick={() => copy(`http://localhost:3000,${pageOrigin}`)}>Copy answer</button></div>
           <TerminalShot command="npx create-baseclf" lines={CREATE_OUTPUT} />
           <p className="form-help">This is what a successful run prints, from a real one. If yours shows a ✗ or stops early, that line is the thing to fix before going on. A ▲ line is different: the printout explains what it could not set and why, but the run continues and the address at the end works — carry on, and deal with the ▲ when it suits you.</p>
           <label className="wizard-field">Paste the deployment URL it printed<input type="url" value={wizard.url} onChange={(event) => setWizard({ ...wizard, url: event.target.value, version: null })} placeholder="https://your-project.your-subdomain.workers.dev" /></label>
