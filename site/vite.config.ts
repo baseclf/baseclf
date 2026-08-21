@@ -1,12 +1,23 @@
+import { existsSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { sites } from "@openai/sites-vite-plugin";
 import vinext from "vinext";
 import { defineConfig } from "vite";
-import hostingConfig from "./.openai/hosting.json";
 
 const SITE_CREATOR_PLACEHOLDER_DATABASE_ID =
   "00000000-0000-4000-8000-000000000000";
 
-const { d1, r2 } = hostingConfig;
+// hosting.json is the demo host's private manifest and never reaches the
+// public repository (it carries a real project id), so a fresh clone and CI
+// build without it. Its only role here is naming optional local dev bindings,
+// and a build with no bindings is exactly what those environments want.
+// A static `import` of it took the whole config down on CI the moment the
+// site workspace joined the pipeline.
+const hostingPath = fileURLToPath(new URL("./.openai/hosting.json", import.meta.url));
+const hostingAvailable = existsSync(hostingPath);
+const { d1 = null, r2 = null }: { d1?: string | null; r2?: string | null } = hostingAvailable
+  ? JSON.parse(readFileSync(hostingPath, "utf8"))
+  : {};
 
 // macOS Seatbelt blocks FSEvents, so Codex previews need polling for HMR.
 const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === "seatbelt";
@@ -49,7 +60,10 @@ export default defineConfig(async () => {
       : undefined,
     plugins: [
       vinext(),
-      sites(),
+      // The sites plugin serves the demo host and reads the same private
+      // manifest at closeBundle, so it only runs where the manifest exists.
+      // CI and a fresh clone build without it, which is also what they want.
+      ...(hostingAvailable ? [sites()] : []),
       cloudflare({
         viteEnvironment: { name: "rsc", childEnvironments: ["ssr"] },
         config: localBindingConfig,
