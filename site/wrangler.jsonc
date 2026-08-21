@@ -1,0 +1,31 @@
+/**
+ * Deploys the site as its own Worker: the vinext server bundle plus the
+ * client build as static assets. Requests that match an asset are served
+ * directly; everything else renders through the worker, which is exactly
+ * how the contract tests already drive this bundle.
+ *
+ * No account id lives here on purpose: `wrangler deploy` reads
+ * CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID from the environment
+ * (the repository's ignored .env), so this file stays safe to publish.
+ *
+ * Build first, from the repository root:
+ *   npm run build --prefix site
+ *   npx wrangler deploy --config site/wrangler.jsonc
+ */
+{
+  "name": "baseclf-site",
+  "main": "dist/server/index.js",
+  "compatibility_date": "2026-07-28",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "logs": { "enabled": true } },
+  // The product domain. Deploying attaches it as a Workers custom domain,
+  // which also provisions DNS and the certificate on the zone.
+  "routes": [
+    { "pattern": "baseclf.dev", "custom_domain": true },
+    { "pattern": "www.baseclf.dev", "custom_domain": true }
+  ],
+  "assets": {
+    "directory": "dist/client",
+    "binding": "ASSETS"
+  }
+}
