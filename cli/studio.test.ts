@@ -321,6 +321,108 @@ describe('the write lane, which is the CLI apply wearing a route', () => {
   });
 });
 
+describe('a fresh deployment, which has no engine tables yet', () => {
+  /**
+   * An endpoint scripted per statement, shaped like the real refusal: D1 puts
+   * the SQLite error into the envelope's `errors[].message` (the same shape
+   * `cli/policy.test.ts` uses for a refused statement).
+   */
+  function scriptedEndpoint(
+    answers: (sql: string) => { rows: readonly unknown[] } | { refusedWith: string },
+  ): D1Endpoint {
+    return {
+      databaseId: 'database-under-test',
+      credentials: { accountId: 'account-id-under-test', token: 'token-under-test' },
+      fetcher: async (_url, init) => {
+        const { sql } = JSON.parse(String(init?.body ?? '{}')) as { sql: string };
+        const answer = answers(sql);
+        if ('refusedWith' in answer) {
+          return new Response(
+            JSON.stringify({ success: false, errors: [{ code: 7500, message: answer.refusedWith }] }),
+            { status: 400 },
+          );
+        }
+        return new Response(
+          JSON.stringify({
+            success: true,
+            result: [{ success: true, results: answer.rows, meta: {} }],
+          }),
+          { status: 200 },
+        );
+      },
+    };
+  }
+
+  function bridgeOver(
+    endpoint: D1Endpoint,
+    lines: string[],
+  ): BridgeHandler {
+    return createBridge({
+      key: KEY,
+      openExecutor: () => env.DB,
+      readDocument: (table) => readStoredDocument(endpoint, table),
+      applyDocument: () => Promise.resolve({ outcome: 'ok' as const, lines: [] }),
+      log: (line) => lines.push(line),
+    });
+  }
+
+  it('answers /document with null, not an error, and does not log a failure', async () => {
+    // The wizard's bridge check reads a document from a deployment that may
+    // have never served a data request, and the Worker only creates the engine
+    // tables on the first one. That state is normal, not broken: no
+    // `_exposed_tables` means nothing was ever exposed. This used to answer 500
+    // and log "a document read failed before it finished" at the exact moment a
+    // person was following the setup wizard.
+    const lines: string[] = [];
+    const fresh = bridgeOver(
+      scriptedEndpoint(() => ({ refusedWith: 'no such table: _exposed_tables at offset 29' })),
+      lines,
+    );
+
+    const answer = await fresh(get('/document', '?table=__wizard_ping__'));
+
+    expect(answer.status).toBe(200);
+    expect(JSON.parse(answer.body)).toEqual({ document: null });
+    expect(lines.join('\n')).not.toContain('failed');
+  });
+
+  it('still fails loud when a later engine table is the one missing', async () => {
+    // The narrowness of the match is the point: `_policies` or `_policy_binds`
+    // missing while `_exposed_tables` answered is not the fresh state, it is a
+    // deployment somebody half-dismantled, and calling that "nothing stored"
+    // would seed the editor with a template over policies that still exist.
+    const lines: string[] = [];
+    const broken = bridgeOver(
+      scriptedEndpoint((sql) =>
+        sql.includes('_exposed_tables')
+          ? { rows: [{ enabled: 1 }] }
+          : { refusedWith: 'no such table: _policy_binds at offset 41' },
+      ),
+      lines,
+    );
+
+    const answer = await broken(get('/document', '?table=posts'));
+
+    expect(answer.status).toBe(500);
+    expect(lines.join('\n')).toContain('a document read failed before it finished');
+  });
+
+  it('still fails loud when the refusal is not about a missing table at all', async () => {
+    // The other direction a widened catch would break: an expired credential is
+    // not "nothing stored", and answering null for it would hide a real outage.
+    const lines: string[] = [];
+    const unauthorised = bridgeOver(
+      scriptedEndpoint(() => ({ refusedWith: 'Authentication error' })),
+      lines,
+    );
+
+    const answer = await unauthorised(get('/document', '?table=posts'));
+
+    expect(answer.status).toBe(500);
+    expect(lines.join('\n')).toContain('a document read failed before it finished');
+  });
+});
+
 describe('the command around it', () => {
   function studioHost(overrides: Partial<StudioHost> = {}): {
     host: StudioHost;

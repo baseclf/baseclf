@@ -38,10 +38,12 @@ import type { TableDefinition } from '../src/policy/types.js';
 import { BaseclfError } from '../src/utils/errors.js';
 import { MAX_REGISTRY_AGE_MS } from '../src/utils/memo.js';
 import {
+  D1ApiError,
   type D1Credentials,
   type D1Endpoint,
   type Fetcher,
   findDatabase,
+  type QueryResult,
   restExecutor,
   runSql,
 } from './d1-api.js';
@@ -199,11 +201,29 @@ export async function readStoredDocument(
   endpoint: D1Endpoint,
   table: string,
 ): Promise<Record<string, unknown> | null> {
-  const [exposed] = await runSql(
-    endpoint,
-    'SELECT "enabled" FROM "_exposed_tables" WHERE "table_name" = ?',
-    [table],
-  );
+  let exposed: QueryResult | undefined;
+  try {
+    [exposed] = await runSql(
+      endpoint,
+      'SELECT "enabled" FROM "_exposed_tables" WHERE "table_name" = ?',
+      [table],
+    );
+  } catch (cause) {
+    // A deployment that has never served a data request has no engine tables at
+    // all: the Worker creates them on the first request to /rest/v1 or
+    // /storage/v1, deliberately not on the cheap paths (measured 2026-08-14,
+    // cli/doctor.ts carries the same note). No `_exposed_tables` therefore
+    // means nothing was ever exposed, and "nothing stored" is the truthful
+    // answer rather than a failure; the Studio wizard checks its bridge against
+    // exactly such a deployment. The match is deliberately this narrow:
+    // `_policies` missing while `_exposed_tables` answered is a genuinely
+    // broken deployment and stays an error, and if the platform rewords the
+    // message this falls back to erring loud, which is the safe direction.
+    if (cause instanceof D1ApiError && cause.message.includes('no such table: _exposed_tables')) {
+      return null;
+    }
+    throw cause;
+  }
   const exposedRow = exposed?.rows[0] as { enabled?: number } | undefined;
   if (exposedRow === undefined) return null;
 
