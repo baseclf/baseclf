@@ -922,6 +922,14 @@ async function respond(request: Request, env: Env): Promise<Response> {
       const limited = await enforceRateLimit(request, env, url.pathname);
       if (limited !== null) return limited;
 
+      // The management surface needs the engine tables the same way the data
+      // paths do: the registry lives in them. This branch did not have the
+      // floor, so on a fresh deployment every registry-reading tool answered
+      // INTERNAL until somebody happened to hit /rest/v1 - the first real
+      // walkthrough connected the Studio to a brand-new Worker and its Tables
+      // screen errored over a database that was perfectly fine.
+      await ensureEngineSchemaOnce(env.DB);
+
       // The trusted origins ride along so the endpoint's Origin allowlist is
       // the same list CORS answers for, not a second one that drifts.
       return await handleMcp(request, env, authConfig(env).trustedOrigins);
