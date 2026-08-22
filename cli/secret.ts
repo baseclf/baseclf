@@ -536,7 +536,7 @@ export async function runSecretSet(
     nextAction({
       goal: 'confirm the deployment is running with it',
       steps: [
-        'Give it a few seconds. A check run immediately can still report the state before this.',
+        'Give it a minute or two. The edge can keep answering with the version from before this, and until the new one is everywhere that version refuses every token.',
         'Ask the deployment, using the URL it is served from.',
       ],
       verify: 'baseclf doctor <url>',

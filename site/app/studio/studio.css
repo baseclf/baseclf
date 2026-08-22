@@ -234,6 +234,9 @@
 .redirect-panel button { flex: none; padding: 0; border: 0; border-bottom: 1px solid currentColor; background: transparent; color: var(--ink); font: inherit; cursor: pointer; }
 .full-panel { min-width: 0; border: 1px solid var(--line); border-radius: 5px; overflow: hidden; background: var(--paper); }
 .detail-panel .rows-panel { margin: 0 18px 16px; }
+.studio-restoring { padding: 52px 26px; display: grid; gap: 10px; justify-items: start; }
+.studio-restoring p { margin: 0; font-size: 14px; }
+.studio-restoring small { color: var(--ink-soft); font-size: 11px; max-width: 46ch; }
 .rows-pager { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 14px; border-top: 1px solid var(--line); }
 .rows-pager button { min-width: 32px; padding: 4px 8px; }
 .storage-layout { display: grid; grid-template-columns: minmax(190px, .35fr) minmax(0, 1.65fr); border: 1px solid var(--line); border-radius: 5px; overflow: hidden; background: var(--paper); }

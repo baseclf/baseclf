@@ -209,6 +209,15 @@ test("ships the guided motion system and real product captures", async () => {
   assert.match(studioApp, /operator view, no policy applied/);
   assert.match(studioApp, /Load latest rows/);
   assert.match(studioApp, /browseOnBridge/);
+  // Four findings from the first real walkthrough, pinned: the guide bar
+  // speaks live copy on a live connection instead of the fixture's, the fake
+  // setup counter stays with the fixture, a reload shows a reconnecting state
+  // rather than a flash of mock screens, and a token refused right after
+  // secret set explains the propagation window instead of inviting a re-set.
+  assert.match(studioApp, /fixture preview/);
+  assert.match(studioApp, /mode !== "live" && <div className="studio-project-progress">/);
+  assert.match(studioApp, /Reconnecting to your saved deployment/);
+  assert.match(studioApp, /take a minute or two to reach the version that answers/);
   // The wizard's promise, pinned: every check mark is a real round trip, the
   // token stays out of the downloaded notes unless explicitly included, and
   // the flow ends in a download plus a connect that reuses the proven client.

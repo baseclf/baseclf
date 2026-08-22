@@ -100,18 +100,26 @@ function useOverlayFocus(active: boolean) {
 }
 
 const navigation: StudioScreen[] = ["Simulator", "Policies", "Tables", "Auth", "Storage", "Health"];
-const guidance: Record<StudioScreen, { label: string; copy: string }> = {
-  Simulator: { label: "Recommended next", copy: "Run the request as an authenticated user, then compare it with anon access." },
-  Policies: { label: "Start safe", copy: "Review the highlighted policy before creating a new rule." },
-  Tables: { label: "Data check", copy: "Open posts first—the missing index warning needs attention." },
-  Auth: { label: "Setup check", copy: "Copy the redirect URI, then run the provider diagnostic." },
-  Storage: { label: "Access first", copy: "Choose a bucket and confirm its policy before uploading an object." },
-  Health: { label: "What matters", copy: "Start with failures, then inspect the request trend." },
+// Two voices on purpose: the demo lines walk the fixture story, and showing
+// them against a live deployment reads as instructions about tables that do
+// not exist there. The first real walkthrough hit exactly that: "Open posts
+// first" on a database with no posts table.
+const guidance: Record<StudioScreen, { label: string; demo: string; live: string }> = {
+  Simulator: { label: "Recommended next", demo: "Run the request as an authenticated user, then compare it with anon access.", live: "Run the same input as anon and as a user — the difference in rows is the policy working." },
+  Policies: { label: "Start safe", demo: "Review the highlighted policy before creating a new rule.", live: "An applied change reaches every isolate within about half a minute." },
+  Tables: { label: "Data check", demo: "Open posts first—the missing index warning needs attention.", live: "New tables appear after a refresh, within about a minute. Rows load only when you ask." },
+  Auth: { label: "Setup check", demo: "Copy the redirect URI, then run the provider diagnostic.", live: "This screen is still a fixture preview — your real provider state is in npx baseclf doctor." },
+  Storage: { label: "Access first", demo: "Choose a bucket and confirm its policy before uploading an object.", live: "This screen is still a fixture preview — storage rules live in your policy documents." },
+  Health: { label: "What matters", demo: "Start with failures, then inspect the request trend.", live: "This screen is still a fixture preview — request numbers live in your Cloudflare dashboard." },
 };
 
 export default function StudioApp() {
   const [screen, setScreen] = useState<StudioScreen>("Simulator");
   const [mode, setMode] = useState<StudioMode>("demo");
+  // True while a stored session is being re-proven after a reload. Without it
+  // the round-trip gap rendered the demo screens, and the first real user read
+  // that flash as their data being replaced by mock tables.
+  const [restoring, setRestoring] = useState(false);
   const [client, setClient] = useState<StudioClient | null>(null);
   const [live, setLive] = useState<LiveState | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -240,7 +248,9 @@ export default function StudioApp() {
 
     let cancelled = false;
     queueMicrotask(() => {
-      if (!cancelled) announce(`Reconnecting to ${hostOf(stored.url)}…`);
+      if (cancelled) return;
+      setRestoring(true);
+      announce(`Reconnecting to ${hostOf(stored.url)}…`);
     });
     void (async () => {
       const candidate = new StudioClient(stored.url, stored.token);
@@ -248,12 +258,14 @@ export default function StudioApp() {
       if (cancelled) return;
       if ("error" in answer) {
         clearStoredSession();
+        setRestoring(false);
         setMode("connect");
         announce("The saved session no longer connects. Connect again.");
         return;
       }
       setBridgeKey(stored.bridgeKey);
       await beginLive(candidate, { url: stored.url, token: stored.token });
+      if (!cancelled) setRestoring(false);
     })();
     return () => {
       cancelled = true;
@@ -276,7 +288,10 @@ export default function StudioApp() {
           <span className="machine-label">Project</span>
           <strong>{mode === "live" && client ? hostOf(client.origin) : mockProject.name}</strong>
           <span className="connection-state"><i /> {mode === "live" ? "Live connection" : "Demo connection"}</span>
-          <div className="studio-project-progress"><span><i /></span><small>3 of 4 setup steps ready</small></div>
+          {/* Fixture copy, so it renders only against the fixture: shown on a
+              live connection it read as a claim about the person's own setup,
+              and it counts nothing. */}
+          {mode !== "live" && <div className="studio-project-progress"><span><i /></span><small>3 of 4 setup steps ready</small></div>}
           <div className="studio-project-actions"><Link href="/studio/overview">Overview</Link><Link href="/studio/api">API</Link><Link href="/studio/new-project">New</Link></div>
         </div>
         <nav>
@@ -321,8 +336,10 @@ export default function StudioApp() {
         </header>
 
         <div className="studio-content">
-          {connected && <aside className="studio-guide"><span>{guidance[screen].label}</span><p>{guidance[screen].copy}</p>{mode === "demo" && <button type="button" onClick={() => setMode("connect")}>Connect live →</button>}<button type="button" onClick={() => setPaletteOpen(true)}>Show actions <kbd>⌘K</kbd></button></aside>}
-          <div className="studio-screen-stage" key={connected ? `${mode}-${screen}` : "connect"}>{!connected ? (
+          {connected && !restoring && <aside className="studio-guide"><span>{guidance[screen].label}</span><p>{mode === "live" ? guidance[screen].live : guidance[screen].demo}</p>{mode === "demo" && <button type="button" onClick={() => setMode("connect")}>Connect live →</button>}<button type="button" onClick={() => setPaletteOpen(true)}>Show actions <kbd>⌘K</kbd></button></aside>}
+          <div className="studio-screen-stage" key={restoring ? "restoring" : connected ? `${mode}-${screen}` : "connect"}>{restoring ? (
+              <div className="studio-restoring"><span className="machine-label">Live connection</span><p>Reconnecting to your saved deployment…</p><small>A stored session is never trusted by itself: this is a real round trip, and a refusal lands on the connect screen.</small></div>
+) : !connected ? (
               <ConnectFlow onConnected={beginLive} onDemo={() => setMode("demo")} onNotice={announce} onBridgeKey={rememberBridgeKey} />
 ) : screen === "Simulator" ? (
               <SimulatorPanel client={mode === "live" ? client : null} live={live} bridgeKey={bridgeKey} onBridgeKey={rememberBridgeKey} onNotice={announce} />
@@ -542,6 +559,16 @@ function ConnectFlow({ onConnected, onDemo, onNotice, onBridgeKey }: { onConnect
     setBusy(false);
   };
 
+  // The refusal right after `secret set` is almost always timing, not the
+  // value: a fresh secret rides a new Worker version, and the edge can keep
+  // answering with the old one for a minute or two. Measured twice on real
+  // first-run deployments; both times the person re-set a perfectly good
+  // token because the message gave them nothing else to try.
+  const explainRefusal = (error: string) =>
+    error === "The deployment refused the token."
+      ? "The deployment refused the token. Just set it? A new secret can take a minute or two to reach the version that answers — wait a moment and try again before re-setting anything."
+      : error;
+
   const checkToken = async () => {
     if (busy) return;
     setBusy(true);
@@ -550,7 +577,7 @@ function ConnectFlow({ onConnected, onDemo, onNotice, onBridgeKey }: { onConnect
     const answer = await candidate.connect();
     setBusy(false);
     if ("error" in answer) {
-      setProblem(answer.error);
+      setProblem(explainRefusal(answer.error));
       return;
     }
     setWizard({ ...wizard, client: candidate });
@@ -615,7 +642,7 @@ function ConnectFlow({ onConnected, onDemo, onNotice, onBridgeKey }: { onConnect
     const answer = await candidate.connect();
     setBusy(false);
     if ("error" in answer) {
-      setProblem(answer.error);
+      setProblem(explainRefusal(answer.error));
       return;
     }
     onConnected(candidate, { url: wizard.url, token: wizard.token.trim() });
@@ -1251,7 +1278,7 @@ function LiveTablesScreen({ client, live, bridgeKey, onNotice }: { client: Studi
         <header><span>{live.tables.length} {live.tables.length === 1 ? "table" : "tables"}</span><span className="machine-label">live</span></header>
         <div className="data-list">
           {live.tables.length === 0 ? (
-            <button type="button" className="is-selected"><span><strong>No application tables yet</strong><small>Create one with wrangler d1 execute, then expose it with a policy.</small></span></button>
+            <button type="button" className="is-selected"><span><strong>No application tables yet</strong><small>Create one with wrangler d1 execute. It appears here after a refresh, within about a minute.</small></span></button>
           ) : (
             live.tables.map((table) => (
               <button key={table.name} type="button" className={selected !== undefined && table.name === selected.name ? "is-selected" : ""} onClick={() => setSelectedName(table.name)}>
