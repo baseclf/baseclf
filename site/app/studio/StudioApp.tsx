@@ -162,11 +162,14 @@ export default function StudioApp() {
       from.lint(),
       from.schema(),
     ]);
-    // Only the policy error used to be announced; a failed schema read fell
-    // through to an empty list, indistinguishable from an empty database.
+    // Anything that is not data is a problem here, refusals included: a tool
+    // that errors inside the deployment comes back as isError, which the
+    // client maps to "refusal", and the first version of this check only
+    // caught "error" - so a fresh deployment's INTERNAL still drew an empty
+    // database. These three reads have no legitimate refusal.
     const problem =
       [policyAnswer, lintAnswer, schemaAnswer]
-        .map((answer) => (answer.kind === "error" ? answer.message : ""))
+        .map((answer) => (answer.kind !== "data" ? answer.message : ""))
         .find((message) => message !== "") ?? "";
     if (problem !== "") announce(problem);
     setLive({
