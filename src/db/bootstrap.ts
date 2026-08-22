@@ -54,6 +54,7 @@ import { APP_METADATA_SCHEMA } from '../auth/app-metadata.js';
 import { POLICY_SCHEMA } from '../policy/schema.js';
 import { STORAGE_SCHEMA } from '../storage/schema.js';
 import { BaseclfError } from '../utils/errors.js';
+import { AUDIT_SCHEMA } from './audit.js';
 import type { D1Executor } from './dialect.js';
 import { assertExecutable, type CompiledStatement } from './guards.js';
 
@@ -68,6 +69,7 @@ export const ENGINE_SCHEMA: readonly string[] = Object.freeze([
   ...POLICY_SCHEMA,
   ...STORAGE_SCHEMA,
   ...APP_METADATA_SCHEMA,
+  ...AUDIT_SCHEMA,
 ]);
 
 /**
