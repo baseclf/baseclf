@@ -10,12 +10,14 @@
  */
 
 import { env } from 'cloudflare:workers';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
+import { AUDIT_SCHEMA } from '../src/db/audit.js';
 import {
   POST_BINDS,
   POST_POLICIES,
   registerPolicies,
+  SEED_ROWS,
   seedDatabase,
 } from '../src/policy/__fixtures__/schema.js';
 import type { D1Endpoint } from './d1-api.js';
@@ -26,6 +28,7 @@ import {
   readStoredDocument,
 } from './policy.js';
 import {
+  BRIDGE_METHODS,
   type BridgeHandler,
   type BridgeRequest,
   createBridge,
@@ -571,5 +574,209 @@ describe('the command around it', () => {
 
   it('every fixed sentence passes the voice rules', () => {
     expect(STUDIO_FIXED_TEXT.flatMap(findVoiceViolations)).toEqual([]);
+  });
+});
+
+/**
+ * The edit lane: the bridge's second write verb, and the first one that touches
+ * application data.
+ *
+ * `/apply` writes configuration an operator submitted and can resubmit. This
+ * writes a customer's row, on a database with no interactive transaction and a
+ * restore that works a database at a time. So the tests that carry weight are
+ * the ones about what it will not do, and the one about what happens when
+ * somebody else got there first.
+ */
+describe('the operator row edit', () => {
+  interface EditAnswer {
+    row?: Record<string, unknown>;
+    recorded?: boolean;
+    warning?: string;
+    conflict?: string;
+    error?: string;
+  }
+
+  function patch(body: Record<string, unknown>, key = KEY): BridgeRequest {
+    const headers: Record<string, string> = {
+      'x-bridge-key': key,
+      origin: 'http://localhost:3000',
+    };
+    return {
+      method: 'PATCH',
+      path: '/rows',
+      search: '',
+      header: (name) => headers[name.toLowerCase()] ?? null,
+      bodyText: JSON.stringify(body),
+    };
+  }
+
+  async function edit(
+    body: Record<string, unknown>,
+    key = KEY,
+  ): Promise<{ status: number; body: EditAnswer }> {
+    const response = await handler(patch(body, key));
+    return { status: response.status, body: JSON.parse(response.body) as EditAnswer };
+  }
+
+  // Read from the fixture rather than written out, which is the advice the
+  // comment two hundred lines up already gives, and which this block ignored on
+  // its first draft: the ids are `p1` and `p2`, the tests said `p_1`, and every
+  // assertion ran against a row that was not there. The fixture is the source.
+  const FIRST = SEED_ROWS[0]?.[0] ?? '';
+  const SECOND = SEED_ROWS[1]?.[0] ?? '';
+
+  async function titleOf(id: string): Promise<string | null> {
+    const row = await env.DB.prepare('SELECT title FROM posts WHERE id = ?1')
+      .bind(id)
+      .first<{ title: string | null }>();
+    return row?.title ?? null;
+  }
+
+  async function auditRows(): Promise<{ subject: string; detail: string | null }[]> {
+    const rows = await env.DB.prepare('SELECT subject, detail FROM _audit_log ORDER BY id').all<{
+      subject: string;
+      detail: string | null;
+    }>();
+    return rows.results ?? [];
+  }
+
+  beforeEach(async () => {
+    for (const statement of AUDIT_SCHEMA) {
+      await env.DB.prepare(statement).run();
+    }
+    await env.DB.prepare('DELETE FROM _audit_log').run();
+  });
+
+  it('writes the row, hands back its post-image, and records the change', async () => {
+    const before = await titleOf(FIRST);
+
+    const answer = await edit({
+      table: 'posts',
+      key: { id: FIRST },
+      column: 'title',
+      expected: before,
+      next: 'an edited title',
+    });
+
+    expect(answer.status).toBe(200);
+    expect(answer.body.row?.title).toBe('an edited title');
+    expect(answer.body.recorded).toBe(true);
+    expect(await titleOf(FIRST)).toBe('an edited title');
+
+    // Which row and which column, and no value anywhere in the entry.
+    expect(await auditRows()).toEqual([{ subject: `posts[id=${FIRST}]`, detail: 'title' }]);
+  });
+
+  it('writes nothing when the value moved on, and says both possible reasons', async () => {
+    // Bound, because the replacement that put the fixture id here turned a
+    // quoted literal into an identifier inside a SQL string, which under DQS
+    // would have compared the column against the text "FIRST" and matched
+    // nothing, quietly.
+    await env.DB.prepare('UPDATE posts SET title = ?1 WHERE id = ?2')
+      .bind('somebody else', FIRST)
+      .run();
+
+    const answer = await edit({
+      table: 'posts',
+      key: { id: FIRST },
+      column: 'title',
+      expected: 'what the page had',
+      next: 'mine',
+    });
+
+    expect(answer.status).toBe(409);
+    // Two causes produce one empty result and this cannot tell them apart
+    // without a second read that would race the first, so it says both.
+    expect(answer.body.conflict).toMatch(/no longer there/);
+    expect(answer.body.conflict).toMatch(/changed/);
+    expect(await titleOf(FIRST)).toBe('somebody else');
+    expect(await auditRows()).toEqual([]);
+  });
+
+  it('refuses without the key, before anything holding a credential is touched', async () => {
+    const openedBefore = opened;
+    const answer = await edit(
+      { table: 'posts', key: { id: FIRST }, column: 'title', expected: 'a', next: 'b' },
+      'not-the-key',
+    );
+
+    expect(answer.status).toBe(401);
+    expect(opened).toBe(openedBefore);
+  });
+
+  it('refuses an engine table, so the bridge cannot be used to rewrite policy', async () => {
+    const answer = await edit({
+      table: '_policies',
+      key: { id: '1' },
+      column: 'using_expr',
+      expected: 'a',
+      next: 'b',
+    });
+    expect(answer.status).toBe(400);
+    expect(answer.body.error).toContain('Engine tables');
+  });
+
+  it('refuses a body that is not one edit', async () => {
+    // The shape is checked before the catalogue is consulted, so the refusals
+    // from the statement builder are about the database rather than about JSON.
+    for (const body of [
+      { key: { id: FIRST }, column: 'title', expected: 'a', next: 'b' },
+      { table: 'posts', column: 'title', expected: 'a', next: 'b' },
+      { table: 'posts', key: { id: FIRST }, expected: 'a', next: 'b' },
+      {
+        table: 'posts',
+        key: { id: FIRST },
+        column: 'title',
+        expected: 'a',
+        next: { of: 'course' },
+      },
+      { table: 'posts', key: { id: { nested: true } }, column: 'title', expected: 'a', next: 'b' },
+    ]) {
+      const answer = await edit(body);
+      expect(answer.status).toBe(400);
+    }
+    expect(await auditRows()).toEqual([]);
+  });
+
+  it('leaves the other rows alone', async () => {
+    const otherBefore = await titleOf(SECOND);
+    await edit({
+      table: 'posts',
+      key: { id: FIRST },
+      column: 'title',
+      expected: await titleOf(FIRST),
+      next: 'changed',
+    });
+    expect(await titleOf(SECOND)).toBe(otherBefore);
+  });
+});
+
+/**
+ * What the preflight advertises has to cover what the bridge routes.
+ *
+ * The handler is handed requests directly in every other test here, so a method
+ * the routes accept and the preflight does not would pass all of them and fail
+ * in the only place it matters. That is how the private network header came to
+ * be needed too, and the comment above it says the same thing.
+ */
+describe('the preflight and the routes agree', () => {
+  it('advertises every method the bridge answers on, and OPTIONS', async () => {
+    // The first version of this read the source file to find the routed
+    // methods, which cannot be done inside workerd. The fix was better than the
+    // test: the header is now built from the route table, so this asserts that
+    // the two are one thing rather than watching two things stay equal.
+    const response = await handler({
+      method: 'OPTIONS',
+      path: '/rows',
+      search: '',
+      header: (name) => (name.toLowerCase() === 'origin' ? 'http://localhost:3000' : null),
+      bodyText: '',
+    });
+
+    const advertised = response.headers['access-control-allow-methods'] ?? '';
+    for (const method of ['GET', 'POST', 'PATCH', 'OPTIONS']) {
+      expect(advertised).toContain(method);
+    }
+    expect(BRIDGE_METHODS).toContain('PATCH');
   });
 });

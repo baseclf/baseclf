@@ -60,6 +60,7 @@
  * three.
  */
 
+import { appendAuditStatement, auditSubjectForRow } from '../src/db/audit.js';
 import type { D1Executor } from '../src/db/dialect.js';
 import { type Catalogue, introspect } from '../src/db/introspect.js';
 import { loadRegistry } from '../src/policy/registry.js';
@@ -68,6 +69,7 @@ import { BaseclfError } from '../src/utils/errors.js';
 import { MAX_REGISTRY_AGE_MS } from '../src/utils/memo.js';
 import { BROWSE_PAGE_SIZE, browseStatement } from './browse.js';
 import { restExecutor } from './d1-api.js';
+import { type CellValue, type EditRequest, editStatement } from './edit.js';
 import { copyable, note, PLAIN, type Style, styledResultLine } from './output.js';
 import {
   applyDocument as applyPolicyDocument,
@@ -168,7 +170,8 @@ function corsHeaders(origin: string): Record<string, string> {
   return {
     'access-control-allow-origin': origin,
     'access-control-allow-headers': 'content-type, x-bridge-key',
-    'access-control-allow-methods': 'GET, POST, OPTIONS',
+    // Built from the route table rather than written out beside it. See ROUTES.
+    'access-control-allow-methods': BRIDGE_METHODS.join(', '),
     // Private Network Access. A public https page reaching into 127.0.0.1 is
     // exactly what this bridge is for, and Chromium gates that behind a
     // preflight the server has to opt into; without this header the fetch
@@ -197,6 +200,93 @@ function asPlainObject(value: unknown): Record<string, unknown> | undefined {
 
 function asOptionalString(value: unknown): string | null {
   return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+/**
+ * Whether a value from the page is something a cell can hold.
+ *
+ * `undefined` is not on the list and neither is anything structured. JSON can
+ * carry an object where a cell value is expected, and `String()` on one of those
+ * is "[object Object]", so a shape that is not a cell is refused here rather
+ * than converted into a plausible-looking one further down.
+ */
+function isCellValue(value: unknown): value is CellValue {
+  return (
+    value === null ||
+    typeof value === 'string' ||
+    typeof value === 'boolean' ||
+    (typeof value === 'number' && Number.isFinite(value))
+  );
+}
+
+/**
+ * One edit out of a request body, or `null` when the body is not one.
+ *
+ * The whole shape is checked here, before the catalogue is consulted, so that
+ * `editStatement` is only ever handed something of the right type and its own
+ * refusals are about the database rather than about JSON. `Object.hasOwn` on the
+ * key map for the same reason it appears in the policy compiler: a key named
+ * `constructor` must not arrive carrying a function from the prototype.
+ */
+function readEditRequest(bodyText: string): EditRequest | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(bodyText);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
+
+  const body = parsed as Record<string, unknown>;
+  const { table, column, expected, next, key } = body;
+
+  if (typeof table !== 'string' || table === '') return null;
+  if (typeof column !== 'string' || column === '') return null;
+  if (!isCellValue(expected) || !isCellValue(next)) return null;
+  if (typeof key !== 'object' || key === null || Array.isArray(key)) return null;
+
+  const named: Record<string, CellValue> = {};
+  for (const name of Object.keys(key as Record<string, unknown>)) {
+    const value = Object.hasOwn(key, name) ? (key as Record<string, unknown>)[name] : undefined;
+    if (!isCellValue(value)) return null;
+    named[name] = value;
+  }
+
+  return { table, key: named, column, expected, next };
+}
+
+/**
+ * Every request this bridge answers, as data.
+ *
+ * A table rather than a chain of comparisons because the preflight has to
+ * advertise the same methods the routing accepts, and a browser is the only
+ * place a disagreement shows up: the tests hand the handler a request directly
+ * and never send a preflight. PATCH was routed and unadvertised for exactly as
+ * long as it took to notice, and the Private Network header above is a scar from
+ * the same shape of gap. Derived once here, both readers use it, and drift is
+ * not a thing that can happen rather than a thing a test watches for.
+ */
+const ROUTES = [
+  { method: 'POST', path: '/run', route: 'run' },
+  { method: 'POST', path: '/apply', route: 'apply' },
+  { method: 'GET', path: '/document', route: 'document' },
+  { method: 'GET', path: '/rows', route: 'rows' },
+  // PATCH rather than POST on the same path: this changes one field of a row
+  // that already exists, and naming it after the lane keeps the read and the
+  // write of one screen together.
+  { method: 'PATCH', path: '/rows', route: 'edit' },
+] as const;
+
+export type BridgeRoute = (typeof ROUTES)[number]['route'];
+
+/** The methods the preflight advertises, taken from the routes themselves. */
+export const BRIDGE_METHODS: readonly string[] = Object.freeze([
+  ...new Set(ROUTES.map((entry) => entry.method)),
+  'OPTIONS',
+]);
+
+function routeFor(method: string, path: string): BridgeRoute | null {
+  return ROUTES.find((entry) => entry.method === method && entry.path === path)?.route ?? null;
 }
 
 /** What one apply came back with: the CLI's own outcome and its printed lines. */
@@ -247,16 +337,7 @@ export function createBridge(options: {
       return { status: 204, headers: corsHeaders(origin), body: '' };
     }
 
-    const route =
-      request.method === 'POST' && request.path === '/run'
-        ? 'run'
-        : request.method === 'POST' && request.path === '/apply'
-          ? 'apply'
-          : request.method === 'GET' && request.path === '/document'
-            ? 'document'
-            : request.method === 'GET' && request.path === '/rows'
-              ? 'rows'
-              : null;
+    const route = routeFor(request.method, request.path);
 
     if (route === null) {
       return answer(404, origin, { error: 'Not found.' });
@@ -312,6 +393,81 @@ export function createBridge(options: {
         options.log('a row browse failed before it finished');
         return answer(500, origin, { error: 'The deployment could not be read.' });
       }
+    }
+
+    if (route === 'edit') {
+      const parsedEdit = readEditRequest(request.bodyText);
+      if (parsedEdit === null) {
+        return answer(400, origin, { error: 'The request body has to describe one edit.' });
+      }
+
+      const plan = editStatement(await catalogueFor(), parsedEdit);
+      if (!plan.ok) {
+        // Logged with the table but never the value, the same as every other
+        // line this process prints.
+        options.log(`refused an edit of "${parsedEdit.table}"`);
+        return answer(400, origin, { error: plan.refusal });
+      }
+
+      const subject = auditSubjectForRow(parsedEdit.table, parsedEdit.key);
+      let updated: Record<string, unknown> | undefined;
+      try {
+        const result = await options
+          .openExecutor()
+          .prepare(plan.sql)
+          .bind(...plan.parameters)
+          .all<Record<string, unknown>>();
+        updated = (result.results ?? [])[0];
+      } catch {
+        options.log(`an edit of ${subject} failed before it finished`);
+        return answer(500, origin, { error: 'The deployment could not be written.' });
+      }
+
+      if (updated === undefined) {
+        // Two causes, one result, and this cannot tell them apart without a
+        // second read that would race the first. So it says both rather than
+        // picking the one that sounds more likely.
+        options.log(`an edit of ${subject} changed nothing`);
+        return answer(409, origin, {
+          conflict:
+            'Nothing was written. Either the row is no longer there, or its value changed ' +
+            'since this page loaded it. Reload the rows and look again.',
+        });
+      }
+
+      // After the write, not batched with it, and that is a decision rather
+      // than an oversight: `changes()` does make a batched log line conditional
+      // in workerd (rules/01 G16 through G19), but `batch()` through the binding
+      // on real D1 is the thing section G15 says cannot be verified without
+      // deploying. Both ways it could differ there are silent. This way the
+      // failure is a change that happened and was not recorded, which this
+      // process knows about, because it is holding the row that came back. So
+      // it says so, loudly, instead of a log nobody can check being wrong.
+      try {
+        const entry = appendAuditStatement({
+          lane: 'bridge',
+          action: 'row_edit',
+          subject,
+          detail: parsedEdit.column,
+        });
+        await options
+          .openExecutor()
+          .prepare(entry.sql)
+          .bind(...entry.parameters)
+          .run();
+      } catch {
+        options.log(`WROTE ${subject}.${parsedEdit.column} BUT COULD NOT RECORD IT in _audit_log`);
+        return answer(200, origin, {
+          row: updated,
+          recorded: false,
+          warning:
+            'The change was written, and the audit log did not accept the entry for it. ' +
+            'This edit is not in _audit_log.',
+        });
+      }
+
+      options.log(`edited ${subject}: ${parsedEdit.column}`);
+      return answer(200, origin, { row: updated, recorded: true });
     }
 
     if (route === 'apply') {
