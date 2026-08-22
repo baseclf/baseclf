@@ -325,3 +325,18 @@ test("keeps every written claim about Studio in step with what Studio does", asy
     assert.doesNotMatch(text, /screens in (the|this) preview (still )?run on fixture data/i, surface);
   }
 });
+
+// llms.txt points a reader that cannot run JavaScript at the markdown twins,
+// so those are the copies an agent quotes back to somebody. The compatibility
+// twin listed a status of "planned" while the legend defining it lived only on
+// the HTML page, and "planned" read alone is heard as "arriving", which is the
+// one reading the page exists to prevent.
+test("the markdown a bot reads defines the status words it uses", async () => {
+  const markdown = await readFile(new URL("../public/docs/compatibility.md", import.meta.url), "utf8");
+
+  for (const status of ["supported", "off by default", "planned", "not applicable"]) {
+    assert.match(markdown, new RegExp(status, "i"), status);
+  }
+  assert.match(markdown, /Planned is roadmap language, not an available production feature/i);
+  assert.match(markdown, /source of truth/i);
+});
