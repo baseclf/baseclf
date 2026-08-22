@@ -218,6 +218,11 @@ test("ships the guided motion system and real product captures", async () => {
   assert.match(studioApp, /mode !== "live" && <div className="studio-project-progress">/);
   assert.match(studioApp, /Reconnecting to your saved deployment/);
   assert.match(studioApp, /take a minute or two to reach the version that answers/);
+  // A failed live read is surfaced, never rendered as an empty database: the
+  // Tables screen says the read failed and offers to read again, instead of
+  // sending a rate-limited person into more refreshes.
+  assert.match(studioApp, /Could not read the deployment/);
+  assert.match(studioApp, /problem,\n/);
   // The wizard's promise, pinned: every check mark is a real round trip, the
   // token stays out of the downloaded notes unless explicitly included, and
   // the flow ends in a download plus a connect that reuses the proven client.

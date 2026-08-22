@@ -44,6 +44,13 @@ interface LiveState {
   readonly findings: readonly LintFinding[];
   readonly withheld: number;
   readonly tables: readonly SchemaTable[];
+  /**
+   * Non-empty when any of the three reads failed. The lists above are then
+   * incomplete, and a screen must say so rather than render them as truth: a
+   * 429 from one refresh too many used to draw "0 TABLES / LIVE" over a
+   * database that had tables, which sent the person into more refreshes.
+   */
+  readonly problem: string;
 }
 
 function hostOf(origin: string): string {
@@ -155,12 +162,19 @@ export default function StudioApp() {
       from.lint(),
       from.schema(),
     ]);
-    if (policyAnswer.kind === "error") announce(policyAnswer.message);
+    // Only the policy error used to be announced; a failed schema read fell
+    // through to an empty list, indistinguishable from an empty database.
+    const problem =
+      [policyAnswer, lintAnswer, schemaAnswer]
+        .map((answer) => (answer.kind === "error" ? answer.message : ""))
+        .find((message) => message !== "") ?? "";
+    if (problem !== "") announce(problem);
     setLive({
       policies: policyAnswer.kind === "data" ? policyAnswer.data.tables : [],
       findings: lintAnswer.kind === "data" ? lintAnswer.data.findings : [],
       withheld: lintAnswer.kind === "data" ? lintAnswer.data.withheld : 0,
       tables: schemaAnswer.kind === "data" ? schemaAnswer.data.tables : [],
+      problem,
     });
   };
 
@@ -1077,7 +1091,7 @@ function DataScreen({ screen, client, live, bridgeKey, onRefresh, onNotice, onOp
   }
   if (screen === "Tables") {
     return client !== null && live !== null ? (
-      <LiveTablesScreen client={client} live={live} bridgeKey={bridgeKey} onNotice={onNotice} />
+      <LiveTablesScreen client={client} live={live} bridgeKey={bridgeKey} onRefresh={onRefresh} onNotice={onNotice} />
     ) : (
       <TablesScreen />
     );
@@ -1212,7 +1226,7 @@ function PoliciesScreen({ onNotice, onOpenDialog }: { onNotice: (message: string
  * writes stay with the API and the CLI; this screen is read-only by the same
  * decision (Q5) that keeps the policies screen read-only.
  */
-function LiveTablesScreen({ client, live, bridgeKey, onNotice }: { client: StudioClient; live: LiveState; bridgeKey: string; onNotice: (message: string) => void }) {
+function LiveTablesScreen({ client, live, bridgeKey, onRefresh, onNotice }: { client: StudioClient; live: LiveState; bridgeKey: string; onRefresh: () => void; onNotice: (message: string) => void }) {
   const [selectedName, setSelectedName] = useState("");
   // The description remembers which table it belongs to, so changing the
   // selection needs no synchronous reset: a description for another table is
@@ -1278,7 +1292,14 @@ function LiveTablesScreen({ client, live, bridgeKey, onNotice }: { client: Studi
         <header><span>{live.tables.length} {live.tables.length === 1 ? "table" : "tables"}</span><span className="machine-label">live</span></header>
         <div className="data-list">
           {live.tables.length === 0 ? (
-            <button type="button" className="is-selected"><span><strong>No application tables yet</strong><small>Create one with wrangler d1 execute. It appears here after a refresh, within about a minute.</small></span></button>
+            live.problem !== "" ? (
+              // A failed read is not an empty database. Saying "no tables" here
+              // sent a person into a refresh loop against the rate limit that
+              // caused the failure in the first place.
+              <button type="button" className="is-selected" onClick={onRefresh}><span><strong>Could not read the deployment</strong><small>{live.problem} Click here to read again.</small></span></button>
+            ) : (
+              <button type="button" className="is-selected"><span><strong>No application tables yet</strong><small>Create one with wrangler d1 execute. It appears here after a refresh, within about a minute.</small></span></button>
+            )
           ) : (
             live.tables.map((table) => (
               <button key={table.name} type="button" className={selected !== undefined && table.name === selected.name ? "is-selected" : ""} onClick={() => setSelectedName(table.name)}>
