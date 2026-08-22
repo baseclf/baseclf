@@ -326,3 +326,57 @@ describe('the memo behind getStorageRegistry', () => {
     }
   });
 });
+
+/**
+ * The two statements the README prints, run as printed.
+ *
+ * There is no `baseclf storage` command yet, so the README tells an operator to
+ * insert these rows directly, and a README that prints SQL nobody ran is how
+ * this project shipped a quickstart whose sample table had no rows in it. The
+ * literal text is pasted here rather than built from the helpers above: a
+ * helper that drifted would keep this passing while the printed version broke.
+ */
+describe('the SQL the README tells an operator to run', () => {
+  it('exposes a per-tenant directory, exactly as printed', async () => {
+    await env.DB.prepare(
+      "INSERT INTO _storage_buckets (bucket, enabled) VALUES ('files', 1)",
+    ).run();
+    await env.DB.prepare(
+      'INSERT INTO _storage_policies (bucket, name, operation, roles, prefix)' +
+        " VALUES ('files', 'tenant_files', 'download', '[\"authenticated\"]', 'files/$auth.app.tenant/')",
+    ).run();
+
+    const registry = await loadStorageRegistry(env.DB);
+    const grant = authorizeStorage({
+      buckets: registry.buckets,
+      bucket: 'files',
+      operation: 'download',
+      auth: { ...ANN, app: { tenant: 'acme' } },
+      fileName: 'report.pdf',
+    });
+
+    expect(grant.key).toBe('files/acme/report.pdf');
+
+    // And the claim is what separates them, not the caller's own id.
+    const other = authorizeStorage({
+      buckets: registry.buckets,
+      bucket: 'files',
+      operation: 'download',
+      auth: { ...ANN, app: { tenant: 'globex' } },
+      fileName: 'report.pdf',
+    });
+    expect(other.key).toBe('files/globex/report.pdf');
+  });
+
+  it('grants nothing when only the policy row is inserted', async () => {
+    // The reason the README prints both statements. A policy on a bucket that
+    // is not registered is not a narrower grant, it is no grant at all.
+    await env.DB.prepare(
+      'INSERT INTO _storage_policies (bucket, name, operation, roles, prefix)' +
+        " VALUES ('files', 'tenant_files', 'download', '[\"authenticated\"]', 'files/$auth.app.tenant/')",
+    ).run();
+
+    const registry = await loadStorageRegistry(env.DB);
+    expect(registry.buckets.has('files')).toBe(false);
+  });
+});

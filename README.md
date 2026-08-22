@@ -392,13 +392,23 @@ The user-editable counterpart, `user_metadata`, is refused when a policy
 document is saved: a claim the end user can write is a role they can grant
 themselves.
 
-A storage policy reads the same two claims in its prefix template, which is how
-one bucket holds a directory per tenant:
+A storage policy reads the same claims in its prefix template, which is how one
+bucket holds a directory per tenant:
 
-```json
-{ "name": "tenant_files", "for": "download", "to": ["authenticated"],
-  "prefix": "files/$auth.app.tenant/" }
+```sql
+-- Both rows. A policy alone grants nothing: a bucket absent from
+-- _storage_buckets, or present with enabled = 0, is not exposed at all.
+INSERT INTO _storage_buckets (bucket, enabled) VALUES ('files', 1);
+INSERT INTO _storage_policies (bucket, name, operation, roles, prefix)
+VALUES ('files', 'tenant_files', 'download', '["authenticated"]', 'files/$auth.app.tenant/');
 ```
+
+⚠️ **Written as SQL because there is no `baseclf storage` command yet.** Table
+policies have `baseclf policy apply`; storage policies do not, so today they are
+inserted directly, which means through the administrative path that bypasses the
+engine. The engine still validates every one of them when it loads the registry,
+so a prefix it will not accept fails there rather than at somebody's upload, but
+authoring is not a first-class path yet.
 
 A claim used this way becomes part of an object key rather than a bound
 parameter, so it is held to more than a table policy asks. It has to be text,
