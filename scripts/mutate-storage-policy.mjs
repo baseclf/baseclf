@@ -43,8 +43,36 @@ const MUTATIONS = [
     name: 'a missing claim substituted instead of refused',
     file: TARGET,
     expect: 'the absent claim test',
-    find: /if \(value === null \|\| value === ''\) \{/,
+    find: /if \(value === null \|\| value === undefined \|\| value === ''\) \{/,
     replace: "if (value === null && value === '') {",
+  },
+  {
+    // The one an ordinary review waves through, because String() on a claim
+    // reads as defensive. Every conversion it enables collapses callers onto a
+    // shared directory: an object becomes "[object Object]" for all of them.
+    name: 'a claim converted to text instead of required to be text',
+    file: TARGET,
+    expect: 'the app claim type tests',
+    find: /if \(typeof value !== 'string'\) \{/,
+    replace: 'if (false) {',
+  },
+  {
+    // Only distinguishable under a polluted prototype, which is why the test
+    // that guards it had to be rewritten: the obvious version passes either way.
+    name: 'an app claim read off the prototype chain as well as the object',
+    file: TARGET,
+    expect: 'the polluted prototype test',
+    find: /\(Object\.hasOwn\(auth\.app, key\) \? auth\.app\[key\] : null\)/,
+    replace: 'auth.app[key]',
+  },
+  {
+    // A key pattern that takes anything makes `$auth.app.org.id` a token, which
+    // means one thing here and another in a table policy.
+    name: 'the app claim key allowed to be any shape, including nested',
+    file: TARGET,
+    expect: 'the nested and malformed key tests',
+    find: /const APP_CLAIM_KEY_PATTERN = \/\^\[A-Za-z_\]\[A-Za-z0-9_\]\{0,62\}\$\/;/,
+    replace: 'const APP_CLAIM_KEY_PATTERN = /^[A-Za-z0-9_.]+$/;',
   },
   {
     name: 'a claim trusted as one path segment because it came from a token',
@@ -75,7 +103,7 @@ const MUTATIONS = [
     name: 'any $auth token accepted at validate time, including user_metadata',
     file: TARGET,
     expect: 'the I4 test and the unknown token test',
-    find: /if \(token in PREFIX_TOKENS\) continue;/,
+    find: /if \(prefixTokenReader\(token\) !== undefined\) continue;/,
     replace: "if (token.startsWith('$auth.')) continue;",
   },
   {

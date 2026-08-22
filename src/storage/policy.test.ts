@@ -211,6 +211,103 @@ describe('a claim standing in for a path segment', () => {
   });
 });
 
+/**
+ * `$auth.app.<key>` at request time: what it separates, and what it refuses.
+ *
+ * The claim is server-written, so unlike `$auth.user.*` it is safe to trust for
+ * *who* wrote it. That is a different question from whether it is safe to build
+ * a directory name out of, and these are about the second one.
+ */
+describe('a prefix built from an app claim', () => {
+  const TENANT: StorageBucketDefinition = {
+    bucket: 'files',
+    enabled: true,
+    policies: [
+      {
+        name: 'tenant_files',
+        for: 'download',
+        to: ['authenticated'],
+        prefix: 'files/$auth.app.tenant/',
+      },
+    ],
+  };
+
+  const withApp = (app: Record<string, unknown>) => ({ ...ANN, app });
+
+  const authorizeTenant = (app: Record<string, unknown>) =>
+    authorize({
+      buckets: registry(TENANT),
+      bucket: 'files',
+      operation: 'download',
+      auth: withApp(app),
+      fileName: 'report.pdf',
+    });
+
+  it('puts two tenants in two directories, which is the whole point', () => {
+    expect(authorizeTenant({ tenant: 'acme' }).key).toBe('files/acme/report.pdf');
+    expect(authorizeTenant({ tenant: 'globex' }).key).toBe('files/globex/report.pdf');
+  });
+
+  it('refuses a caller whose claim is missing, rather than sharing one directory', () => {
+    expectNotFound(() => authorizeTenant({}));
+    expectNotFound(() => authorizeTenant({ other: 'acme' }));
+    expectNotFound(() => authorizeTenant({ tenant: null }));
+  });
+
+  it('refuses a claim that is not text, and never converts one', () => {
+    // Each of these has a plausible-looking String() form, and every one of them
+    // is worse than a refusal. An object becomes "[object Object]", which is one
+    // shared directory for every caller whose claim happens to be an object; an
+    // array becomes "a,b", which contains no separator and would pass every
+    // other check in the file.
+    expectNotFound(() => authorizeTenant({ tenant: 42 }));
+    expectNotFound(() => authorizeTenant({ tenant: true }));
+    expectNotFound(() => authorizeTenant({ tenant: ['a', 'b'] }));
+    expectNotFound(() => authorizeTenant({ tenant: { id: 'acme' } }));
+  });
+
+  it('says which claim is wrong and what it holds, since the policy is fine', () => {
+    // The refusal a caller sees stays "Not found" (invariant I5); this is the
+    // detail, which never reaches a response body. It has to name the claim,
+    // because the policy is correct and one caller's metadata is not, and an
+    // operator told only "not found" would go and audit the policy.
+    const error = expectNotFound(() => authorizeTenant({ tenant: { id: 'acme' } }));
+    expect(error.detail).toContain('$auth.app.tenant');
+    expect(error.detail).toContain('object');
+  });
+
+  it('reads own properties only, so a polluted prototype is not everybody tenant', () => {
+    // ⚠️ The obvious version of this test proves nothing, and it was written
+    // that way first: asking for `$auth.app.constructor` is refused with or
+    // without the own-property check, because what comes back is a function and
+    // the "must be text" rule catches it. Watched it pass against a build with
+    // `Object.hasOwn` removed before rewriting it.
+    //
+    // The case that separates them is a prototype property that *is* text. Then
+    // a plain lookup answers the same string for every caller who carries no
+    // such claim, and a per-tenant prefix quietly becomes one directory.
+    const polluted = 'tenant';
+    // biome-ignore lint/suspicious/noExplicitAny: reaching the prototype is the point
+    (Object.prototype as any)[polluted] = 'everybody';
+    try {
+      expectNotFound(() => authorizeTenant({}));
+      // And an own claim still wins, so the guard refuses the borrowed value
+      // rather than refusing the lookup.
+      expect(authorizeTenant({ tenant: 'acme' }).key).toBe('files/acme/report.pdf');
+    } finally {
+      // biome-ignore lint/performance/noDelete: restoring a global the test dirtied
+      delete (Object.prototype as Record<string, unknown>)[polluted];
+    }
+  });
+
+  it('holds the segment rule, the same as any other claim', () => {
+    expectNotFound(() => authorizeTenant({ tenant: '..' }));
+    expectNotFound(() => authorizeTenant({ tenant: 'acme/globex' }));
+    expectNotFound(() => authorizeTenant({ tenant: '' }));
+    expectNotFound(() => authorizeTenant({ tenant: 'a'.repeat(65) }));
+  });
+});
+
 describe('fail-closed, at each of the three places it could become a default', () => {
   it('refuses a bucket that is not in the registry', () => {
     expectNotFound(() => authorize({ bucket: 'not-registered' }));
@@ -255,6 +352,12 @@ describe('fail-closed, at each of the three places it could become a default', (
 
     const refused = expectNotFound(() => authorize({ auth: ANON, buckets: anonUpload }));
     expect(refused.detail).toContain('$auth.uid');
+    // ⚠️ The reason, not just the refusal. Since a claim may also be refused for
+    // not being text, an absent one would otherwise be caught by that rule
+    // instead and reported as "your claim is a object", because `typeof null`
+    // is "object". The caller is anonymous and carries no claim at all, and an
+    // operator reading the wrong sentence goes looking in the wrong place.
+    expect(refused.detail).toContain('does not carry');
   });
 
   it('refuses a claim that itself contains a separator', () => {
@@ -338,6 +441,45 @@ describe('a policy that must not be saved at all', () => {
   it('refuses $auth.email, which is safe but should not be in a key', () => {
     const error = expectInvalid(withPolicy({ prefix: 'avatars/$auth.email/' }));
     expect(error.detail).toContain('$auth.email');
+  });
+
+  it('accepts $auth.app.<key>, which is how a per-tenant prefix is written', () => {
+    expect(() =>
+      validateStorageBucket(withPolicy({ prefix: 'files/$auth.app.tenant/' })),
+    ).not.toThrow();
+  });
+
+  it('accepts a prefix built from two tokens', () => {
+    expect(() =>
+      validateStorageBucket(withPolicy({ prefix: 'files/$auth.app.tenant/$auth.uid/' })),
+    ).not.toThrow();
+  });
+
+  it('refuses an app claim name that is not a plain identifier, and says which it is', () => {
+    // Told apart from "no such token" on purpose: the family is supported and
+    // only this spelling is not, so a message about an unknown token would send
+    // somebody looking for a feature that is already here.
+    const error = expectInvalid(withPolicy({ prefix: 'files/$auth.app.9lead/' }));
+    expect(error.detail).toContain('plain identifier');
+  });
+
+  it('treats a bare $auth.app as an unknown token, the way the policy parser does', () => {
+    // Not the family with a bad key: the family is spelled with the dot, and
+    // `src/policy/parse.ts` tests `startsWith('$auth.app.')` the same way, so a
+    // bare one falls to the same generic message there. Matching it here is the
+    // point of the token meaning one thing across both surfaces, and this test
+    // exists so a future kindness on one side has to notice the other.
+    const error = expectInvalid(withPolicy({ prefix: 'files/$auth.app/' }));
+    expect(error.detail).toContain('not a supported token');
+    expect(error.detail).toContain('$auth.app.<key>');
+  });
+
+  it('refuses a nested app claim, because a claim is one flat fact', () => {
+    // `src/policy/parse.ts` takes one level after $auth.app. A token that
+    // addressed two here would mean something different in a storage prefix
+    // than in a table policy.
+    const error = expectInvalid(withPolicy({ prefix: 'files/$auth.app.org.id/' }));
+    expect(error.detail).toContain('plain identifier');
   });
 
   it('refuses a prefix with no trailing separator', () => {

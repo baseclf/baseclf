@@ -44,7 +44,7 @@ const STORAGE_OPERATIONS: readonly StorageOperation[] = ['upload', 'download', '
  * `avatars/$auth.tenant/` would put every tenant's objects in one place, and
  * nothing would fail while it happened.
  *
- * Only `$auth.uid` for now, and the omissions are on purpose:
+ * `$auth.uid` and `$auth.app.<key>`. The two omissions are on purpose:
  *
  *   - `$auth.user.*` is banned outright by invariant I4. The user writes it, so a
  *     prefix built from it is a prefix the user chooses.
@@ -53,14 +53,54 @@ const STORAGE_OPERATIONS: readonly StorageOperation[] = ['upload', 'download', '
  *     cache index. An email address in a key is durable personal data in places
  *     nobody thinks of as a database, and a uid says the same thing about
  *     ownership without saying who the owner is.
- *   - `$auth.app.*` is server-written and would be safe, and it is the obvious
- *     way to write a per-tenant prefix. It is left out because `app_metadata` is
- *     always empty today, so supporting it would mean shipping a branch that
- *     cannot be exercised with real data. Add it with the store that fills it.
  */
-const PREFIX_TOKENS = {
-  '$auth.uid': (auth: AuthCtx): string | null => auth.uid,
+const FIXED_PREFIX_TOKENS = {
+  '$auth.uid': (auth: AuthCtx): unknown => auth.uid,
 } as const;
+
+const APP_TOKEN_PREFIX = '$auth.app.';
+
+/**
+ * The claim names `$auth.app.<key>` may address.
+ *
+ * The same shape `src/policy/parse.ts` accepts after `$auth.app.` and the same
+ * one `src/auth/app-metadata.ts` accepts when the claim is stored, so a key
+ * spelled in a storage prefix means what it means everywhere else. One level,
+ * no nesting: table policies address a flat claim, and a token that meant one
+ * thing here and another there teaches the wrong lesson in whichever surface
+ * somebody reads first.
+ */
+const APP_CLAIM_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]{0,62}$/;
+
+/** What a policy may write, for a message that has to list the options. */
+const SUPPORTED_TOKENS = `${Object.keys(FIXED_PREFIX_TOKENS).join(', ')}, ${APP_TOKEN_PREFIX}<key>`;
+
+/**
+ * The one place that decides whether a token is a token, and what it reads.
+ *
+ * Returns `undefined` for anything the engine does not know. Both the validator
+ * and the substitution go through here, which matters more now than it did when
+ * the set was a plain record: a record answers `token in PREFIX_TOKENS` and
+ * `PREFIX_TOKENS[token]` from the same data, while a parameterised family is two
+ * pieces of logic unless it is deliberately one. Two would let a token pass when
+ * a policy is saved and fail when somebody uploads, which is the failure landing
+ * on the wrong person at the wrong time.
+ *
+ * ⚠️ `Object.hasOwn`, not a plain lookup. `$auth.app.constructor` must not reach
+ * up the prototype chain; `src/policy/compile.ts` guards the same way for the
+ * same reason.
+ */
+function prefixTokenReader(token: string): ((auth: AuthCtx) => unknown) | undefined {
+  if (token in FIXED_PREFIX_TOKENS) {
+    return FIXED_PREFIX_TOKENS[token as keyof typeof FIXED_PREFIX_TOKENS];
+  }
+  if (token.startsWith(APP_TOKEN_PREFIX)) {
+    const key = token.slice(APP_TOKEN_PREFIX.length);
+    if (!APP_CLAIM_KEY_PATTERN.test(key)) return undefined;
+    return (auth: AuthCtx): unknown => (Object.hasOwn(auth.app, key) ? auth.app[key] : null);
+  }
+  return undefined;
+}
 
 const TOKEN_PATTERN = /\$auth(?:\.[A-Za-z0-9_]+)+/g;
 
@@ -205,7 +245,7 @@ function validatePrefixTemplate(policy: StoragePolicy): void {
   }
 
   for (const token of policy.prefix.match(TOKEN_PATTERN) ?? []) {
-    if (token in PREFIX_TOKENS) continue;
+    if (prefixTokenReader(token) !== undefined) continue;
 
     // Named separately because it is the invariant rather than a limitation, and
     // whoever wrote it needs to know it can never be allowed rather than that it
@@ -218,9 +258,20 @@ function validatePrefixTemplate(policy: StoragePolicy): void {
       );
     }
 
+    // Also named separately, because the family is supported and only this
+    // spelling of the key is not. Told apart from "no such token", which would
+    // send somebody looking for a feature that is already here.
+    if (token.startsWith(APP_TOKEN_PREFIX)) {
+      throw invalid(
+        `Policy "${policy.name}" builds its prefix from ${token}, whose claim name is not a ` +
+          'plain identifier. Letters, digits and "_", starting with a letter or "_", and one ' +
+          'level: a claim is a flat fact, the same as in a table policy.',
+      );
+    }
+
     throw invalid(
       `Policy "${policy.name}" builds its prefix from ${token}, which is not a supported ` +
-        `token. Supported: ${Object.keys(PREFIX_TOKENS).join(', ')}. An unrecognised token ` +
+        `token. Supported: ${SUPPORTED_TOKENS}. An unrecognised token ` +
         'is refused rather than left in the key as text, because a prefix that still ' +
         'contains it would be one shared directory for every caller.',
     );
@@ -285,7 +336,7 @@ const PREFIX_SEGMENT_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
  */
 function resolvePrefix(policy: StoragePolicy, auth: AuthCtx): string {
   return policy.prefix.replace(TOKEN_PATTERN, (token) => {
-    const read = PREFIX_TOKENS[token as keyof typeof PREFIX_TOKENS];
+    const read = prefixTokenReader(token);
     if (read === undefined) {
       // Unreachable through a validated policy. Kept because the alternative to a
       // throw here is the token surviving into a key, and this file should not
@@ -294,13 +345,37 @@ function resolvePrefix(policy: StoragePolicy, auth: AuthCtx): string {
     }
 
     const value = read(auth);
-    if (value === null || value === '') {
+    if (value === null || value === undefined || value === '') {
       throw notFound(
         `Policy "${policy.name}" needs ${token}, which this request does not carry. ` +
           'Refused rather than substituted with an empty segment, which would be a ' +
           'directory shared by every caller in the same position.',
       );
     }
+
+    // A directory name has to be text, and only text. `$auth.app.<key>` can hold
+    // anything JSON carries, and every non-string collapses into something worse
+    // than a refusal if it is coerced: an object becomes "[object Object]", one
+    // shared directory for every caller whose claim happens to be an object, and
+    // an array becomes a comma-joined string that passes every check below.
+    //
+    // Deliberately stricter than `resolveScalarClaim` in the policy compiler,
+    // which takes numbers and booleans. That value becomes a bound parameter and
+    // is compared; this one becomes part of a key and is stored.
+    //
+    // ⚠️ Only knowable per request, because the claim belongs to the user rather
+    // than to the policy. So the refusal has to say which claim and what it
+    // holds: the policy is fine and one caller's metadata is not, and an
+    // operator reading "not found" would go and check the policy first.
+    if (typeof value !== 'string') {
+      throw notFound(
+        `Policy "${policy.name}" needs ${token} to be text, and this caller's claim is ` +
+          `${Array.isArray(value) ? 'a list' : `a ${typeof value}`}. A key segment is not ` +
+          'converted from another type, because every conversion collapses different ' +
+          'callers onto the same directory.',
+      );
+    }
+
     if (!PREFIX_SEGMENT_PATTERN.test(value)) {
       // A claim is verified, not sanitised. Verified says who wrote it, not what
       // it is safe to build a key out of.

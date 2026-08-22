@@ -392,6 +392,21 @@ The user-editable counterpart, `user_metadata`, is refused when a policy
 document is saved: a claim the end user can write is a role they can grant
 themselves.
 
+A storage policy reads the same two claims in its prefix template, which is how
+one bucket holds a directory per tenant:
+
+```json
+{ "name": "tenant_files", "for": "download", "to": ["authenticated"],
+  "prefix": "files/$auth.app.tenant/" }
+```
+
+A claim used this way becomes part of an object key rather than a bound
+parameter, so it is held to more than a table policy asks. It has to be text,
+and it has to be letters, digits, `_` or `-`: a number or an object is refused
+for that caller rather than converted, because every conversion collapses
+different callers onto one directory. A caller whose claim is missing is
+refused too, for the same reason.
+
 ## The problem
 
 Cloudflare gives you every piece of infrastructure a backend needs, cheaper and
