@@ -16,7 +16,7 @@
 
 import { BaseclfError } from '../utils/errors.js';
 import { logError } from '../utils/log.js';
-import { isolateMemo } from '../utils/memo.js';
+import { isolateMemo, MAX_REGISTRY_AGE_MS } from '../utils/memo.js';
 import type { D1Executor } from './dialect.js';
 import { assertExecutable } from './guards.js';
 
@@ -365,8 +365,18 @@ export async function introspect(executor: D1Executor): Promise<Catalogue> {
  * reasons that have nothing to do with the data, such as a timeout or the six
  * connection limit in `rules/02` section A. One transient error and the isolate can
  * never read a schema again. See `utils/memo.ts`.
+ *
+ * 🔴 The expiry reverses an earlier, documented decision. It used to be "no
+ * expiry, a migration calls resetCatalogue", and the first real walkthrough
+ * broke that premise in the field on 2026-08-22: the product's own empty state
+ * tells people to create a table with `wrangler d1 execute`, which never passes
+ * through this Worker, so no reset runs and the new table stayed invisible
+ * until an isolate happened to recycle (minutes, unbounded on a quiet
+ * deployment). The old cost argument is stale too: a schema read has been three
+ * round trips, not forty, since the batch rewrite. Same bound as the registry,
+ * so "when does it show up" has one answer.
  */
-const memo = isolateMemo<Catalogue>({ label: 'catalogue' });
+const memo = isolateMemo<Catalogue>({ label: 'catalogue', maxAgeMs: MAX_REGISTRY_AGE_MS });
 
 export function getCatalogue(executor: D1Executor): Promise<Catalogue> {
   return memo.get(() => introspect(executor));

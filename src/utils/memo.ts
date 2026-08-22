@@ -43,9 +43,12 @@
  * isolate happens to recycle. That is debt F2, and `MAX_REGISTRY_AGE_MS` below is the
  * bound it did not have.
  *
- * Omit it for anything that cannot change under a running isolate. The catalogue does
- * not use it: a schema change already has `resetCatalogue`, and expiring it would
- * repeat the PRAGMA sweeps rather than three small queries.
+ * Omit it for anything that cannot change under a running isolate. ⚠️ The catalogue
+ * used to be the example here, on the premise that a schema change has
+ * `resetCatalogue`. The field broke that premise (2026-08-22): a table created with
+ * `wrangler d1 execute` never passes through the Worker, so nothing calls the reset
+ * and the table stays invisible until the isolate recycles. The catalogue expires
+ * now too, and since the batch rewrite a reload is three round trips, not forty.
  *
  * ## What it does not do
  *
