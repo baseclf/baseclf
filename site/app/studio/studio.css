@@ -222,6 +222,15 @@
 .compact-table th { color: var(--ink-soft); background: color-mix(in srgb, var(--ink) 3%, transparent); font-family: var(--font-geist-mono); font-size: 8px; letter-spacing: .06em; text-transform: uppercase; }
 .compact-table td { font-size: 10px; }
 .compact-table td > small { display: block; margin-top: 4px; color: var(--ink-soft); }
+/* An editable cell reads as text until it is hovered, so a page of rows still
+   scans as data rather than as a form. The underline on hover is the whole
+   affordance; a button that looked like a button in every cell would make the
+   table louder than what it holds. */
+.cell-edit { padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.cell-edit:hover, .cell-edit:focus-visible { text-decoration: underline; text-underline-offset: 2px; }
+.cell-editing { display: flex; align-items: center; gap: 6px; }
+.cell-editing input { min-width: 0; flex: 1; padding: 4px 6px; border: 1px solid var(--line); border-radius: 2px; background: var(--canvas); color: var(--ink); font: 10px/1.4 var(--font-geist-mono); }
+.cell-editing button { flex: none; padding: 3px 8px; font-size: 9px; }
 .compact-table code { font-size: 9px; }
 .metric-grid { margin-bottom: 14px; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); border: 1px solid var(--line); border-radius: 5px; overflow: hidden; background: var(--paper); }
 .metric-grid article { min-height: 112px; padding: 15px; display: grid; align-content: space-between; border-left: 1px solid var(--line); }

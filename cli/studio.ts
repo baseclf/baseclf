@@ -60,7 +60,7 @@
  * three.
  */
 
-import { appendAuditStatement, auditSubjectForRow } from '../src/db/audit.js';
+import { AUDIT_SCHEMA, appendAuditStatement, auditSubjectForRow } from '../src/db/audit.js';
 import type { D1Executor } from '../src/db/dialect.js';
 import { type Catalogue, introspect } from '../src/db/introspect.js';
 import { loadRegistry } from '../src/policy/registry.js';
@@ -320,6 +320,45 @@ export function createBridge(options: {
   // simulated a moment later; a schema, unlike a policy, has no write lane
   // here, and a page turner re-reading it per click would pay the whole
   // PRAGMA sweep over a transport with no batch. A failed read is not kept.
+  /**
+   * The audit table, created once per bridge process if it is not there.
+   *
+   * 🔴 The floor rather than the plan, in the sense `ensureRateLimitTableOnce`
+   * means it, and this is the third time this project has needed the lesson.
+   * The worker lays the engine schema on its first request; a bridge talks to a
+   * database that may never have served one. Measured on the first real run
+   * against a fresh D1: the edit landed and came back `recorded: false`, because
+   * `_audit_log` was not there. Nothing in the test suite could show that, since
+   * every harness seeds the schema first.
+   *
+   * Every statement carries IF NOT EXISTS, so repeating it is free, and the
+   * result is remembered rather than the statements being re-sent per edit: this
+   * transport is the D1 REST API, which the account shares at 1,200 requests per
+   * five minutes.
+   */
+  let auditTableReady: Promise<void> | null = null;
+  const ensureAuditTable = async (): Promise<void> => {
+    if (auditTableReady === null) {
+      auditTableReady = (async () => {
+        const executor = options.openExecutor();
+        for (const statement of AUDIT_SCHEMA) {
+          // `all()`, because this transport implements only that: `run()` throws
+          // on purpose rather than answering something plausible, and the note
+          // saying so is at the top of `d1-api.ts`. Writing `run()` here cost a
+          // round of real running to notice, since the statement went out and
+          // the failure looked like a missing table.
+          await executor.prepare(statement).all();
+        }
+      })().catch((error: unknown) => {
+        // Not remembered as done, so the next edit tries again rather than
+        // reporting every later change as unrecorded because of one bad moment.
+        auditTableReady = null;
+        throw error;
+      });
+    }
+    await auditTableReady;
+  };
+
   let rememberedCatalogue: { readonly at: number; readonly catalogue: Catalogue } | null = null;
   const catalogueFor = async (): Promise<Catalogue> => {
     if (rememberedCatalogue !== null && Date.now() - rememberedCatalogue.at < MAX_REGISTRY_AGE_MS) {
@@ -444,6 +483,7 @@ export function createBridge(options: {
       // process knows about, because it is holding the row that came back. So
       // it says so, loudly, instead of a log nobody can check being wrong.
       try {
+        await ensureAuditTable();
         const entry = appendAuditStatement({
           lane: 'bridge',
           action: 'row_edit',
@@ -454,7 +494,7 @@ export function createBridge(options: {
           .openExecutor()
           .prepare(entry.sql)
           .bind(...entry.parameters)
-          .run();
+          .all();
       } catch {
         options.log(`WROTE ${subject}.${parsedEdit.column} BUT COULD NOT RECORD IT in _audit_log`);
         return answer(200, origin, {

@@ -8,6 +8,7 @@ import {
   type BridgeRows,
   type BrowsePage,
   browseOnBridge,
+  editOnBridge,
   type LintFinding,
   type PolicyTable,
   readDocumentOnBridge,
@@ -1249,6 +1250,10 @@ function LiveTablesScreen({ client, live, bridgeKey, onRefresh, onNotice }: { cl
   // so the panel never runs a scan the person did not click for.
   const [browsed, setBrowsed] = useState<{ table: string; offset: number; page?: BrowsePage; error?: string } | null>(null);
   const [browsing, setBrowsing] = useState(false);
+  // Which cell is open, by position in the page rather than by row identity: a
+  // page is one snapshot and closing the editor is what ends it.
+  const [editing, setEditing] = useState<{ rowAt: number; column: string; draft: string } | null>(null);
+  const [saving, setSaving] = useState(false);
 
   const selected = live.tables.find((table) => table.name === selectedName) ?? live.tables[0];
   const policyEntry = selected === undefined ? undefined : live.policies.find((entry) => entry.table === selected.name);
@@ -1296,6 +1301,72 @@ function LiveTablesScreen({ client, live, bridgeKey, onRefresh, onNotice }: { cl
   const lastKnownPage = rowsPage === undefined ? 0 : pageIndex + (rowsPage.rows.length === pageSize ? 2 : 1);
   const pageNumbers = Array.from({ length: Math.min(lastKnownPage, MAX_BROWSE_PAGES) }, (_, at) => at + 1);
   const rowColumns = detail?.columns.map((column) => column.name) ?? Object.keys(rowsPage?.rows[0] ?? {});
+
+  // Which columns name a row, and therefore which ones cannot be the thing that
+  // changes: editing a key moves a row rather than editing it. A table that
+  // declares none cannot be edited at all, because there is no way to address
+  // one of its rows, and the panel says that instead of offering a field that
+  // the bridge would refuse.
+  const keyColumns = (detail?.columns ?? []).filter((column) => column.primaryKey).map((column) => column.name);
+  const canEdit = detail !== undefined && keyColumns.length > 0 && bridgeKey !== "";
+
+  /**
+   * The draft, typed the way the column expects.
+   *
+   * ⚠️ A convenience, not a check. The bridge validates against the declared
+   * type and refuses with its own message; doing it here as well only means the
+   * common case does not need a round trip to be told it is wrong. If the two
+   * ever disagree the bridge wins, which is the direction that keeps the
+   * boundary in one place.
+   */
+  const typedDraft = (column: string, draft: string): string | number | null => {
+    const declared = (detail?.columns.find((entry) => entry.name === column)?.type ?? "").toUpperCase();
+    const nullable = detail?.columns.find((entry) => entry.name === column)?.notNull === false;
+    if (draft === "" && nullable) return null;
+    if (declared.includes("INT") || declared.includes("REAL") || declared.includes("FLOA") || declared.includes("DOUB")) {
+      const asNumber = Number(draft);
+      return draft.trim() !== "" && Number.isFinite(asNumber) ? asNumber : draft;
+    }
+    return draft;
+  };
+
+  const saveEdit = async (rowAt: number, column: string, draft: string) => {
+    if (selected === undefined || rowsPage === undefined || saving) return;
+    const row = rowsPage.rows[rowAt];
+    if (row === undefined) return;
+
+    setSaving(true);
+    const answer = await editOnBridge(bridgeKey, {
+      table: selected.name,
+      // The whole key, taken from the row on screen. A partial one would address
+      // more than the person pointed at, and the bridge refuses it.
+      key: Object.fromEntries(keyColumns.map((name) => [name, row[name]])),
+      column,
+      // What the screen is showing, which is what makes the write safe without a
+      // transaction: an edit against a value somebody else already changed
+      // writes nothing and comes back as a refusal.
+      expected: row[column] ?? null,
+      next: typedDraft(column, draft),
+    });
+    setSaving(false);
+
+    if (answer.kind === "data") {
+      const next = rowsPage.rows.map((entry, at) => (at === rowAt ? answer.data.row : entry));
+      setBrowsed({ table: selected.name, offset: rowsPage.offset, page: { ...rowsPage, rows: next } });
+      setEditing(null);
+      onNotice(
+        answer.data.recorded
+          ? `Changed ${column}. The edit is in _audit_log.`
+          : (answer.data.warning ?? `Changed ${column}, and the audit log did not accept the entry.`),
+      );
+      return;
+    }
+    // A conflict is somebody else's write, not a failure of this one, and the
+    // sentence says so. Either way the row on screen is stale, so it stays put
+    // and the person is told to load it again rather than being shown a value
+    // nothing wrote.
+    onNotice(answer.message);
+  };
 
   return <div>
     <ScreenTitle kicker="Database" title="Tables" description="Every application table, read from the deployment itself. Columns and indexes come from the deployment; rows come one small page at a time through your local bridge, and are never counted, because counting is a full scan D1 would bill for." action={<button className="studio-secondary" type="button" onClick={() => { void navigator.clipboard?.writeText("npx baseclf policy apply <document>.json"); onNotice("CLI command copied. Exposing a table is a policy document."); }}>Copy CLI command</button>} />
@@ -1374,11 +1445,16 @@ function LiveTablesScreen({ client, live, bridgeKey, onRefresh, onNotice }: { cl
               </div>
             )}
             <section className="full-panel rows-panel">
-              <header><span>Rows · operator view, no policy applied</span>{rowsPage !== undefined && <span>{rowsPage.rows.length} rows · {rowsPage.rowsRead ?? "?"} scanned</span>}</header>
+              {/* The label names the write now that there is one. "Operator
+                  view" described a read; a person who can change a cell needs
+                  to know the change lands on real data with no policy in front
+                  of it, and that a key column is not one of the things that
+                  can change. */}
+              <header><span>Rows · operator view, no policy applied{canEdit ? " · editable" : ""}</span>{rowsPage !== undefined && <span>{rowsPage.rows.length} rows · {rowsPage.rowsRead ?? "?"} scanned</span>}</header>
               {bridgeKey === "" ? (
                 <div className="editor-form"><p>Rows come from your local bridge, read with your own credential. Run <code>npx baseclf studio</code> and paste its key into the Simulator&apos;s Result panel; this panel shares it. What a caller would see is the Simulator&apos;s question.</p></div>
               ) : rowsCurrent === null ? (
-                <div className="editor-form"><p>Newest rows first, fifty per page. Every page is one small scan, run only when you ask for it.</p><button className="studio-secondary" type="button" disabled={browsing} onClick={() => void loadRows(selected.name, 0)}>{browsing ? "Loading…" : "Load latest rows"}</button></div>
+                <div className="editor-form"><p>Newest rows first, fifty per page. Every page is one small scan, run only when you ask for it. {keyColumns.length === 0 ? "This table declares no primary key, so a row cannot be named and nothing here can be edited." : "Click a cell to change it: the write goes to your data with no policy in front of it, one field at a time, and a key column stays put."}</p><button className="studio-secondary" type="button" disabled={browsing} onClick={() => void loadRows(selected.name, 0)}>{browsing ? "Loading…" : "Load latest rows"}</button></div>
               ) : rowsCurrent.error !== undefined ? (
                 <div className="editor-form"><p>{rowsCurrent.error}</p><button className="studio-secondary" type="button" disabled={browsing} onClick={() => void loadRows(selected.name, rowsCurrent.offset)}>Try again</button></div>
               ) : rowsPage !== undefined && rowsPage.rows.length === 0 ? (
@@ -1391,7 +1467,33 @@ function LiveTablesScreen({ client, live, bridgeKey, onRefresh, onNotice }: { cl
                       <tbody>
                         {rowsPage.rows.map((row, index) => (
                           <tr key={`${String(row[rowColumns[0] ?? "id"] ?? "")}-${index}`}>
-                            {rowColumns.map((name) => { const cell = formatCell(name, row[name]); return <td key={name} title={cell.title}>{cell.text}</td>; })}
+                            {rowColumns.map((name) => {
+                              const cell = formatCell(name, row[name]);
+                              const open = editing !== null && editing.rowAt === index && editing.column === name;
+                              const editable = canEdit && !keyColumns.includes(name);
+                              if (open) {
+                                return <td key={name} className="cell-editing">
+                                  <input
+                                    autoFocus
+                                    value={editing.draft}
+                                    aria-label={`New value for ${name}`}
+                                    disabled={saving}
+                                    onChange={(event) => setEditing({ rowAt: index, column: name, draft: event.target.value })}
+                                    onKeyDown={(event) => {
+                                      if (event.key === "Enter") void saveEdit(index, name, editing.draft);
+                                      if (event.key === "Escape") setEditing(null);
+                                    }}
+                                  />
+                                  <button className="studio-primary" type="button" disabled={saving} onClick={() => void saveEdit(index, name, editing.draft)}>{saving ? "Saving…" : "Save"}</button>
+                                  <button className="studio-secondary" type="button" disabled={saving} onClick={() => setEditing(null)}>Cancel</button>
+                                </td>;
+                              }
+                              return <td key={name} title={cell.title}>
+                                {editable ? (
+                                  <button className="cell-edit" type="button" onClick={() => setEditing({ rowAt: index, column: name, draft: row[name] === null || row[name] === undefined ? "" : String(row[name]) })}>{cell.text}</button>
+                                ) : cell.text}
+                              </td>;
+                            })}
                           </tr>
                         ))}
                       </tbody>

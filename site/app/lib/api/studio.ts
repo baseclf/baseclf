@@ -438,3 +438,81 @@ export async function browseOnBridge(
   }
   return { kind: "error", message: body.error ?? `The bridge answered ${response.status}.` };
 }
+
+/** What came back from one edit: the row as it now stands, and whether it was recorded. */
+export interface EditedRow {
+  readonly row: Record<string, unknown>;
+  /**
+   * False when the change was written and the audit entry was not.
+   *
+   * The bridge writes the two separately on purpose, so this is the case where
+   * it knows something happened that its log does not show. It is surfaced
+   * rather than swallowed because the operator is the only one who can act on
+   * it.
+   */
+  readonly recorded: boolean;
+  readonly warning?: string;
+}
+
+/**
+ * Change one field of one row through the bridge, as the operator.
+ *
+ * The page sends a table, the row's whole primary key, the column, the value it
+ * displayed, and the value to put there. Never SQL and never a filter: the
+ * bridge builds the statement, and "change every row" is not something this
+ * request can express.
+ *
+ * `expected` is what makes concurrency safe without a transaction. It goes into
+ * the WHERE, so an edit against a value somebody else already changed writes
+ * nothing and comes back as a refusal rather than overwriting their work.
+ */
+export async function editOnBridge(
+  key: string,
+  edit: {
+    readonly table: string;
+    readonly key: Readonly<Record<string, unknown>>;
+    readonly column: string;
+    readonly expected: unknown;
+    readonly next: unknown;
+  },
+): Promise<ToolAnswer<EditedRow>> {
+  let response: Response;
+  try {
+    response = await fetch(`${BRIDGE_URL}/rows`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json", "x-bridge-key": key },
+      body: JSON.stringify(edit),
+    });
+  } catch {
+    return {
+      kind: "error",
+      message: "The bridge could not be reached. Is npx baseclf studio running?",
+    };
+  }
+  if (response.status === 401) return { kind: "error", message: "The bridge refused the key." };
+
+  let body: {
+    row?: Record<string, unknown>;
+    recorded?: boolean;
+    warning?: string;
+    conflict?: string;
+    error?: string;
+  };
+  try {
+    body = (await response.json()) as typeof body;
+  } catch {
+    return { kind: "error", message: `The bridge answered ${response.status} without a body.` };
+  }
+
+  // A conflict is an answer, not a failure: somebody else changed the value, and
+  // the person needs to see that sentence rather than a generic error.
+  if (body.conflict !== undefined) return { kind: "refusal", message: body.conflict };
+
+  if (body.row !== undefined) {
+    return {
+      kind: "data",
+      data: { row: body.row, recorded: body.recorded !== false, warning: body.warning },
+    };
+  }
+  return { kind: "error", message: body.error ?? `The bridge answered ${response.status}.` };
+}

@@ -12,7 +12,7 @@
 import { env } from 'cloudflare:workers';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { AUDIT_SCHEMA } from '../src/db/audit.js';
+import type { D1Executor } from '../src/db/dialect.js';
 import {
   POST_BINDS,
   POST_POLICIES,
@@ -92,6 +92,45 @@ function endpointOn(db: D1Database, onStatement: () => void): D1Endpoint {
   };
 }
 
+/**
+ * The D1 binding, cut down to what the bridge's real transport actually offers.
+ *
+ * 🔴 The harness was handing the bridge a full `D1Database`, which has `run()`
+ * and `first()`. `restExecutor` in `d1-api.ts` implements `all()` and nothing
+ * else, on purpose: a transport that answered `first()` with something
+ * plausible would be worse than one with no answer. So the bridge could call
+ * `run()`, pass every test here, and throw against a real deployment.
+ *
+ * It did. The audit write used `run()` and every real edit came back
+ * `recorded: false`, which was only visible by running the bridge against a
+ * database. A harness more capable than production answers a question nobody
+ * asked; this one is now exactly as capable.
+ */
+function allOnly(db: D1Database): D1Executor {
+  return {
+    prepare: (sql: string) => {
+      const statement = db.prepare(sql);
+      const wrap = (bound: D1PreparedStatement) => ({
+        bind: (...values: unknown[]) => wrap(bound.bind(...values)),
+        all: <T>() => bound.all<T>(),
+        first: () => {
+          throw new Error('This transport implements all() only.');
+        },
+        run: () => {
+          throw new Error('This transport implements all() only.');
+        },
+        raw: () => {
+          throw new Error('This transport implements all() only.');
+        },
+      });
+      return wrap(statement);
+    },
+    batch: () => {
+      throw new Error('The D1 REST API has no batch.');
+    },
+  } as unknown as D1Executor;
+}
+
 interface RunAnswer {
   rows?: { id?: string }[];
   rowsRead?: number | null;
@@ -129,7 +168,7 @@ beforeAll(async () => {
     key: KEY,
     openExecutor: () => {
       opened += 1;
-      return env.DB;
+      return allOnly(env.DB);
     },
     readDocument: (table) => readStoredDocument(endpoint, table),
     applyDocument: async (document) => {
@@ -633,18 +672,28 @@ describe('the operator row edit', () => {
   }
 
   async function auditRows(): Promise<{ subject: string; detail: string | null }[]> {
-    const rows = await env.DB.prepare('SELECT subject, detail FROM _audit_log ORDER BY id').all<{
-      subject: string;
-      detail: string | null;
-    }>();
-    return rows.results ?? [];
+    // A missing table counts as no entries, and is the stronger version of it:
+    // the bridge lays this floor on its first successful edit, so a run that
+    // recorded nothing has not created it either. Reading through a throw would
+    // make every refusal test fail for a reason that is not its subject.
+    try {
+      const rows = await env.DB.prepare('SELECT subject, detail FROM _audit_log ORDER BY id').all<{
+        subject: string;
+        detail: string | null;
+      }>();
+      return rows.results ?? [];
+    } catch {
+      return [];
+    }
   }
 
   beforeEach(async () => {
-    for (const statement of AUDIT_SCHEMA) {
-      await env.DB.prepare(statement).run();
-    }
-    await env.DB.prepare('DELETE FROM _audit_log').run();
+    // Dropped, not created. The bridge talks to databases that have never
+    // served a request, so laying this floor is its job, and a harness that
+    // seeded the table would be testing a world where the floor is unnecessary.
+    // Measured against a fresh D1: without it, every edit reported that the
+    // change was written and not recorded.
+    await env.DB.prepare('DROP TABLE IF EXISTS _audit_log').run();
   });
 
   it('writes the row, hands back its post-image, and records the change', async () => {
