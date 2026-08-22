@@ -158,6 +158,59 @@ describe('a caller trying to reach another directory', () => {
   });
 });
 
+/**
+ * The other half of the same question, and the half that was open.
+ *
+ * Everything above is about the part of the key the caller types. These are
+ * about the part the engine substitutes, which the file above treated as safe
+ * because it came from a verified token. Verified says who wrote a claim, not
+ * what it is safe to build a path out of, and the two are different questions:
+ * measured on 2026-08-22, a claim of `..` produced `avatars/../secret.png` and
+ * was allowed, while the identical `..` written into the template is refused
+ * when the policy is saved.
+ *
+ * Not reachable through `$auth.uid` today, since Better Auth builds ids from
+ * `a-z`, `0-9`, `A-Z` and `-_`. These exist because `$auth.app.<key>` would put
+ * a value somebody types by hand in the same position.
+ */
+describe('a claim standing in for a path segment', () => {
+  const withUid = (uid: string) => ({ ...ANN, uid });
+
+  it('cannot be a relative segment, the way a template cannot', () => {
+    expectNotFound(() => authorize({ auth: withUid('..') }));
+    expectNotFound(() => authorize({ auth: withUid('.') }));
+  });
+
+  it('cannot carry a separator in any spelling', () => {
+    expectNotFound(() => authorize({ auth: withUid('u_ann/u_bob') }));
+    expectNotFound(() => authorize({ auth: withUid('u_ann\\u_bob') }));
+    expectNotFound(() => authorize({ auth: withUid('u_ann%2Fu_bob') }));
+  });
+
+  it('cannot be blank, whitespace, or a control character', () => {
+    expectNotFound(() => authorize({ auth: withUid('') }));
+    expectNotFound(() => authorize({ auth: withUid('  ') }));
+    expectNotFound(() => authorize({ auth: withUid('u_ann u_bob') }));
+    expectNotFound(() => authorize({ auth: withUid('u_ann\nu_bob') }));
+  });
+
+  it('cannot be long enough to matter', () => {
+    expectNotFound(() => authorize({ auth: withUid('a'.repeat(65)) }));
+    expect(authorize({ auth: withUid('a'.repeat(64)) }).key).toBe(
+      `avatars/${'a'.repeat(64)}/me.png`,
+    );
+  });
+
+  it('accepts every shape the identity provider actually issues', () => {
+    // Better Auth composes ids from a-z, 0-9, A-Z and -_ (read from its
+    // generator). A rule that refused one of those would refuse real callers on
+    // deployments that already work, so each character class is named here.
+    expect(authorize({ auth: withUid('abc') }).key).toBe('avatars/abc/me.png');
+    expect(authorize({ auth: withUid('ABC123') }).key).toBe('avatars/ABC123/me.png');
+    expect(authorize({ auth: withUid('a-b_c') }).key).toBe('avatars/a-b_c/me.png');
+  });
+});
+
 describe('fail-closed, at each of the three places it could become a default', () => {
   it('refuses a bucket that is not in the registry', () => {
     expectNotFound(() => authorize({ bucket: 'not-registered' }));

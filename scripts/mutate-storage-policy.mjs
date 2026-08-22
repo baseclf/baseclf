@@ -47,11 +47,22 @@ const MUTATIONS = [
     replace: "if (value === null && value === '') {",
   },
   {
-    name: 'a claim containing a separator trusted as it comes',
+    name: 'a claim trusted as one path segment because it came from a token',
     file: TARGET,
-    expect: 'the smuggled claim test',
-    find: /if \(value\.includes\('\/'\)\) \{/,
+    expect: 'the claim-as-path-segment tests',
+    find: /if \(!PREFIX_SEGMENT_PATTERN\.test\(value\)\) \{/,
     replace: 'if (false) {',
+  },
+  {
+    // The narrower guard this replaced, kept as its own mutation. A pattern
+    // relaxed to only the separator passes every test the old code passed, so
+    // without this the relaxation would look like a refactor rather than the
+    // reopening of a measured gap.
+    name: 'the segment rule relaxed back to only refusing a separator',
+    file: TARGET,
+    expect: 'the relative-segment and whitespace tests',
+    find: /const PREFIX_SEGMENT_PATTERN = \/\^\[A-Za-z0-9_-\]\{1,64\}\$\/;/,
+    replace: 'const PREFIX_SEGMENT_PATTERN = /^[^/]{1,64}$/;',
   },
   {
     name: 'fail-open: no matching policy is not a refusal',

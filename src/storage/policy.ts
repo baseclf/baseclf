@@ -252,6 +252,31 @@ function validateUploadLimits(policy: StoragePolicy): void {
 }
 
 /**
+ * What a claim may look like once it stands as a path segment in a key.
+ *
+ * An allowlist rather than a list of dangerous strings, on the reasoning
+ * invariant I6 gives about identifiers: a closed set is checked by what it
+ * admits, while a denylist is only ever as good as whoever last thought about
+ * it. One expression closes the separator, the relative segments, whitespace,
+ * control characters, and the empty string together.
+ *
+ * 🔴 It closes a gap that was open. `validatePrefixTemplate` refuses `.` and
+ * `..` written into a prefix, and nothing refused them once they arrived as a
+ * substituted value: measured 2026-08-22, a claim of `..` against
+ * `avatars/$auth.uid/` produced the key `avatars/../secret.png` and was
+ * allowed. R2 stores that literally because R2 keys are opaque, which is
+ * exactly the "safe only because nothing normalises" this file opens by
+ * refusing to rely on.
+ *
+ * Not reachable through `$auth.uid` as things stand: Better Auth builds ids
+ * from `a-z`, `0-9`, `A-Z` and `-_` (read from its generator on 2026-08-22, so
+ * every id it makes already satisfies this), and the user does not choose
+ * theirs. It stops being unreachable the moment a claim somebody types by hand
+ * can land here, which is what `$auth.app.<key>` would be.
+ */
+const PREFIX_SEGMENT_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+
+/**
  * Substitute claims into a prefix template.
  *
  * A token whose claim is missing is a refusal, not an empty string. An anonymous
@@ -276,10 +301,13 @@ function resolvePrefix(policy: StoragePolicy, auth: AuthCtx): string {
           'directory shared by every caller in the same position.',
       );
     }
-    if (value.includes('/')) {
-      // A claim is verified, not sanitised. A uid containing a separator would
-      // reach outside the directory the template describes.
-      throw notFound(`Policy "${policy.name}" resolved ${token} to a value containing "/".`);
+    if (!PREFIX_SEGMENT_PATTERN.test(value)) {
+      // A claim is verified, not sanitised. Verified says who wrote it, not what
+      // it is safe to build a key out of.
+      throw notFound(
+        `Policy "${policy.name}" resolved ${token} to a value that is not usable as one ` +
+          'path segment. Letters, digits, "_" and "-" only, up to 64 characters.',
+      );
     }
 
     return value;
