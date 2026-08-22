@@ -27,8 +27,16 @@ export interface DiagnoseReport {
   readonly ok: boolean;
   readonly secret_configured: boolean;
   readonly email_password_enabled: boolean;
+  /** `BETTER_AUTH_URL` reduced to its origin. Empty when it is not a URL. */
+  readonly base_url_config: string;
   readonly base_url_actual: string;
   readonly base_url_matches: boolean;
+  /**
+   * The origins allowed to call this deployment from a browser. Read on the
+   * Auth screen because a sign-in that fails for a missing origin fails in the
+   * browser's console, where the person configuring it is not looking.
+   */
+  readonly trusted_origins: readonly string[];
   readonly providers: Readonly<Record<string, ProviderReport>>;
   readonly bindings: readonly { readonly name: string; readonly present: boolean }[];
   readonly warnings: readonly string[];
@@ -74,6 +82,29 @@ export async function readDeployment(
         cause instanceof Error && cause.message !== ""
           ? `Could not read the deployment. ${cause.message}`
           : "Could not read the deployment.",
+    };
+  }
+}
+
+/**
+ * The diagnostic on its own, for a screen that wants only this and wants to
+ * re-read it after the operator changes something. Separate from
+ * `readDeployment` on purpose: that one fails as a unit because an Overview
+ * built from two of three sources presents absence as fact, while the Auth
+ * screen has exactly one source and nothing to be partial about.
+ */
+export async function readDiagnose(
+  origin: string,
+): Promise<{ kind: "data"; diagnose: DiagnoseReport } | { kind: "error"; message: string }> {
+  try {
+    return { kind: "data", diagnose: await readJson<DiagnoseReport>(origin, "/api/auth/_diagnose") };
+  } catch (cause) {
+    return {
+      kind: "error",
+      message:
+        cause instanceof Error && cause.message !== ""
+          ? `Could not read the deployment's auth configuration. ${cause.message}`
+          : "Could not read the deployment's auth configuration.",
     };
   }
 }

@@ -99,6 +99,18 @@ test("keeps the matched studio screens on the deployment, not on fixtures", asyn
   assert.match(client, /schema_list/);
   assert.match(client, /schema_describe/);
 
+  // The live Auth screen reads the deployment's own diagnostic, which reports
+  // presence and never a value, and it renders no user list: `user`, `session`,
+  // `account`, `verification`, and `jwks` are reserved names that the
+  // catalogue, the REST router, and the bridge each refuse. A screen that drew
+  // an empty table there would read as "no users" instead of "not readable".
+  assert.match(studio, /LiveAuthScreen/);
+  assert.match(deployment, /readDiagnose/);
+  const liveAuth = studio.slice(studio.indexOf("function LiveAuthScreen"), studio.indexOf("function AuthScreen"));
+  assert.doesNotMatch(liveAuth, /mockUsers/);
+  assert.doesNotMatch(liveAuth, /rest\/v1\/user|from\(["'`]user/);
+  assert.match(liveAuth, /reserved names/);
+
   // The shared connection carries the origin only: one string key in
   // sessionStorage, no client object, no credential field. The admin token
   // stays in the Studio page's memory.
@@ -106,6 +118,14 @@ test("keeps the matched studio screens on the deployment, not on fixtures", asyn
   assert.match(connection, /sessionStorage/);
   assert.doesNotMatch(connection, /StudioClient|#token|authorization|Bearer/);
   assert.doesNotMatch(studio, /setSharedOrigin\([^n)]*token/i);
+
+  // Disconnecting replaces the notice along with everything else the
+  // connection owned. A failure about a deployment used to outlive it and
+  // follow the person onto the fixture screen, where it read as a statement
+  // about the fixture; watched that happen before pinning it.
+  const disconnect = studio.slice(studio.indexOf("const disconnect ="), studio.indexOf("const disconnect =") + 700);
+  assert.match(disconnect, /clearStoredSession\(\)/);
+  assert.match(disconnect, /setNotice\(/);
 
   // Real-data hardening: engine timestamps are unix seconds and any TEXT
   // column can be 500 characters, so cells go through one formatter; a 429
@@ -316,11 +336,11 @@ test("keeps every written claim about Studio in step with what Studio does", asy
   // The screens the guidance table still calls a fixture preview, and the ones
   // it does not. Read from the component so the source of truth is the code.
   const previews = [...studio.matchAll(/^ {2}(\w+): \{ label:.*?fixture preview/gm)].map(([, name]) => name);
-  assert.deepEqual(previews, ["Auth", "Storage", "Health"]);
+  assert.deepEqual(previews, ["Storage", "Health"]);
 
   for (const [surface, text] of [["docs page", page], ["markdown twin", markdown], ["llms.txt", llms]]) {
     assert.match(text, /fixture/i, surface);
-    assert.match(text, /Simulator, Policies, and Tables/, surface);
+    assert.match(text, /Simulator, Policies, Tables, and Auth/, surface);
     // The sentence that went stale: fixtures with no mention of a live screen.
     assert.doesNotMatch(text, /screens in (the|this) preview (still )?run on fixture data/i, surface);
   }

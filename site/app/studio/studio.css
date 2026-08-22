@@ -229,6 +229,11 @@
 .metric-grid span, .metric-grid small { color: var(--ink-soft); font-size: 9px; }
 .metric-grid strong { font-size: 20px; font-weight: 560; letter-spacing: -.03em; }
 .auth-providers { grid-template-columns: repeat(3, 1fr); }
+/* The live screen's card count follows what the deployment reports, so the
+   track count cannot be a constant the way the fixture's three can. */
+.auth-live { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
+.origin-list { margin: 0; padding: 0; display: grid; gap: 6px; list-style: none; color: var(--ink-soft); font-size: 10px; }
+.origin-list code { color: var(--ink); overflow-wrap: anywhere; }
 .redirect-panel { margin-bottom: 14px; padding: 13px 15px; display: flex; align-items: center; justify-content: space-between; gap: 18px; border: 1px solid var(--line); border-radius: 4px; background: var(--paper); }
 .redirect-panel code { display: block; margin-top: 6px; color: var(--ink); font-size: 10px; overflow-wrap: anywhere; }
 .redirect-panel button { flex: none; padding: 0; border: 0; border-bottom: 1px solid currentColor; background: transparent; color: var(--ink); font: inherit; cursor: pointer; }

@@ -17,6 +17,7 @@ import {
   StudioClient,
   type TableDetail,
 } from "../lib/api/studio";
+import { type DiagnoseReport, readDiagnose } from "../lib/api/deployment";
 import { formatCell } from "../lib/format";
 import { setSharedOrigin } from "./connection";
 import { clearStoredSession, readStoredSession, writeStoredSession } from "./session";
@@ -115,7 +116,7 @@ const guidance: Record<StudioScreen, { label: string; demo: string; live: string
   Simulator: { label: "Recommended next", demo: "Run the request as an authenticated user, then compare it with anon access.", live: "Run the same input as anon and as a user — the difference in rows is the policy working." },
   Policies: { label: "Start safe", demo: "Review the highlighted policy before creating a new rule.", live: "An applied change reaches every isolate within about half a minute." },
   Tables: { label: "Data check", demo: "Open posts first—the missing index warning needs attention.", live: "New tables appear after a refresh, within about a minute. Rows load only when you ask." },
-  Auth: { label: "Setup check", demo: "Copy the redirect URI, then run the provider diagnostic.", live: "This screen is still a fixture preview — your real provider state is in npx baseclf doctor." },
+  Auth: { label: "Setup check", demo: "Copy the redirect URI, then run the provider diagnostic.", live: "This is your deployment's own diagnostic, the one npx baseclf doctor reads. User records stay out of reach by design." },
   Storage: { label: "Access first", demo: "Choose a bucket and confirm its policy before uploading an object.", live: "This screen is still a fixture preview — storage rules live in your policy documents." },
   Health: { label: "What matters", demo: "Start with failures, then inspect the request trend.", live: "This screen is still a fixture preview — request numbers live in your Cloudflare dashboard." },
 };
@@ -213,6 +214,10 @@ export default function StudioApp() {
     setBridgeKey("");
     setSharedOrigin(null);
     clearStoredSession();
+    // The notice belonged to the connection like everything else cleared here.
+    // A failure about a deployment that outlives the deployment gets read as a
+    // claim about whatever is on screen next, and the next screen is a fixture.
+    setNotice("Disconnected. Nothing from that deployment is kept.");
   };
 
   /** The bridge key rides with the saved session, so F5 keeps the row lanes too. */
@@ -1099,7 +1104,11 @@ function DataScreen({ screen, client, live, bridgeKey, onRefresh, onNotice, onOp
       <TablesScreen />
     );
   }
-  if (screen === "Auth") return <AuthScreen onNotice={onNotice} />;
+  // Auth needs only the deployment's address: the diagnostic is public, so this
+  // screen goes live on the client alone and does not wait for the /mcp reads.
+  if (screen === "Auth") {
+    return client !== null ? <LiveAuthScreen origin={client.origin} onNotice={onNotice} /> : <AuthScreen onNotice={onNotice} />;
+  }
   if (screen === "Storage") return <StorageScreen onNotice={onNotice} />;
   return <HealthScreen />;
 }
@@ -1408,6 +1417,161 @@ function LiveTablesScreen({ client, live, bridgeKey, onRefresh, onNotice }: { cl
 function TablesScreen() {
   const [selected, setSelected] = useState<(typeof mockTables)[number]>(mockTables[0]);
   return <div><ScreenTitle kicker="Database" title="Tables" description="Inspect rows and see policy coverage before opening a table." action={<button className="studio-secondary" type="button">Read-only SQL</button>} /><div className="workspace-grid"><section className="list-panel"><header><span>3 tables</span><input aria-label="Search tables" placeholder="Search" /></header><div className="data-list">{mockTables.map((table) => <button key={table.name} type="button" className={selected.name === table.name ? "is-selected" : ""} onClick={() => setSelected(table)}><span><strong>{table.name}</strong><small>{table.rows} rows · {table.policies} policies</small></span><span className={`state-label ${table.state}`}>{table.state === "attention" ? "Review" : "Covered"}</span></button>)}</div></section><section className="detail-panel"><header><div><span className="machine-label">Table</span><h3>{selected.name}</h3></div><button className="studio-primary" type="button">New row</button></header>{selected.state === "attention" && <div className="warning-strip page-strip"><strong>Policy requires an index</strong><span>`author_id` is scanned for each protected request.</span></div>}<div className="table-scroll"><table className="compact-table"><thead><tr><th>id</th><th>title</th><th>author</th><th>status</th><th>access</th></tr></thead><tbody>{mockSimulatorRows.map((row) => <tr key={row.id}><td><code>{row.id}</code></td><td>{row.title}</td><td>{row.author}</td><td>{row.status}</td><td><span className={`state-label ${row.visible ? "active" : "blocked"}`}>{row.visible ? "Visible" : "Blocked"}</span></td></tr>)}</tbody></table></div></section></div></div>;
+}
+
+/**
+ * The deployment's own auth configuration, read from `/api/auth/_diagnose`.
+ *
+ * No credential is attached and none is needed: that endpoint answers before
+ * the limiter and before anything reads configuration, because it exists for a
+ * deployment too broken to answer anywhere else. It reports presence, never
+ * values, so nothing here is a secret the page should not hold.
+ *
+ * ## What this screen cannot show, and why it says so instead of faking it
+ *
+ * The fixture lists user records. There is no path to them: `user`, `session`,
+ * `account`, `verification`, and `jwks` are reserved names, refused by the
+ * catalogue, by the REST router, and by the bridge, and no MCP tool reads them.
+ * That is the design working, not a gap to route around, so the screen states
+ * the boundary rather than drawing an empty table that reads as "no users".
+ */
+function LiveAuthScreen({ origin, onNotice }: { origin: string; onNotice: (message: string) => void }) {
+  const [state, setState] = useState<{ diagnose?: DiagnoseReport; error?: string } | null>(null);
+  const [reading, setReading] = useState(false);
+
+  const read = async (announce: boolean) => {
+    setReading(true);
+    const answer = await readDiagnose(origin);
+    setReading(false);
+    setState(answer.kind === "data" ? { diagnose: answer.diagnose } : { error: answer.message });
+    if (answer.kind !== "data") onNotice(answer.message);
+    else if (announce) {
+      onNotice(
+        answer.diagnose.warnings.length === 0
+          ? "Auth diagnostic read. Nothing to warn about."
+          : `Auth diagnostic read. ${answer.diagnose.warnings.length} thing${answer.diagnose.warnings.length === 1 ? "" : "s"} to look at.`,
+      );
+    }
+  };
+
+  useEffect(() => {
+    let stale = false;
+    void readDiagnose(origin).then((answer) => {
+      if (stale) return;
+      setState(answer.kind === "data" ? { diagnose: answer.diagnose } : { error: answer.message });
+    });
+    return () => {
+      stale = true;
+    };
+  }, [origin]);
+
+  const diagnose = state?.diagnose;
+  const providers = diagnose === undefined ? [] : Object.entries(diagnose.providers);
+
+  return (
+    <div>
+      <ScreenTitle
+        kicker="Identity"
+        title="Authentication"
+        description="What this deployment has configured, read from the deployment itself."
+        action={
+          <button className="studio-primary" type="button" disabled={reading} onClick={() => void read(true)}>
+            {reading ? "Reading…" : "Run diagnostic"}
+          </button>
+        }
+      />
+      {state === null ? (
+        <section className="full-panel"><div className="editor-form"><p>Reading the deployment&apos;s auth configuration…</p></div></section>
+      ) : state.error !== undefined ? (
+        // Announces on success too, and that is the point: a failed read leaves
+        // its message standing in the notification strip, so a silent recovery
+        // leaves the person reading a failure that is no longer true. Watched
+        // that happen, with the stale line following a disconnect onto the
+        // fixture screen, where it read as a claim about the fixture.
+        <section className="full-panel"><div className="editor-form"><p>{state.error}</p><button className="studio-secondary" type="button" disabled={reading} onClick={() => void read(true)}>Try again</button></div></section>
+      ) : diagnose !== undefined ? (
+        <>
+          <div className="metric-grid auth-live">
+            {providers.map(([name, provider]) => (
+              <article key={name}>
+                <span>{name}</span>
+                <strong>{provider.configured ? "Configured" : "Not configured"}</strong>
+                {/* The missing variable is named, because a provider that is
+                    half configured is missing exactly one of its two and the
+                    person needs to know which. Same words the CLI prints. */}
+                <small>{provider.configured ? "Client id and secret are set" : `Missing ${provider.missing.join(" and ")}`}</small>
+              </article>
+            ))}
+            <article>
+              <span>Email and password</span>
+              <strong>{diagnose.email_password_enabled ? "Enabled" : "Disabled"}</strong>
+              <small>{diagnose.email_password_enabled ? "Hashing one password costs ~58 ms of CPU" : "Off by default: hashing costs ~58 ms against a 10 ms free-plan request"}</small>
+            </article>
+            <article>
+              <span>Signing secret</span>
+              <strong>{diagnose.secret_configured ? "Set" : "Missing"}</strong>
+              <small>{diagnose.secret_configured ? "Presence only; the value never leaves the deployment" : "Every route answers 500 until this is set"}</small>
+            </article>
+          </div>
+
+          {providers.map(([name, provider]) => (
+            <section className="redirect-panel" key={`redirect-${name}`}>
+              <div>
+                <span className="machine-label">{name} redirect URI</span>
+                <code>{provider.redirect_uri}</code>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  void navigator.clipboard?.writeText(provider.redirect_uri);
+                  onNotice(`Copied the ${name} redirect URI.`);
+                }}
+              >
+                Copy URI
+              </button>
+            </section>
+          ))}
+
+          <section className="full-panel">
+            <header><span>Where browsers may call from</span><span>{diagnose.trusted_origins.length} origin{diagnose.trusted_origins.length === 1 ? "" : "s"}</span></header>
+            <div className="editor-form">
+              <p>
+                {diagnose.base_url_matches
+                  ? <>The configured address matches the one serving this request: <code>{diagnose.base_url_actual}</code>.</>
+                  : <>The configured address is <code>{diagnose.base_url_config === "" ? "not a URL" : diagnose.base_url_config}</code> but this request was served by <code>{diagnose.base_url_actual}</code>. Sign-in redirects go to the configured one.</>}
+              </p>
+              <ul className="origin-list">
+                {diagnose.trusted_origins.map((entry) => <li key={entry}><code>{entry}</code></li>)}
+              </ul>
+            </div>
+          </section>
+
+          <section className="full-panel">
+            <header><span>Warnings</span><span>{diagnose.warnings.length === 0 ? "none" : `${diagnose.warnings.length}`}</span></header>
+            <div className="editor-form">
+              {diagnose.warnings.length === 0 ? (
+                <p>Nothing to warn about. This is the same check <code>npx baseclf doctor</code> runs.</p>
+              ) : (
+                <ul className="origin-list">{diagnose.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>
+              )}
+            </div>
+          </section>
+
+          <section className="full-panel">
+            <header><span>User records</span><span>not readable here</span></header>
+            <div className="editor-form">
+              <p>
+                The identity tables are reserved names: the catalogue, the REST router, and the bridge each
+                refuse them, and no tool reads them. That is deliberate, so this screen shows no user list
+                rather than an empty one. Use the D1 console or <code>wrangler d1 execute</code>, which is the
+                administrative path and bypasses the policy engine by design.
+              </p>
+            </div>
+          </section>
+        </>
+      ) : null}
+    </div>
+  );
 }
 
 function AuthScreen({ onNotice }: { onNotice: (message: string) => void }) {

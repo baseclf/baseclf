@@ -7,4 +7,4 @@ BaseCLF is auto-REST plus real row-level security for Cloudflare D1, deployed in
 - [Policy DSL](/docs/policies.md)
 - [Compatibility](/docs/compatibility.md)
 
-Studio opens on fixture data. Connecting a deployment makes the Simulator, Policies, and Tables screens read that deployment for real; Auth, Storage, and Health stay fixture previews and say so. The commands and API behavior in the documentation match the shipped engine.
+Studio opens on fixture data. Connecting a deployment makes the Simulator, Policies, Tables, and Auth screens read that deployment for real; Storage and Health stay fixture previews and say so. The Auth screen reports configuration only: identity tables are reserved names and no surface reads them. The commands and API behavior in the documentation match the shipped engine.
