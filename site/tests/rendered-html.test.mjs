@@ -295,3 +295,33 @@ test("ships the guided motion system and real product captures", async () => {
     }
   }
 });
+
+// Three surfaces describe Studio to a reader who cannot see it: the docs page,
+// its markdown twin, and llms.txt. All three said Studio ran on fixture data,
+// and all three were still saying it after the Simulator, Policies, and Tables
+// screens started reading a real deployment. Nothing checked prose, so the
+// claim went stale in place and only a person reading it would notice.
+//
+// This does not pin wording. It pins the part that went wrong: a surface that
+// mentions fixtures must also name the screens that are live, so promoting a
+// fourth screen fails here until every copy is updated.
+test("keeps every written claim about Studio in step with what Studio does", async () => {
+  const [page, markdown, llms, studio] = await Promise.all([
+    readFile(new URL("../app/docs/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../public/docs/index.md", import.meta.url), "utf8"),
+    readFile(new URL("../public/llms.txt", import.meta.url), "utf8"),
+    readFile(new URL("../app/studio/StudioApp.tsx", import.meta.url), "utf8"),
+  ]);
+
+  // The screens the guidance table still calls a fixture preview, and the ones
+  // it does not. Read from the component so the source of truth is the code.
+  const previews = [...studio.matchAll(/^ {2}(\w+): \{ label:.*?fixture preview/gm)].map(([, name]) => name);
+  assert.deepEqual(previews, ["Auth", "Storage", "Health"]);
+
+  for (const [surface, text] of [["docs page", page], ["markdown twin", markdown], ["llms.txt", llms]]) {
+    assert.match(text, /fixture/i, surface);
+    assert.match(text, /Simulator, Policies, and Tables/, surface);
+    // The sentence that went stale: fixtures with no mention of a live screen.
+    assert.doesNotMatch(text, /screens in (the|this) preview (still )?run on fixture data/i, surface);
+  }
+});
