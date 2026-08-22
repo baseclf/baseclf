@@ -163,3 +163,24 @@ describe('the table is not reachable from outside', () => {
     expect(ENGINE_SCHEMA.some((statement) => statement.includes('_audit_log'))).toBe(true);
   });
 });
+
+describe('reading the log newest first is not a scan', () => {
+  it('indexes the column the log is ordered by', async () => {
+    // D1 bills rows scanned rather than rows returned (rules/01 section D), so
+    // the index is a bill rather than a nicety, and which column it covers is
+    // the whole of it.
+    //
+    // ⚠️ This test exists because a mutation survived. The sweep's first attempt
+    // at breaking the index replaced the statement with an empty string, which
+    // made every test in this file throw and looked like twelve tests were
+    // watching it. Pointed at the wrong column instead, nothing noticed at all.
+    const indexes = await env.DB.prepare('PRAGMA index_list(_audit_log)').all<{ name: string }>();
+    const names = (indexes.results ?? []).map((row) => row.name);
+    expect(names).toContain('_audit_log_at');
+
+    const columns = await env.DB.prepare('PRAGMA index_info(_audit_log_at)').all<{
+      name: string;
+    }>();
+    expect((columns.results ?? []).map((row) => row.name)).toEqual(['at']);
+  });
+});
