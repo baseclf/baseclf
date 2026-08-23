@@ -276,6 +276,19 @@ export interface BridgeRows {
 export const BRIDGE_URL = "http://127.0.0.1:4000";
 
 /**
+ * How long to wait on the bridge before saying so.
+ *
+ * Deliberately ABOVE the bridge's own ceiling, which is twenty seconds for the one
+ * call that leaves the machine. This deadline is here to catch "no answer at all",
+ * not to cut a slow answer short: set below the bridge's ceiling it would abort
+ * reads that were about to succeed, which is a worse failure than the one it fixes.
+ *
+ * The first version of this was fifteen seconds and would have done exactly that.
+ * Measuring the bridge's own timeout is what caught it.
+ */
+export const BRIDGE_DEADLINE_MS = 25_000;
+
+/**
  * Ask the local bridge what this caller would be shown.
  *
  * The bridge takes the simulate input, never SQL: it compiles and runs the read
@@ -547,11 +560,29 @@ export interface UsageNumbers {
 export async function usageOnBridge(key: string): Promise<ToolAnswer<UsageNumbers>> {
   let response: Response;
   try {
-    response = await fetch(`${BRIDGE_URL}/usage`, { headers: { "x-bridge-key": key } });
-  } catch {
+    // 🔴 A deadline, because a bridge that is not running does not always refuse.
+    // Watched on a real deployment: the button sat on "Reading…" long enough to
+    // change the theme twice and take two screenshots. A connection to a port
+    // nothing listens on is usually refused at once, but when something drops the
+    // packets instead (a firewall, a sleeping host) the browser waits on its own
+    // clock, and the screen has nothing to say for as long as that takes.
+    //
+    // Every other call in this file has the same gap. This one is fixed here
+    // because it is the one that was caught; the others deserve the same.
+    response = await fetch(`${BRIDGE_URL}/usage`, {
+      headers: { "x-bridge-key": key },
+      signal: AbortSignal.timeout(BRIDGE_DEADLINE_MS),
+    });
+  } catch (error) {
+    // A timeout and a refusal are both "no bridge", but they are different
+    // sentences: one means it is not there, the other means it did not answer,
+    // and somebody who just started it needs to know which one they are reading.
+    const timedOut = error instanceof DOMException && error.name === "TimeoutError";
     return {
       kind: "error",
-      message: "The bridge could not be reached. Is npx baseclf studio running?",
+      message: timedOut
+        ? `The bridge did not answer within ${BRIDGE_DEADLINE_MS / 1000} seconds. It may be starting, or something may be holding the connection open.`
+        : "The bridge could not be reached. Is npx baseclf studio running?",
     };
   }
   if (response.status === 401) return { kind: "error", message: "The bridge refused the key." };

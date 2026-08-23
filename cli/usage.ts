@@ -167,18 +167,27 @@ export async function readUsage(options: {
   const since = asDate(options.now - WINDOW_DAYS * 24 * 60 * 60 * 1000);
   const base = { accountTag: options.credentials.accountId, since, until };
 
-  const invocations = await ask(options.fetcher, options.credentials, INVOCATIONS, {
-    ...base,
-    scriptName: options.scriptName,
-  });
+  // Together, not one after the other. The two ask different datasets and neither
+  // needs the other's answer, so running them in sequence doubled the worst case
+  // for no reason: two twenty-second ceilings became forty seconds of a button
+  // that said "Reading…" and nothing else. Seen on a real deployment.
+  const [invocations, d1] = await Promise.all([
+    ask(options.fetcher, options.credentials, INVOCATIONS, {
+      ...base,
+      scriptName: options.scriptName,
+    }),
+    ask(options.fetcher, options.credentials, D1_ROWS, {
+      ...base,
+      databaseId: options.databaseId,
+    }),
+  ]);
+
+  // Either refusal is the same answer to the caller: this credential cannot read
+  // the account's record. Invocations first so the message is stable rather than
+  // depending on which query lost the race.
   if ('refused' in invocations) {
     return { kind: 'refused', message: invocations.refused, permission: ANALYTICS_PERMISSION };
   }
-
-  const d1 = await ask(options.fetcher, options.credentials, D1_ROWS, {
-    ...base,
-    databaseId: options.databaseId,
-  });
   if ('refused' in d1) {
     return { kind: 'refused', message: d1.refused, permission: ANALYTICS_PERMISSION };
   }
