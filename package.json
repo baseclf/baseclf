@@ -1,6 +1,6 @@
 {
   "name": "create-baseclf",
-  "version": "0.4.14",
+  "version": "0.4.15",
   "description": "Auto-REST and real row-level security for Cloudflare D1",
   "license": "Apache-2.0",
   "type": "module",
