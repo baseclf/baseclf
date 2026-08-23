@@ -60,6 +60,7 @@ import {
 } from './create.js';
 import { waitForDeployment } from './deploy.js';
 import { nextAction, note, type Style, styledResultLine } from './output.js';
+import { parseEnvFile } from './secret.js';
 import {
   chooseCredential,
   type MachinePaths,
@@ -246,10 +247,52 @@ async function resolveAccount(
   write: Write,
   style: Style,
 ): Promise<Account | null> {
+  // 🔴 This used to list accounts and never read `CLOUDFLARE_ACCOUNT_ID`, while the
+  // refusal below told the reader to set exactly that. Setting it changed nothing:
+  // the next run listed again, saw two again, and printed the same instruction. A
+  // tool that answers a refusal with a fix that does not work is worse than one that
+  // offers no fix, and this one had shipped. Same precedence `baseclf secret` uses,
+  // called out here so the two cannot drift.
+  const configured = (
+    host.paths.env.CLOUDFLARE_ACCOUNT_ID ??
+    parseEnvFile(host.envFile ?? '').CLOUDFLARE_ACCOUNT_ID ??
+    ''
+  ).trim();
+
   const accounts = await listAccounts(host.fetcher, token);
 
+  if (configured !== '') {
+    const named = accounts.find((account) => account.id === configured);
+    if (named !== undefined) return named;
+
+    // An empty list with an id in hand is the least-privilege case, not an error:
+    // reading `/accounts` needs `Account Settings · Read`, and a token scoped to
+    // one account with only the permissions it uses does not carry it. The id was
+    // supplied precisely because the credential cannot answer the question.
+    if (accounts.length === 0) return { id: configured, name: configured };
+
+    // It could list, and what it listed does not include this. That is a typo or a
+    // credential for somewhere else, and both deserve saying rather than guessing.
+    write(
+      styledResultLine(
+        'deny',
+        'CLOUDFLARE_ACCOUNT_ID is not an account this login can reach.',
+        style,
+      ),
+    );
+    write(note('It reaches these instead:'));
+    for (const account of accounts) write(note(`  ${account.name}`));
+    return null;
+  }
+
   if (accounts.length === 0) {
-    write(styledResultLine('deny', 'That login has no Cloudflare account on it.', style));
+    write(styledResultLine('deny', 'This credential could not name a Cloudflare account.', style));
+    // Two causes, and the old wording only admitted the first. A narrow API token
+    // cannot read `/accounts` at all, so it lands here while being perfectly able to
+    // do the work asked of it.
+    write(note('Either the login has no account on it, or the token cannot list accounts:'));
+    write(note('  reading the account list needs Account · Account Settings · Read.'));
+    write(note('  If the token is scoped to one account, set CLOUDFLARE_ACCOUNT_ID instead.'));
     return null;
   }
 

@@ -2,7 +2,12 @@ import { describe, expect, it } from 'vitest';
 
 import { CREATE_CRONS, CREATE_PLAN, SIGNING_SECRET_NAME } from './create.js';
 import { findVoiceViolations, markFor, PLAIN } from './output.js';
-import { CREATE_FIXED_TEXT, type CreateHost, runCreate } from './run-create.js';
+import {
+  CREATE_FIXED_TEXT,
+  type CreateHost,
+  resolveAccountCredential,
+  runCreate,
+} from './run-create.js';
 
 const TOKEN_CANARY = 'oauth-token-never-printed';
 /**
@@ -638,5 +643,163 @@ describe('what a reader is allowed to see', () => {
     const h = harness();
     expect(await runCreate(['--force'], h.write, PLAIN, h.host)).toBe('usage');
     expect(h.sent).toHaveLength(0);
+  });
+});
+
+/**
+ * Which Cloudflare account the work lands on.
+ *
+ * 🔴 The refusal for "more than one account" told the reader to set
+ * CLOUDFLARE_ACCOUNT_ID, and nothing read it. Setting it changed nothing: the next
+ * run listed the accounts again, saw two again, and printed the same instruction.
+ * Found by hitting it with a token scoped to one account, where listing accounts is
+ * a permission the token does not carry and does not need.
+ */
+describe('choosing the account, which used to ignore the variable it recommended', () => {
+  // Inside the hour the harness's auth file is good for, so the credential half
+  // resolves quietly and every assertion below is about the account half.
+  const NOW_AT = new Date('2026-08-12T00:30:00.000Z');
+  // Deliberately not shaped like a Cloudflare token. The first version started with
+  // `cfut_` for realism and the commit guard read it as a real one and blocked the
+  // commit, which is the guard doing its job: a fixture that looks like a credential
+  // is indistinguishable from a leaked credential to anything scanning for them.
+  const LIVE_TOKEN = 'api-token-fixture-never-sent-anywhere';
+
+  function sourceWith(options: {
+    readonly accounts?: readonly { id: string; name: string }[] | 'sees-none';
+    readonly env?: Record<string, string | undefined>;
+    readonly envFile?: string;
+  }) {
+    const lines: string[] = [];
+    const asked: string[] = [];
+
+    const fetcher = (async (url: string) => {
+      asked.push(url);
+      if (url.endsWith('/accounts')) {
+        // 🔴 A narrow token is not refused here, it simply sees nothing: measured
+        // against a real one, the answer is 200 with an empty list rather than a
+        // 403. That is what makes the old message wrong rather than merely terse.
+        // It said "that login has no Cloudflare account on it" while Cloudflare had
+        // said "here are the accounts you can see: none", which is a different fact
+        // about a token that could do the work perfectly well.
+        const result = options.accounts === 'sees-none' ? [] : (options.accounts ?? []);
+        return new Response(JSON.stringify({ success: true, result }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ success: true, result: {} }), { status: 200 });
+    }) as unknown as CreateHost['fetcher'];
+
+    return {
+      lines,
+      asked,
+      write: (text: string) => lines.push(text),
+      source: {
+        fetcher,
+        refreshLogin: async () => WHOAMI,
+        readAuthFile: () => authFile(),
+        paths: {
+          platform: 'linux' as const,
+          home: '/home/reader',
+          // The token comes from the environment, so no wrangler login is needed
+          // for these; the question under test is the account, not the credential.
+          env: { CLOUDFLARE_API_TOKEN: LIVE_TOKEN, ...options.env },
+          isDirectory: () => true,
+        },
+        envFile: options.envFile,
+        now: () => NOW_AT,
+      },
+    };
+  }
+
+  it('uses the account named in the environment instead of refusing over a choice', async () => {
+    const h = sourceWith({
+      accounts: [
+        { id: 'account-one', name: 'Personal' },
+        { id: 'account-two', name: 'Work' },
+      ],
+      env: { CLOUDFLARE_ACCOUNT_ID: 'account-two' },
+    });
+
+    const resolved = await resolveAccountCredential(h.source, h.write, PLAIN);
+
+    expect(resolved?.credentials.accountId).toBe('account-two');
+    // The old behaviour: refuse, and tell them to set the thing they had set.
+    expect(h.lines.join('\n')).not.toMatch(/more than one account/i);
+  });
+
+  it('reads it from .env too, with the environment winning', async () => {
+    const fromFileOnly = sourceWith({
+      accounts: [
+        { id: 'account-one', name: 'Personal' },
+        { id: 'account-two', name: 'Work' },
+      ],
+      envFile: 'CLOUDFLARE_ACCOUNT_ID=account-one\n',
+    });
+    expect(
+      (await resolveAccountCredential(fromFileOnly.source, fromFileOnly.write, PLAIN))?.credentials
+        .accountId,
+    ).toBe('account-one');
+
+    const both = sourceWith({
+      accounts: [
+        { id: 'account-one', name: 'Personal' },
+        { id: 'account-two', name: 'Work' },
+      ],
+      env: { CLOUDFLARE_ACCOUNT_ID: 'account-two' },
+      envFile: 'CLOUDFLARE_ACCOUNT_ID=account-one\n',
+    });
+    // Same order as the token: an environment variable beats the file, and that
+    // order is the one thing about this that must not differ between the two.
+    expect(
+      (await resolveAccountCredential(both.source, both.write, PLAIN))?.credentials.accountId,
+    ).toBe('account-two');
+  });
+
+  it('trusts the named account when the credential cannot list any', async () => {
+    // The case that found the bug: a token scoped to one account, carrying only the
+    // permissions it uses. Reading /accounts needs Account Settings Read, which such
+    // a token has no reason to hold, so the list comes back empty while the token is
+    // perfectly able to do the work.
+    const h = sourceWith({ accounts: 'sees-none', env: { CLOUDFLARE_ACCOUNT_ID: 'the-only-one' } });
+
+    const resolved = await resolveAccountCredential(h.source, h.write, PLAIN);
+
+    expect(resolved?.credentials.accountId).toBe('the-only-one');
+  });
+
+  it('refuses when the named account is one this login cannot reach', async () => {
+    // Not the same as the case above. Here the list worked and the answer is that
+    // the id is somewhere else, which is a typo or the wrong credential, and both
+    // are worth saying rather than carrying on into a 403 later.
+    const h = sourceWith({
+      accounts: [{ id: 'account-one', name: 'Personal' }],
+      env: { CLOUDFLARE_ACCOUNT_ID: 'account-elsewhere' },
+    });
+
+    expect(await resolveAccountCredential(h.source, h.write, PLAIN)).toBeNull();
+    expect(h.lines.join('\n')).toMatch(/not an account this login can reach/i);
+    expect(h.lines.join('\n')).toMatch(/Personal/);
+  });
+
+  it('names the permission when it cannot list accounts and nothing was set', async () => {
+    const h = sourceWith({ accounts: 'sees-none' });
+
+    expect(await resolveAccountCredential(h.source, h.write, PLAIN)).toBeNull();
+    const text = h.lines.join('\n');
+    // The old line blamed the login. A narrow token lands here too, and it needs
+    // the other half of the sentence to know which of the two it is looking at.
+    expect(text).toMatch(/Account Settings/);
+    expect(text).toMatch(/CLOUDFLARE_ACCOUNT_ID/);
+  });
+
+  it('still refuses to choose when there is a real choice and nothing was set', async () => {
+    const h = sourceWith({
+      accounts: [
+        { id: 'account-one', name: 'Personal' },
+        { id: 'account-two', name: 'Work' },
+      ],
+    });
+
+    expect(await resolveAccountCredential(h.source, h.write, PLAIN)).toBeNull();
+    expect(h.lines.join('\n')).toMatch(/more than one account/i);
   });
 });
