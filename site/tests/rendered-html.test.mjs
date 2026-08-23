@@ -360,3 +360,98 @@ test("the markdown a bot reads defines the status words it uses", async () => {
   assert.match(markdown, /Planned is roadmap language, not an available production feature/i);
   assert.match(markdown, /source of truth/i);
 });
+
+// A client that fetched llms.txt first finds the markdown twins listed there.
+// A client that just asks for the page and states what it reads used to get
+// html regardless, measured on the deployed site before this existed. The
+// negotiation answers that case, and the risk it carries is the opposite one:
+// handing markdown to an ordinary browser, which sends a match-anything entry
+// at the end of every Accept header.
+async function fetchDocs(path, accept) {
+  const workerUrl = new URL("../dist/server/index.js", import.meta.url);
+  workerUrl.searchParams.set("test", `${process.pid}`);
+  const { default: worker } = await import(workerUrl.href);
+
+  // ASSETS reads dist/client, which is what the deployed binding serves. Reading
+  // public/ instead would be a harness that proves the build copies nothing.
+  const assets = {
+    async fetch(request) {
+      const name = new URL(request.url).pathname;
+      try {
+        const body = await readFile(new URL(`../dist/client${name}`, import.meta.url), "utf8");
+        return new Response(body, { status: 200, headers: { "content-type": "text/markdown" } });
+      } catch {
+        return new Response("Not found", { status: 404 });
+      }
+    },
+  };
+
+  return worker.fetch(
+    new Request(`http://localhost${path}`, { headers: accept === null ? {} : { accept } }),
+    { ASSETS: assets },
+    { waitUntil() {}, passThroughOnException() {} },
+  );
+}
+
+test("hands a documentation page to whichever reader asked, and says the answer varies", async () => {
+  const source = await readFile(new URL("../worker/docs-markdown.ts", import.meta.url), "utf8");
+  const tableStart = source.indexOf("const MARKDOWN_TWIN");
+  const table = source.slice(tableStart, source.indexOf("]);", tableStart));
+  const pairs = [...table.matchAll(/\["(\/[^"]*)",\s*"(\/[^"]*)"\]/g)].map((m) => [m[1], m[2]]);
+
+  // The table is closed, so it can be checked. Every page it claims to answer
+  // for has to be a page, and every twin has to be a file the build shipped:
+  // a missing twin makes the worker fall back to html silently, and this is
+  // what makes that visible instead.
+  assert.equal(pairs.length, 4, "expected four documentation pages");
+  for (const [page, twin] of pairs) {
+    await stat(new URL(`../dist/client${twin}`, import.meta.url));
+    const asked = await fetchDocs(page, "text/markdown");
+    assert.equal(asked.status, 200, page);
+    assert.match(asked.headers.get("content-type") ?? "", /^text\/markdown\b/, page);
+    assert.equal(asked.headers.get("vary"), "Accept", page);
+    const body = await asked.text();
+    assert.doesNotMatch(body, /^\s*</, `${page} answered html under a markdown content type`);
+    assert.match(body, /^#\s/, page);
+  }
+
+  // The other direction. Each of these is a header a real client sends, and
+  // each one has to keep getting the page.
+  const browser = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8";
+  const staysHtml = [
+    [null, "no accept header"],
+    ["*/*", "curl"],
+    [browser, "a browser"],
+    ["text/*", "any text type, which does not name markdown"],
+    ["text/html, text/markdown;q=0.1", "markdown named but ranked below html"],
+    ["text/markdown;q=0", "markdown named as unacceptable"],
+  ];
+
+  // The framework ships its own Vary list, which is how a cache tells a
+  // client-side navigation payload from a full page. Adding Accept must not
+  // cost those: the first version of this replaced the header outright, and
+  // this is the assertion that caught it.
+  const framework = (await fetchDocs("/studio", null)).headers.get("vary") ?? "";
+  assert.match(framework, /RSC/, "expected the framework to vary on its own headers");
+
+  for (const [accept, reason] of staysHtml) {
+    const response = await fetchDocs("/docs/quickstart", accept);
+    assert.equal(response.status, 200, reason);
+    assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/, reason);
+    // Still varies: a cache that stored this must not replay it to the agent.
+    const vary = response.headers.get("vary") ?? "";
+    assert.match(vary, /\bAccept\b/, reason);
+    for (const entry of framework.split(",").map((part) => part.trim())) {
+      assert.ok(vary.includes(entry), `${reason} dropped ${entry} from Vary`);
+    }
+  }
+
+  // Trailing slash is the same page; a path with no twin is not negotiated at
+  // all, so it neither answers markdown nor claims to vary on Accept.
+  const slashed = await fetchDocs("/docs/", "text/markdown");
+  assert.match(slashed.headers.get("content-type") ?? "", /^text\/markdown\b/);
+
+  const elsewhere = await fetchDocs("/studio", "text/markdown");
+  assert.match(elsewhere.headers.get("content-type") ?? "", /^text\/html\b/);
+  assert.doesNotMatch(elsewhere.headers.get("vary") ?? "", /\bAccept\b/);
+});

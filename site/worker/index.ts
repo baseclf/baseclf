@@ -1,6 +1,7 @@
 /** Cloudflare Worker entry point for the vinext-starter template. */
 import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
+import { markPageVaries, markdownFor, negotiatesMarkdown } from "./docs-markdown";
 
 interface Env {
   ASSETS: Fetcher;
@@ -38,6 +39,15 @@ const worker = {
           return result.response();
         },
       }, allowedWidths);
+    }
+
+    // A documentation page can answer as markdown when the reader asks for markdown.
+    // Both branches are inside this one test so the rest of the site pays nothing for
+    // it, and so the set of paths whose answer depends on Accept is named once.
+    if (negotiatesMarkdown(url.pathname)) {
+      const markdown = await markdownFor(request, env.ASSETS);
+      if (markdown !== null) return markdown;
+      return markPageVaries(await handler.fetch(request, env, ctx));
     }
 
     return handler.fetch(request, env, ctx);
