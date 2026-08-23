@@ -336,14 +336,61 @@ test("keeps every written claim about Studio in step with what Studio does", asy
   // The screens the guidance table still calls a fixture preview, and the ones
   // it does not. Read from the component so the source of truth is the code.
   const previews = [...studio.matchAll(/^ {2}(\w+): \{ label:.*?fixture preview/gm)].map(([, name]) => name);
-  assert.deepEqual(previews, ["Storage", "Health"]);
+  assert.deepEqual(previews, ["Storage"]);
 
   for (const [surface, text] of [["docs page", page], ["markdown twin", markdown], ["llms.txt", llms]]) {
     assert.match(text, /fixture/i, surface);
-    assert.match(text, /Simulator, Policies, Tables, and Auth/, surface);
+    assert.match(text, /Simulator, Policies, Tables, Auth, and Health/, surface);
     // The sentence that went stale: fixtures with no mention of a live screen.
     assert.doesNotMatch(text, /screens in (the|this) preview (still )?run on fixture data/i, surface);
+    // Health is live and half-refusing, so every surface has to carry the half it
+    // refuses. Naming it live without that reads as a promise of numbers.
+    assert.match(text, /usage numbers are.{0,40}not read|not read there|recorded against your Cloudflare account/i, surface);
   }
+});
+
+// The half of Health that has a source without the operator's Cloudflare
+// credential is real; the half that does not is absent rather than mocked. The
+// distinction the screen turns on is that nothing-wrong and could-not-look are
+// different answers: an empty warning list drawn for a failed read is the
+// interface version of failing open.
+test("Health reports what the deployment can check and declines the rest", async () => {
+  const studio = await readFile(new URL("../app/studio/StudioApp.tsx", import.meta.url), "utf8");
+  const start = studio.indexOf("function LiveHealthScreen");
+  assert.ok(start > 0, "expected a live Health screen");
+  const health = studio.slice(start, studio.indexOf("function HealthScreen"));
+
+  // Both real sources, and no fixture.
+  assert.match(health, /readDiagnose/);
+  assert.match(health, /live\.findings/);
+  assert.doesNotMatch(health, /mockHealth|mock-badge|mock-chart/);
+
+  // A failed read is said out loud, separately from a clean result.
+  assert.match(health, /were not read/i);
+  assert.match(health, /Nothing to report/i);
+
+  // 🔴 The two assertions above are not enough, and a canary proved it: changing
+  // the unreadable case from `undefined` to `[]` left both strings in the file
+  // and every test green, while the screen quietly reported "nothing wrong" for
+  // a read that never happened. The harness renders pages server-side and a
+  // connected Studio only exists in the browser, so there is no way to drive
+  // that state here. Pinning the decision itself is what is left: both sources
+  // must carry `undefined` for "could not look", which is what keeps it distinct
+  // from an empty list. Changing these two lines has to be a deliberate act.
+  assert.match(health, /const configWarnings = diagnose\?\.warnings;/);
+  assert.match(health, /const indexFindings = live\?\.problem === "" \? live\.findings : undefined;/);
+  // And the count must follow that distinction rather than treating absent as zero.
+  assert.match(health, /readable\s*\?\s*`\$\{total\}\s*item/);
+  assert.match(health, /:\s*"partly readable"/);
+
+  // The numbers are named as absent, and where they actually live is named too.
+  assert.match(health, /not read here/i);
+  assert.match(health, /Cloudflare/);
+  assert.doesNotMatch(health, /mock-chart/);
+
+  // The fixture screen keeps its chart: disconnected Studio is still a demo.
+  const fixture = studio.slice(studio.indexOf("function HealthScreen"), studio.indexOf("function StateGallery"));
+  assert.match(fixture, /mock-chart/);
 });
 
 // llms.txt points a reader that cannot run JavaScript at the markdown twins,

@@ -119,7 +119,7 @@ const guidance: Record<StudioScreen, { label: string; demo: string; live: string
   Tables: { label: "Data check", demo: "Open posts first—the missing index warning needs attention.", live: "New tables appear after a refresh, within about a minute. Rows load only when you ask." },
   Auth: { label: "Setup check", demo: "Copy the redirect URI, then run the provider diagnostic.", live: "This is your deployment's own diagnostic, the one npx baseclf doctor reads. User records stay out of reach by design." },
   Storage: { label: "Access first", demo: "Choose a bucket and confirm its policy before uploading an object.", live: "This screen is still a fixture preview — storage rules live in your policy documents." },
-  Health: { label: "What matters", demo: "Start with failures, then inspect the request trend.", live: "This screen is still a fixture preview — request numbers live in your Cloudflare dashboard." },
+  Health: { label: "What matters", demo: "Start with failures, then inspect the request trend.", live: "Everything this deployment can tell you about itself. Usage numbers live in your Cloudflare account and are not read here." },
 };
 
 export default function StudioApp() {
@@ -1111,7 +1111,10 @@ function DataScreen({ screen, client, live, bridgeKey, onRefresh, onNotice, onOp
     return client !== null ? <LiveAuthScreen origin={client.origin} onNotice={onNotice} /> : <AuthScreen onNotice={onNotice} />;
   }
   if (screen === "Storage") return <StorageScreen onNotice={onNotice} />;
-  return <HealthScreen />;
+  // Health goes live on the client alone, like Auth: the diagnostic is public.
+  // `live` may still be null when the /mcp reads failed, and the screen has to
+  // tell that apart from a deployment with nothing wrong.
+  return client !== null ? <LiveHealthScreen origin={client.origin} live={live} onNotice={onNotice} /> : <HealthScreen />;
 }
 
 /**
@@ -1683,6 +1686,165 @@ function AuthScreen({ onNotice }: { onNotice: (message: string) => void }) {
 
 function StorageScreen({ onNotice }: { onNotice: (message: string) => void }) {
   return <div><ScreenTitle kicker="R2 storage" title="Storage" description="Browse objects and inspect which policy controls each path." action={<button className="studio-primary" type="button" onClick={() => onNotice("Upload fixture added to the queue.")}>Upload object</button>} /><div className="storage-layout"><section className="bucket-list"><header>Buckets</header><button className="is-selected" type="button"><strong>app-files</strong><small>{mockStorageObjects.length} objects</small></button><button type="button"><strong>user-uploads</strong><small>Empty</small></button></section><section className="full-panel"><header><span>app-files</span><span>Mock objects</span></header><div className="table-scroll"><table className="compact-table"><thead><tr><th>Object</th><th>Type</th><th>Size</th><th>Access</th></tr></thead><tbody>{mockStorageObjects.map((object) => <tr key={object.name}><td><code>{object.name}</code></td><td>{object.type}</td><td>{object.size}</td><td><span className={`state-label ${object.access === "public" ? "attention" : "active"}`}>{object.access}</span></td></tr>)}</tbody></table></div></section></div></div>;
+}
+
+/**
+ * What the deployment can say about its own condition, and nothing else.
+ *
+ * The fixture screen has two halves: numbers across the top, and a list of things
+ * needing attention. Only the second half has a source that does not need the
+ * operator's Cloudflare credential, so only the second half is here. The numbers were
+ * measured to be reachable — `workersInvocationsAdaptive` filters down to one script,
+ * and `d1AnalyticsAdaptiveGroups` carries rows read and written — but reaching them
+ * needs the local bridge and a permission question nobody has answered yet, so the
+ * panel below says where they live instead of drawing a chart with no data behind it.
+ *
+ * 🔴 The distinction the screen exists to keep: **nothing wrong** and **could not
+ * look** are different answers. Rendering an empty warning list for a failed read is
+ * the interface version of failing open, and this project has already watched a
+ * refused read draw "0 TABLES / LIVE" over a database that had tables.
+ */
+function LiveHealthScreen({ origin, live, onNotice }: { origin: string; live: LiveState | null; onNotice: (message: string) => void }) {
+  const [state, setState] = useState<{ diagnose?: DiagnoseReport; error?: string } | null>(null);
+  const [reading, setReading] = useState(false);
+
+  const read = async (announce: boolean) => {
+    setReading(true);
+    const answer = await readDiagnose(origin);
+    setReading(false);
+    setState(answer.kind === "data" ? { diagnose: answer.diagnose } : { error: answer.message });
+    if (answer.kind !== "data") onNotice(answer.message);
+    else if (announce) onNotice("Read the deployment's own checks.");
+  };
+
+  useEffect(() => {
+    let stale = false;
+    void readDiagnose(origin).then((answer) => {
+      if (stale) return;
+      setState(answer.kind === "data" ? { diagnose: answer.diagnose } : { error: answer.message });
+    });
+    return () => {
+      stale = true;
+    };
+  }, [origin]);
+
+  const diagnose = state?.diagnose;
+  // Three states, not two. `undefined` means the read has not answered or failed,
+  // and an empty array means it answered with nothing to report.
+  const configWarnings = diagnose?.warnings;
+  const indexFindings = live?.problem === "" ? live.findings : undefined;
+  const bindingsMissing = (diagnose?.bindings ?? []).filter((binding) => !binding.present);
+
+  // Both messages below are somebody else's text followed by ours. Concatenated
+  // raw they run together, and "Failed to fetch Nothing below is a statement about
+  // its configuration" reads as one broken sentence; saw exactly that on screen.
+  const sentence = (text: string) => (/[.!?]$/.test(text.trim()) ? text.trim() : `${text.trim()}.`);
+
+  const readable = configWarnings !== undefined && indexFindings !== undefined;
+  const total = (configWarnings?.length ?? 0) + (indexFindings?.length ?? 0) + bindingsMissing.length;
+  const counted = readable ? `${total} item${total === 1 ? "" : "s"}` : "partly readable";
+
+  return (
+    <div>
+      <ScreenTitle
+        kicker="Operational record"
+        title="Health"
+        description="What this deployment reports about itself: the checks it can run without leaving the Worker."
+        action={
+          <button className="studio-primary" type="button" disabled={reading} onClick={() => void read(true)}>
+            {reading ? "Reading…" : "Run checks"}
+          </button>
+        }
+      />
+
+      {state === null ? (
+        <section className="full-panel"><div className="editor-form"><p>Reading the deployment&apos;s own checks…</p></div></section>
+      ) : (
+        <>
+          <section className="full-panel">
+            <header><span>Attention required</span><span>{counted}</span></header>
+            <div className="editor-form">
+              {state.error !== undefined && (
+                <div className="warning-strip">
+                  <strong>The deployment did not answer</strong>
+                  <span>{sentence(state.error)} Nothing below is a statement about its configuration.</span>
+                </div>
+              )}
+
+              {indexFindings === undefined && (
+                <div className="warning-strip">
+                  <strong>Policy warnings were not read</strong>
+                  <span>
+                    {live === null ? "The policy reads have not answered on this connection." : sentence(live.problem)}{" "}
+                    An empty list here would mean nothing is wrong, so there is no list.
+                  </span>
+                </div>
+              )}
+
+              {readable && total === 0 ? (
+                <p>
+                  Nothing to report. These are the same checks <code>npx baseclf doctor</code> runs, plus the
+                  index findings behind <code>baseclf policy lint</code>.
+                </p>
+              ) : (
+                <div className="issue-list">
+                  {(indexFindings ?? []).map((finding) => (
+                    <div key={`${finding.table}.${finding.policy}.${finding.code}`}>
+                      <span className="state-label attention">Index</span>
+                      <p>
+                        <strong>{finding.table}</strong>
+                        <small>{finding.detail}</small>
+                        {/* D1 bills rows scanned, not rows returned, so an unindexed
+                            policy column is a recurring invoice rather than a style
+                            note. The statement that fixes it is copyable for that
+                            reason. rules/01 section D. */}
+                        {finding.remedy !== undefined && <small><code>{finding.remedy}</code></small>}
+                      </p>
+                    </div>
+                  ))}
+                  {(configWarnings ?? []).map((warning) => (
+                    <div key={`config-${warning}`}>
+                      <span className="state-label attention">Config</span>
+                      <p><strong>Configuration</strong><small>{warning}</small></p>
+                    </div>
+                  ))}
+                  {bindingsMissing.map((binding) => (
+                    <div key={`binding-${binding.name}`}>
+                      <span className="state-label blocked">Binding</span>
+                      <p>
+                        <strong>{binding.name} is not bound</strong>
+                        {/* A missing binding is the quiet one: the storage registry
+                            reads an unreadable bucket list as no buckets, so those
+                            routes answer 404 exactly as they would when working. */}
+                        <small>Routes that need it answer as though nothing is there, which looks the same as working.</small>
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </section>
+
+          <section className="full-panel">
+            <header><span>Usage numbers</span><span>not read here</span></header>
+            <div className="editor-form">
+              <p>
+                Requests, errors, CPU time, and rows read and written are recorded by Cloudflare against
+                your account, not by this deployment. Reading them needs your Cloudflare credential, which
+                this page never holds; the local bridge does. Until that is wired, the honest answer is a
+                pointer rather than a chart.
+              </p>
+              <p>
+                Rows read is the one worth watching: D1 bills every row a query <em>scans</em>, not the rows
+                it returns, so an unindexed policy column is a recurring cost. The index findings above are
+                the part of that this deployment can see on its own.
+              </p>
+            </div>
+          </section>
+        </>
+      )}
+    </div>
+  );
 }
 
 function HealthScreen() {
