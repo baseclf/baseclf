@@ -30,16 +30,17 @@ const MUTATIONS = [
       {
         file: ROUTER,
         find: / {2}const stored = await writeBounded\(context\.bucket, grant\.key, request\.body, length, contentType\);/,
+        // No `if (context.db !== undefined)` around it any more: `db` is
+        // mandatory since `14f65dd`, so that guard was always true and read as
+        // a condition that still existed.
         replace:
-          '  if (context.db !== undefined) {\n' +
-          '    await recordObject(context.db, {\n' +
-          '      key: grant.key,\n' +
-          '      bucket: context.bucketName,\n' +
-          '      auth: context.auth,\n' +
-          '      sizeBytes: length,\n' +
-          '      contentType,\n' +
-          '    });\n' +
-          '  }\n' +
+          '  await recordObject(context.db, {\n' +
+          '    key: grant.key,\n' +
+          '    bucket: context.bucketName,\n' +
+          '    auth: context.auth,\n' +
+          '    sizeBytes: length,\n' +
+          '    contentType,\n' +
+          '  });\n' +
           '  const stored = await writeBounded(context.bucket, grant.key, request.body, length, contentType);',
       },
     ],
@@ -50,18 +51,25 @@ const MUTATIONS = [
     // `void 0` is falsy the `||` still called it. A mutation that applies while
     // changing nothing is the same trap as one that does not apply, and the
     // exactly-once check cannot catch it.
+    // ⚠️ Rewritten 2026-08-22. It used to remove an `if (context.db !==
+    // undefined)` guard, and that guard is gone: `14f65dd` made `db` mandatory
+    // so that "skip the record" stopped being expressible, which is the fix
+    // working. The pattern went stale the same day and the full sweep has
+    // refused to run since, because nobody ran it between then and now.
     name: 'the record not written at all',
     file: ROUTER,
     expect: 'the joinable row tests',
-    find: / {2}if \(context\.db !== undefined\) \{\n {4}await recordObject\(context\.db, \{/,
-    replace: '  if (false) {\n    await recordObject(context.db as never, {',
+    find: /await recordObject\(context\.db, \{/,
+    replace: 'await Promise.resolve({',
   },
   {
     name: 'the record not removed on delete, so a join keeps returning it',
     file: ROUTER,
     expect: 'the delete record test',
-    find: /^ {4}await forgetObject\(context\.db, grant\.key\);$/m,
-    replace: '    void grant.key;',
+    // Two spaces, not four: the same removed guard that broke the mutation
+    // above de-indented this line too.
+    find: /^ {2}await forgetObject\(context\.db, grant\.key\);$/m,
+    replace: '  void grant.key;',
   },
   {
     name: 'created_at overwritten on every write, losing when the object first appeared',
