@@ -53,6 +53,21 @@ export type BindingType = keyof typeof BINDING_ID_FIELD;
  * The permissions page also lists each one twice under different names (Read/Edit
  * for the dashboard, Read/Write for the API), and picking the wrong one gives a 403
  * that names nothing.
+ *
+ * ## Do not add `Account · Account Analytics · Read` here
+ *
+ * The Studio's Health screen reads usage numbers from the GraphQL analytics API and
+ * needs that permission; `ANALYTICS_PERMISSION` in `usage.ts` is where it is named.
+ * It does not belong in this list, and the reason is what this list is for.
+ *
+ * Provisioning does not need it. Nothing in the nine steps touches analytics, and
+ * these lines are printed when `secret set` comes back 401 or 403 (`secret.ts`), a
+ * moment that has nothing to do with usage numbers. Adding it here would tell every
+ * reader to grant a permission most of them will never spend, in a message about a
+ * different failure.
+ *
+ * The screen asks at the moment it matters instead: a refusal from that API is
+ * carried back as an answer rather than an error, and it names the permission.
  */
 export const REQUIRED_TOKEN_PERMISSIONS: readonly string[] = Object.freeze([
   'Account · Workers Scripts · Edit',

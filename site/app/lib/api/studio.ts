@@ -516,3 +516,60 @@ export async function editOnBridge(
   }
   return { kind: "error", message: body.error ?? `The bridge answered ${response.status}.` };
 }
+
+/** What Cloudflare recorded against the account for this one deployment. */
+export interface UsageNumbers {
+  readonly requests: number;
+  readonly errors: number;
+  /** Microseconds, as Cloudflare reports them. Null when the window has no data. */
+  readonly cpuP50: number | null;
+  readonly cpuP99: number | null;
+  readonly rowsRead: number;
+  readonly rowsWritten: number;
+  readonly since: string;
+  readonly until: string;
+  readonly scriptName: string;
+}
+
+/**
+ * Read the usage numbers through the bridge, or learn why they are not readable.
+ *
+ * These are the one thing on the Health screen the deployment cannot report about
+ * itself: requests, errors, CPU and rows are recorded by Cloudflare against the
+ * account. The bridge holds the operator's credential; this page never does.
+ *
+ * A refusal comes back as a `refusal`, not an error, and it is the expected outcome
+ * rather than a rare one: the permission list `create-baseclf` prints does not
+ * include `Account · Account Analytics · Read`, so a token built by following those
+ * instructions exactly will land here. The message carries the permission so the
+ * screen can name it instead of showing an empty panel.
+ */
+export async function usageOnBridge(key: string): Promise<ToolAnswer<UsageNumbers>> {
+  let response: Response;
+  try {
+    response = await fetch(`${BRIDGE_URL}/usage`, { headers: { "x-bridge-key": key } });
+  } catch {
+    return {
+      kind: "error",
+      message: "The bridge could not be reached. Is npx baseclf studio running?",
+    };
+  }
+  if (response.status === 401) return { kind: "error", message: "The bridge refused the key." };
+
+  let body: { numbers?: UsageNumbers; refused?: string; permission?: string; error?: string };
+  try {
+    body = (await response.json()) as typeof body;
+  } catch {
+    return { kind: "error", message: `The bridge answered ${response.status} without a body.` };
+  }
+
+  if (body.refused !== undefined) {
+    // Cloudflare's own words, then the permission. Both, because the wording is
+    // theirs to change and the permission is the thing a reader can act on.
+    const needs =
+      body.permission === undefined ? "" : ` The permission this needs is ${body.permission}.`;
+    return { kind: "refusal", message: `Cloudflare would not answer: ${body.refused}.${needs}` };
+  }
+  if (body.numbers !== undefined) return { kind: "data", data: body.numbers };
+  return { kind: "error", message: body.error ?? `The bridge answered ${response.status}.` };
+}

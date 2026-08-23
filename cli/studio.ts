@@ -80,6 +80,7 @@ import {
   readStoredDocument,
 } from './policy.js';
 import { type PolicyDocument, readPolicyDocument } from './policy-document.js';
+import { readUsage, type UsageAnswer } from './usage.js';
 
 type Write = (text: string) => void;
 
@@ -275,6 +276,9 @@ const ROUTES = [
   // that already exists, and naming it after the lane keeps the read and the
   // write of one screen together.
   { method: 'PATCH', path: '/rows', route: 'edit' },
+  // The only route that leaves Cloudflare's data plane for its control plane: the
+  // usage numbers are recorded against the account, not by the deployment.
+  { method: 'GET', path: '/usage', route: 'usage' },
 ] as const;
 
 export type BridgeRoute = (typeof ROUTES)[number]['route'];
@@ -313,6 +317,15 @@ export function createBridge(options: {
    * this is called, so a refused document provably never reaches the network.
    */
   readonly applyDocument: (document: PolicyDocument) => Promise<BridgeApplyAnswer>;
+  /**
+   * The account's own record of what this deployment did, or a refusal.
+   *
+   * A refusal is a value rather than an exception because it is the expected
+   * outcome for a token built from `REQUIRED_TOKEN_PERMISSIONS`, which does not ask
+   * for `Account · Account Analytics · Read`. The page has to be able to name the
+   * missing permission, which it cannot do with a 500.
+   */
+  readonly readUsage: () => Promise<UsageAnswer>;
   readonly log: (line: string) => void;
 }): BridgeHandler {
   // One catalogue per bridge process, refreshed on the engine's own clock.
@@ -431,6 +444,28 @@ export function createBridge(options: {
       } catch {
         options.log('a row browse failed before it finished');
         return answer(500, origin, { error: 'The deployment could not be read.' });
+      }
+    }
+
+    if (route === 'usage') {
+      try {
+        const usage = await options.readUsage();
+        if (usage.kind === 'refused') {
+          // 200, not 403. The page asked a fair question and got a real answer:
+          // "Cloudflare will not tell me, and here is the permission it wants."
+          // A 403 here would read as the bridge refusing the caller, which is a
+          // different thing and would send the reader after the wrong problem.
+          options.log(`the account would not report usage: ${usage.message}`);
+          return answer(200, origin, {
+            refused: usage.message,
+            permission: usage.permission,
+          });
+        }
+        options.log(`read usage for "${usage.numbers.scriptName}"`);
+        return answer(200, origin, { numbers: usage.numbers });
+      } catch {
+        options.log('a usage read failed before it finished');
+        return answer(502, origin, { error: 'The account could not be reached.' });
       }
     }
 
@@ -689,6 +724,16 @@ export async function runStudio(
       );
       return { outcome, lines };
     },
+    // The project name is the Worker's name as well as the database's, which is
+    // what makes one filter enough to speak about one deployment.
+    readUsage: () =>
+      readUsage({
+        fetcher: host.fetcher,
+        credentials: resolved.credentials,
+        scriptName: parsed.project,
+        databaseId: endpoint.databaseId,
+        now: Date.now(),
+      }),
     log: (line) => write(note(line)),
   });
 

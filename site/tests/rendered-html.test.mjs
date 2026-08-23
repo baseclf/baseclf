@@ -383,10 +383,25 @@ test("Health reports what the deployment can check and declines the rest", async
   assert.match(health, /readable\s*\?\s*`\$\{total\}\s*item/);
   assert.match(health, /:\s*"partly readable"/);
 
-  // The numbers are named as absent, and where they actually live is named too.
-  assert.match(health, /not read here/i);
+  // The numbers come from the account through the bridge, never from this page:
+  // the credential that reads them is the operator's and lives on their machine.
+  assert.match(health, /usageOnBridge/);
+  assert.match(health, /bridgeKey/);
   assert.match(health, /Cloudflare/);
   assert.doesNotMatch(health, /mock-chart/);
+
+  // Four states for the numbers, not two. A refusal is Cloudflare declining to
+  // answer, which is not the same as a deployment with no traffic, and the
+  // permission list `create-baseclf` prints does not include the one this needs,
+  // so a refusal is the expected outcome rather than a rare one.
+  assert.match(health, /kind: "said"/);
+  assert.match(health, /were not readable/i);
+  assert.match(health, /npx baseclf studio/);
+
+  // The numbers are labelled with the Worker they belong to. An unfiltered read
+  // would report every Worker on the account under one deployment's name.
+  assert.match(health, /scriptName/);
+  assert.match(health, /not for the whole account/i);
 
   // The fixture screen keeps its chart: disconnected Studio is still a demo.
   const fixture = studio.slice(studio.indexOf("function HealthScreen"), studio.indexOf("function StateGallery"));

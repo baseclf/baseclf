@@ -17,6 +17,8 @@ import {
   type SimulateResult,
   StudioClient,
   type TableDetail,
+  type UsageNumbers,
+  usageOnBridge,
 } from "../lib/api/studio";
 import { type DiagnoseReport, readDiagnose } from "../lib/api/deployment";
 import { formatCell } from "../lib/format";
@@ -1114,7 +1116,11 @@ function DataScreen({ screen, client, live, bridgeKey, onRefresh, onNotice, onOp
   // Health goes live on the client alone, like Auth: the diagnostic is public.
   // `live` may still be null when the /mcp reads failed, and the screen has to
   // tell that apart from a deployment with nothing wrong.
-  return client !== null ? <LiveHealthScreen origin={client.origin} live={live} onNotice={onNotice} /> : <HealthScreen />;
+  return client !== null ? (
+    <LiveHealthScreen origin={client.origin} live={live} bridgeKey={bridgeKey} onNotice={onNotice} />
+  ) : (
+    <HealthScreen />
+  );
 }
 
 /**
@@ -1704,9 +1710,34 @@ function StorageScreen({ onNotice }: { onNotice: (message: string) => void }) {
  * the interface version of failing open, and this project has already watched a
  * refused read draw "0 TABLES / LIVE" over a database that had tables.
  */
-function LiveHealthScreen({ origin, live, onNotice }: { origin: string; live: LiveState | null; onNotice: (message: string) => void }) {
+function LiveHealthScreen({ origin, live, bridgeKey, onNotice }: { origin: string; live: LiveState | null; bridgeKey: string; onNotice: (message: string) => void }) {
   const [state, setState] = useState<{ diagnose?: DiagnoseReport; error?: string } | null>(null);
   const [reading, setReading] = useState(false);
+  // Four states, and they are four different sentences: not asked for, being read,
+  // read, and declined by Cloudflare. Collapsing the last two would turn "your token
+  // cannot see this" into "there is nothing to see".
+  const [usage, setUsage] = useState<
+    { kind: "numbers"; numbers: UsageNumbers } | { kind: "said"; message: string } | null
+  >(null);
+  const [readingUsage, setReadingUsage] = useState(false);
+
+  const readUsage = async () => {
+    if (bridgeKey.trim() === "") {
+      onNotice("The numbers need the bridge. Run npx baseclf studio and paste its key in the Simulator.");
+      return;
+    }
+    setReadingUsage(true);
+    const answer = await usageOnBridge(bridgeKey.trim());
+    setReadingUsage(false);
+    if (answer.kind === "data") {
+      setUsage({ kind: "numbers", numbers: answer.data });
+      return;
+    }
+    // A refusal and a broken bridge both end up here as a sentence, because both
+    // are things the reader has to act on and neither is a number.
+    setUsage({ kind: "said", message: answer.message });
+    onNotice(answer.message);
+  };
 
   const read = async (announce: boolean) => {
     setReading(true);
@@ -1826,19 +1857,64 @@ function LiveHealthScreen({ origin, live, onNotice }: { origin: string; live: Li
           </section>
 
           <section className="full-panel">
-            <header><span>Usage numbers</span><span>not read here</span></header>
+            <header>
+              <span>Usage numbers</span>
+              <span>
+                {usage?.kind === "numbers"
+                  ? `${usage.numbers.since} to ${usage.numbers.until}`
+                  : "from your Cloudflare account"}
+              </span>
+            </header>
             <div className="editor-form">
-              <p>
-                Requests, errors, CPU time, and rows read and written are recorded by Cloudflare against
-                your account, not by this deployment. Reading them needs your Cloudflare credential, which
-                this page never holds; the local bridge does. Until that is wired, the honest answer is a
-                pointer rather than a chart.
-              </p>
-              <p>
-                Rows read is the one worth watching: D1 bills every row a query <em>scans</em>, not the rows
-                it returns, so an unindexed policy column is a recurring cost. The index findings above are
-                the part of that this deployment can see on its own.
-              </p>
+              {usage?.kind === "numbers" ? (
+                <>
+                  {/* The third line of each tile says something different, because
+                      it can. Repeating the Worker's name six times filled the space
+                      without telling anybody anything, which is what it looked like
+                      on screen. What belongs there is the reason the number matters:
+                      D1 bills rows scanned, an indexed write costs two, and the free
+                      plan's ceiling is what makes a CPU median worth reading. */}
+                  <div className="metric-grid">
+                    {([
+                      ["Requests", usage.numbers.requests.toLocaleString(), "over seven days"],
+                      ["Errors", usage.numbers.errors.toLocaleString(), "requests that did not finish"],
+                      ["Rows read", usage.numbers.rowsRead.toLocaleString(), "rows scanned, which is what D1 bills"],
+                      ["Rows written", usage.numbers.rowsWritten.toLocaleString(), "an indexed write costs two"],
+                      ["CPU median", usage.numbers.cpuP50 === null ? "no data" : `${(usage.numbers.cpuP50 / 1000).toFixed(1)} ms`, "the free plan allows 10 ms a request"],
+                      ["CPU 99th", usage.numbers.cpuP99 === null ? "no data" : `${(usage.numbers.cpuP99 / 1000).toFixed(1)} ms`, "the slowest one in a hundred"],
+                    ] as const).map(([label, value, note]) => (
+                      <article key={label}>
+                        <span>{label}</span>
+                        <strong>{value}</strong>
+                        <small>{note}</small>
+                      </article>
+                    ))}
+                  </div>
+                  <p>
+                    Cloudflare&apos;s own record for the Worker named{" "}
+                    <code>{usage.numbers.scriptName}</code>, not for the whole account. Rows read is the
+                    one worth watching: D1 bills every row a query <em>scans</em>, not the rows it
+                    returns, so an unindexed policy column is a recurring cost.
+                  </p>
+                </>
+              ) : usage?.kind === "said" ? (
+                <div className="warning-strip">
+                  <strong>The numbers were not readable</strong>
+                  <span>{usage.message}</span>
+                </div>
+              ) : (
+                <p>
+                  Requests, errors, CPU time, and rows read and written are recorded by Cloudflare
+                  against your account, not by this deployment. Reading them needs your Cloudflare
+                  credential, which this page never holds and the local bridge does. Run{" "}
+                  <code>npx baseclf studio</code>, paste its key in the Simulator, then read them here.
+                </p>
+              )}
+              <div className="panel-actions">
+                <button className="studio-secondary" type="button" disabled={readingUsage} onClick={() => void readUsage()}>
+                  {readingUsage ? "Reading…" : usage === null ? "Read usage numbers" : "Read again"}
+                </button>
+              </div>
             </div>
           </section>
         </>

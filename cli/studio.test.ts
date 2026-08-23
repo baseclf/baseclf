@@ -36,6 +36,7 @@ import {
   STUDIO_FIXED_TEXT,
   type StudioHost,
 } from './studio.js';
+import { ANALYTICS_PERMISSION, type UsageAnswer } from './usage.js';
 
 const KEY = 'bridge-key-under-test';
 
@@ -156,6 +157,27 @@ let applies = 0;
 let handler: BridgeHandler;
 let endpoint: D1Endpoint;
 
+/**
+ * What the account would say about usage, swapped per test.
+ *
+ * A refusal is the interesting one and is not an error case: the permission list the
+ * CLI prints does not include `Account · Account Analytics · Read`, so a token built
+ * from it is expected to land here.
+ */
+const SOME_NUMBERS = {
+  requests: 420,
+  errors: 0,
+  cpuP50: 18_995,
+  cpuP99: 45_577,
+  rowsRead: 22,
+  rowsWritten: 18,
+  since: '2026-08-16',
+  until: '2026-08-23',
+  scriptName: 'baseclf',
+} as const;
+
+let usageAnswer: UsageAnswer = { kind: 'numbers', numbers: SOME_NUMBERS };
+
 beforeAll(async () => {
   await seedDatabase(env.DB);
   await registerPolicies(env.DB, { table: 'posts', binds: POST_BINDS, policies: POST_POLICIES });
@@ -183,6 +205,9 @@ beforeAll(async () => {
       );
       return { outcome, lines };
     },
+    // Whatever the last `usageAnswer` was set to. The bridge asks per request, so a
+    // test can move it between the two outcomes without rebuilding the handler.
+    readUsage: () => Promise.resolve(usageAnswer),
     log: () => {},
   });
 });
@@ -404,6 +429,7 @@ describe('a fresh deployment, which has no engine tables yet', () => {
       openExecutor: () => env.DB,
       readDocument: (table) => readStoredDocument(endpoint, table),
       applyDocument: () => Promise.resolve({ outcome: 'ok' as const, lines: [] }),
+      readUsage: () => Promise.resolve(usageAnswer),
       log: (line) => lines.push(line),
     });
   }
@@ -827,5 +853,77 @@ describe('the preflight and the routes agree', () => {
       expect(advertised).toContain(method);
     }
     expect(BRIDGE_METHODS).toContain('PATCH');
+  });
+});
+
+describe('the usage numbers, which come from the account rather than the deployment', () => {
+  interface UsageBody {
+    numbers?: { requests?: number; rowsRead?: number; scriptName?: string };
+    refused?: string;
+    permission?: string;
+    error?: string;
+  }
+
+  async function usage(key = KEY): Promise<{ status: number; body: UsageBody }> {
+    const response = await handler(get('/usage', '', key));
+    return { status: response.status, body: JSON.parse(response.body) as UsageBody };
+  }
+
+  beforeEach(() => {
+    usageAnswer = { kind: 'numbers', numbers: SOME_NUMBERS };
+  });
+
+  it('hands back what the account reported, named for the one deployment it is about', async () => {
+    const answer = await usage();
+
+    expect(answer.status).toBe(200);
+    expect(answer.body.numbers?.requests).toBe(SOME_NUMBERS.requests);
+    expect(answer.body.numbers?.rowsRead).toBe(SOME_NUMBERS.rowsRead);
+    // The script name travels with the numbers so a page cannot show them beside
+    // some other deployment's name. An unfiltered read would be the whole account.
+    expect(answer.body.numbers?.scriptName).toBe('baseclf');
+    expect(answer.body.refused).toBeUndefined();
+  });
+
+  it('answers a refusal as an answer, and names the permission it needs', async () => {
+    usageAnswer = {
+      kind: 'refused',
+      message: 'not entitled to query this dataset',
+      permission: ANALYTICS_PERMISSION,
+    };
+
+    const answer = await usage();
+
+    // 200 on purpose. The caller did nothing wrong, and a 403 here would read as
+    // the bridge rejecting the request rather than the account declining to say,
+    // which sends the reader after a different problem entirely.
+    expect(answer.status).toBe(200);
+    expect(answer.body.refused).toBe('not entitled to query this dataset');
+    // The whole point of the branch: the reader is told what to grant. The
+    // permission list this CLI prints does not include it, so this is the
+    // expected outcome for somebody who followed those instructions exactly.
+    expect(answer.body.permission).toBe('Account · Account Analytics · Read');
+    expect(answer.body.numbers).toBeUndefined();
+  });
+
+  it('never reaches the account without a key that matches', async () => {
+    let asked = 0;
+    const counted = createBridge({
+      key: KEY,
+      openExecutor: () => allOnly(env.DB),
+      readDocument: () => Promise.resolve(null),
+      applyDocument: () => Promise.resolve({ outcome: 'ok' as const, lines: [] }),
+      readUsage: () => {
+        asked += 1;
+        return Promise.resolve(usageAnswer);
+      },
+      log: () => {},
+    });
+
+    const refused = await counted(get('/usage', '', 'not-the-key'));
+
+    expect(refused.status).toBe(401);
+    // The credential is what this route spends, so the gate has to come first.
+    expect(asked).toBe(0);
   });
 });
