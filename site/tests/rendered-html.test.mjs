@@ -415,6 +415,24 @@ test("Health reports what the deployment can check and declines the rest", async
   assert.match(health, /scriptName/);
   assert.match(health, /not for the whole account/i);
 
+  // An error count that is not split by kind puts two unrelated situations under
+  // one number: code that threw, and a request the platform stopped. Whoever
+  // reads this does different work for each, so the screen names both.
+  assert.match(health, /exceededResources/);
+  assert.match(health, /scriptThrewException/);
+
+  // 🔴 Absent and empty again, the same distinction this file already pins for
+  // warnings, on a field that arrives from a separately released bridge. An older
+  // bridge sends no kinds at all, and treating that as "nothing failed" would
+  // report a clean split for a read that never happened.
+  assert.match(health, /failures === undefined/);
+  assert.match(health, /failures !== undefined && usage\.numbers\.failures\.length > 0/);
+
+  // Measured 2026-08-25: the dataset samples, and driving a known number of
+  // requests came back both low and high. A screen printing an exact figure
+  // beside the word "requests" is presenting an estimate as a count.
+  assert.match(health, /sampled rather than counted/i);
+
   // The fixture screen keeps its chart: disconnected Studio is still a demo.
   const fixture = studio.slice(studio.indexOf("function HealthScreen"), studio.indexOf("function StateGallery"));
   assert.match(fixture, /mock-chart/);

@@ -172,6 +172,10 @@ const SOME_NUMBERS = {
   cpuP99: 45_577,
   rowsRead: 22,
   rowsWritten: 18,
+  // Empty rather than absent, and the difference carries meaning downstream: the
+  // Studio says "nothing failed" for an empty list and "this bridge cannot tell
+  // you what kind" when the field is missing altogether.
+  failures: [],
   since: '2026-08-16',
   until: '2026-08-23',
   scriptName: 'baseclf',

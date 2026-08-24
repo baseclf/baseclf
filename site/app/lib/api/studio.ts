@@ -530,6 +530,18 @@ export async function editOnBridge(
   return { kind: "error", message: body.error ?? `The bridge answered ${response.status}.` };
 }
 
+/**
+ * One kind of ending, and how many requests ended that way.
+ *
+ * Mirrors `UsageOutcome` in `cli/usage.ts`, which is where the reasoning lives.
+ * The short version: `errors` alone puts "your code threw" and "the platform
+ * killed this request" under one number, and those are different afternoons.
+ */
+export interface UsageOutcome {
+  readonly status: string;
+  readonly requests: number;
+}
+
 /** What Cloudflare recorded against the account for this one deployment. */
 export interface UsageNumbers {
   readonly requests: number;
@@ -539,6 +551,16 @@ export interface UsageNumbers {
   readonly cpuP99: number | null;
   readonly rowsRead: number;
   readonly rowsWritten: number;
+  /**
+   * Every ending other than success, largest first.
+   *
+   * Optional because a bridge from an older release does not send it, and this
+   * page is served separately from the CLI people run. Absent means "this bridge
+   * does not report kinds", which the screen has to say differently from "nothing
+   * failed" — the same distinction the rest of this file keeps between a refusal
+   * and an empty answer.
+   */
+  readonly failures?: readonly UsageOutcome[];
   readonly since: string;
   readonly until: string;
   readonly scriptName: string;

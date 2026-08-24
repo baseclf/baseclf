@@ -2057,7 +2057,7 @@ function LiveHealthScreen({ origin, live, bridgeKey, onNotice }: { origin: strin
                   <div className="metric-grid">
                     {([
                       ["Requests", usage.numbers.requests.toLocaleString(), "over seven days"],
-                      ["Errors", usage.numbers.errors.toLocaleString(), "requests that did not finish"],
+                      ["Errors", usage.numbers.errors.toLocaleString(), usage.numbers.errors === 0 ? "requests that did not finish" : "split by kind below"],
                       ["Rows read", usage.numbers.rowsRead.toLocaleString(), "rows scanned, which is what D1 bills"],
                       ["Rows written", usage.numbers.rowsWritten.toLocaleString(), "an indexed write costs two"],
                       ["CPU median", usage.numbers.cpuP50 === null ? "no data" : `${(usage.numbers.cpuP50 / 1000).toFixed(1)} ms`, "the free plan allows 10 ms a request"],
@@ -2070,11 +2070,65 @@ function LiveHealthScreen({ origin, live, bridgeKey, onNotice }: { origin: strin
                       </article>
                     ))}
                   </div>
+                  {/* The kinds behind the error count, when the bridge reports
+                      them. "Errors" alone puts two unrelated situations under one
+                      number: code that threw, and a request the platform killed
+                      for resources. Those need different work from whoever reads
+                      this, and the count cannot be acted on until it is split.
+                      Measured vocabulary so far: scriptThrewException,
+                      exceededResources (rules/02 sections A0e and A0g). */}
+                  {/* Absent is not the same as empty. A bridge from before this
+                      existed sends no kinds at all, and drawing nothing there
+                      would tell somebody with a non-zero error count that there
+                      was nothing to see. */}
+                  {usage.numbers.failures === undefined && usage.numbers.errors > 0 && (
+                    <div className="warning-strip">
+                      <strong>What kind of errors is not readable here</strong>
+                      <span>
+                        This bridge does not report how requests ended, so the count above cannot be
+                        split into code that threw and requests the platform stopped. Update{" "}
+                        <code>npx baseclf studio</code>, or read them with <code>wrangler tail</code>.
+                      </span>
+                    </div>
+                  )}
+
+                  {usage.numbers.failures !== undefined && usage.numbers.failures.length > 0 && (
+                    <div className="issue-list">
+                      {usage.numbers.failures.map((failure) => (
+                        <div key={failure.status}>
+                          <span className="state-label blocked">{failure.requests.toLocaleString()}</span>
+                          <p>
+                            <strong>{failure.status}</strong>
+                            <small>
+                              {failure.status === "exceededResources"
+                                ? "The platform stopped these requests for using too much CPU or memory. Not a bug in the handler."
+                                : failure.status === "scriptThrewException"
+                                  ? "The code threw. These are in the deployment's own logs: wrangler tail."
+                                  : "Cloudflare's own word for how these ended."}
+                            </small>
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
                   <p>
                     Cloudflare&apos;s own record for the Worker named{" "}
                     <code>{usage.numbers.scriptName}</code>, not for the whole account. Rows read is the
                     one worth watching: D1 bills every row a query <em>scans</em>, not the rows it
                     returns, so an unindexed policy column is a recurring cost.
+                  </p>
+
+                  {/* 🔴 Said plainly, because the alternative is a screen that
+                      presents an estimate as a count. Measured 2026-08-25: 31
+                      requests driven at a deployment were reported as 15, and 40
+                      as 60. Error in both directions, so this is sampling rather
+                      than a window landing badly (rules/02 section A0h). */}
+                  <p>
+                    These are sampled rather than counted. Driving a known number of requests at a
+                    deployment and reading them back has come out both low and high, by around half
+                    either way on small windows, so read them as approximate. Trends and comparisons
+                    hold; the last digit does not.
                   </p>
                 </>
               ) : usage?.kind === "said" ? (

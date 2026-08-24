@@ -25,14 +25,15 @@ import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 
-// Raised twice on 2026-08-24: from 70 to 78 with the two suites under `scripts/lib/`,
-// then to 79 with `cli/storage.test.ts`.
+// Raised three times: from 70 to 78 on 2026-08-24 with the two suites under
+// `scripts/lib/`, then to 79 with `cli/storage.test.ts`, then to 80 on 2026-08-25
+// with `cli/usage.test.ts`.
 //
 // The `scripts/lib/` pair is the reason the number matters. They are collected by
 // vitest's default `include` rather than by anything naming them, so nothing but this
 // floor would notice them silently ceasing to be collected, and a floor eight below
 // the real count has that much room to hide it.
-const TEST_FILE_FLOOR = 79;
+const TEST_FILE_FLOOR = 80;
 const REPORT = join('.vitest', 'floor-report.json');
 
 const require = createRequire(import.meta.url);

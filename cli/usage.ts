@@ -18,6 +18,19 @@
  *   `REQUIRED_TOKEN_PERMISSIONS` does **not** ask for. A token built from the list
  *   the CLI prints may well be refused here, which is why a refusal is a first-class
  *   answer below rather than an exception.
+ *
+ * ## ⚠️ These numbers are ESTIMATES, and the page has to say so
+ *
+ * Measured 2026-08-25 (`rules/02` section A0h): the dataset samples. Thirty-one
+ * requests driven at a deployment came back as fifteen, and forty came back as
+ * sixty. Error in **both** directions, so it is not a window landing badly; the
+ * name says as much, and the schema carries a `confidence` field to go with it.
+ *
+ * Nothing qualitative is at risk here, but a screen that prints `15,041` beside
+ * the word "requests" is presenting an estimate as a count. Same family as
+ * `num_tables` (`rules/01` section G12) and `file_size` (section G20): the
+ * platform hands back figures of very different reliability in one response,
+ * and nothing on the surface distinguishes them.
  */
 
 import { API_BASE, type D1Credentials, type Fetcher } from './d1-api.js';
@@ -33,6 +46,24 @@ const TIMEOUT_MS = 20_000;
 /** How far back to look. Cloudflare keeps this dataset for far longer. */
 const WINDOW_DAYS = 7;
 
+/**
+ * One kind of ending, and how many requests ended that way.
+ *
+ * `errors` on its own is a count of requests that did not finish, and it puts two
+ * unrelated situations under one number: code that threw, and a request the
+ * platform killed. Those need different work from whoever reads them, so the
+ * kinds are carried separately.
+ *
+ * Measured 2026-08-25 (`rules/02` section A0e and A0g): the vocabulary seen so
+ * far is `success`, `scriptThrewException` and `exceededResources`. It is not a
+ * closed set, so nothing here interprets the string; it is shown as Cloudflare
+ * wrote it.
+ */
+export interface UsageOutcome {
+  readonly status: string;
+  readonly requests: number;
+}
+
 export interface UsageNumbers {
   readonly requests: number;
   readonly errors: number;
@@ -41,6 +72,11 @@ export interface UsageNumbers {
   readonly cpuP99: number | null;
   readonly rowsRead: number;
   readonly rowsWritten: number;
+  /**
+   * Every ending other than `success`, largest first. Empty when nothing failed,
+   * which is different from not having been read: a refusal is a `refused` answer.
+   */
+  readonly failures: readonly UsageOutcome[];
   readonly since: string;
   readonly until: string;
   /** Which Worker and which database these are about, so the page can say so. */
@@ -126,6 +162,30 @@ const INVOCATIONS = `
     }
   }`;
 
+/**
+ * The same window, grouped by how each request ended.
+ *
+ * ⚠️ A separate query rather than a `dimensions` block on the one above, and the
+ * reason is not tidiness: grouping makes the dataset return one row per status,
+ * and the quantiles above are only meaningful while exactly one row comes back.
+ * Adding the dimension there would have quietly turned a median into a median of
+ * medians, which is a median of nothing.
+ */
+const OUTCOMES = `
+  query Outcomes($accountTag: String!, $since: Date!, $until: Date!, $scriptName: String!) {
+    viewer {
+      accounts(filter: { accountTag: $accountTag }) {
+        workersInvocationsAdaptive(
+          limit: 100
+          filter: { date_geq: $since, date_leq: $until, scriptName: $scriptName }
+        ) {
+          sum { requests }
+          dimensions { status }
+        }
+      }
+    }
+  }`;
+
 const D1_ROWS = `
   query D1Rows($accountTag: String!, $since: Date!, $until: Date!, $databaseId: String!) {
     viewer {
@@ -171,8 +231,12 @@ export async function readUsage(options: {
   // needs the other's answer, so running them in sequence doubled the worst case
   // for no reason: two twenty-second ceilings became forty seconds of a button
   // that said "Reading…" and nothing else. Seen on a real deployment.
-  const [invocations, d1] = await Promise.all([
+  const [invocations, outcomes, d1] = await Promise.all([
     ask(options.fetcher, options.credentials, INVOCATIONS, {
+      ...base,
+      scriptName: options.scriptName,
+    }),
+    ask(options.fetcher, options.credentials, OUTCOMES, {
       ...base,
       scriptName: options.scriptName,
     }),
@@ -187,6 +251,9 @@ export async function readUsage(options: {
   // depending on which query lost the race.
   if ('refused' in invocations) {
     return { kind: 'refused', message: invocations.refused, permission: ANALYTICS_PERMISSION };
+  }
+  if ('refused' in outcomes) {
+    return { kind: 'refused', message: outcomes.refused, permission: ANALYTICS_PERMISSION };
   }
   if ('refused' in d1) {
     return { kind: 'refused', message: d1.refused, permission: ANALYTICS_PERMISSION };
@@ -209,9 +276,35 @@ export async function readUsage(options: {
       cpuP99: micros('cpuTimeP99'),
       rowsRead: sumOf(d1.rows, 'rowsRead'),
       rowsWritten: sumOf(d1.rows, 'rowsWritten'),
+      failures: failuresIn(outcomes.rows),
       since,
       until,
       scriptName: options.scriptName,
     },
   };
+}
+
+/**
+ * Everything that did not end in success, largest first.
+ *
+ * Nothing here decides what a status means. `success` is the one string this
+ * filters on, because it is the one whose meaning is not in doubt, and every
+ * other value is passed through as Cloudflare wrote it. A status nobody has seen
+ * before therefore reaches the screen as itself rather than being dropped for
+ * not matching a list.
+ */
+function failuresIn(rows: readonly Record<string, unknown>[]): readonly UsageOutcome[] {
+  const failures: UsageOutcome[] = [];
+
+  for (const row of rows) {
+    const dimensions = row.dimensions as Record<string, unknown> | undefined;
+    const status = dimensions?.status;
+    if (typeof status !== 'string' || status === 'success') continue;
+
+    const sum = row.sum as Record<string, unknown> | undefined;
+    const requests = sum?.requests;
+    failures.push({ status, requests: typeof requests === 'number' ? requests : 0 });
+  }
+
+  return failures.sort((left, right) => right.requests - left.requests);
 }
