@@ -71,8 +71,11 @@ const QUERY = `
     }
   }`;
 
+// Minutes to look back, so the same script can answer "what did my burst do"
+// and "what happens here when nobody is driving it".
+const LOOKBACK_MINUTES = Number(process.argv[2] ?? '45');
 const until = Date.now();
-const since = until - 45 * 60 * 1000;
+const since = until - LOOKBACK_MINUTES * 60 * 1000;
 
 const response = await fetch(GRAPHQL, {
   method: 'POST',
@@ -101,7 +104,7 @@ if (errors.length > 0) {
 
 const rows = body.data?.viewer?.accounts?.[0]?.workersInvocationsAdaptive ?? [];
 
-console.log(`the last 45 minutes for this script, one line per row returned:\n`);
+console.log(`the last ${LOOKBACK_MINUTES} minutes for this script, one line per row returned:\n`);
 
 if (rows.length === 0) {
   console.log('  no rows at all, so the window itself found nothing.');

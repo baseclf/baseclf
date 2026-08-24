@@ -87,7 +87,14 @@ for (const name of scripts) {
 
   const crons = schedules.body.result?.schedules ?? [];
   total += crons.length;
-  console.log(`  ${name.padEnd(20)} ${crons.length} cron trigger(s)`);
+  // The schedule itself, not just the count. A cron is traffic, and traffic
+  // this project did not send has twice been mistaken for traffic it did:
+  // rules/02 section A0d read an hourly cron invocation as a cold HTTP
+  // request and recorded its cost as one.
+  const when = crons.map((entry) => entry.cron).join(', ');
+  console.log(
+    `  ${name.padEnd(20)} ${crons.length} cron trigger(s)${when === '' ? '' : `  [${when}]`}`,
+  );
 }
 
 console.log('');
