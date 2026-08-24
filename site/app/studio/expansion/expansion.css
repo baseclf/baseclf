@@ -11,7 +11,7 @@
 .expansion-sidebar nav a.is-current { font-weight: 620; }
 .expansion-sidebar nav a::before { content:""; position:absolute; left:2px; width:3px; height:16px; border-radius:8px; background:var(--rgb-signal); opacity:0; transform:scaleY(.2); transition:opacity var(--motion-base) ease,transform var(--motion-base) var(--ease-spring); }.expansion-sidebar nav a.is-current::before { opacity:1; transform:scaleY(1); }
 .expansion-sidebar nav i { width: 23px; color: #8a919c; font: 8px var(--font-geist-mono); font-style: normal; }
-.expansion-project { margin:0 3px 5px; padding:11px; display:grid; grid-template-columns:1fr auto; gap:8px; border:1px solid var(--line); border-radius:8px; background:color-mix(in srgb,var(--canvas) 72%,var(--paper)); }.expansion-project span small,.expansion-project span strong { display:block; }.expansion-project small { color:var(--ink-soft); font:8px var(--font-geist-mono); text-transform:uppercase; }.expansion-project strong { margin-top:4px; font-size:11px; }.expansion-project > b { align-self:end; color:var(--ink-soft); font:8px var(--font-geist-mono); font-weight:400; }.expansion-project > i { grid-column:1/-1; height:4px; overflow:hidden; border-radius:4px; background:color-mix(in srgb,var(--ink) 9%,transparent); }.expansion-project > i span { width:75%; height:100%; display:block; border-radius:inherit; background:var(--rgb-signal); }
+.expansion-project { margin:0 3px 5px; padding:11px; display:grid; grid-template-columns:1fr auto; gap:8px; border:1px solid var(--line); border-radius:8px; background:color-mix(in srgb,var(--canvas) 72%,var(--paper)); }.expansion-project span small,.expansion-project span strong { display:block; }.expansion-project small { color:var(--ink-soft); font:8px var(--font-geist-mono); text-transform:uppercase; }.expansion-project strong { margin-top:4px; font-size:11px; overflow-wrap:anywhere; }.expansion-project > b { align-self:end; color:var(--ink-soft); font:8px var(--font-geist-mono); font-weight:400; }.expansion-project > i { grid-column:1/-1; height:4px; overflow:hidden; border-radius:4px; background:color-mix(in srgb,var(--ink) 9%,transparent); }.expansion-project > i span { width:75%; height:100%; display:block; border-radius:inherit; background:var(--rgb-signal); }
 .expansion-account { margin-top: auto; padding: 11px; display: flex; align-items: center; gap: 10px; border: 1px solid var(--line); border-radius: 4px; }
 .expansion-account > span { width: 29px; height: 29px; display: grid; place-items: center; border-radius: 50%; background: var(--ink); color: var(--paper); font-size: 9px; }
 .expansion-account p, .expansion-account strong, .expansion-account small { margin: 0; display: block; }
@@ -19,7 +19,14 @@
 .expansion-workspace { position:relative; isolation:isolate; min-width: 0; min-height: 100vh; display: grid; grid-template-rows: auto 1fr auto; }
 .expansion-ambient { position:absolute; z-index:-1; top:-160px; right:-120px; width:520px; height:360px; border-radius:50%; background:radial-gradient(circle,rgba(255,89,39,.09),rgba(103,71,255,.045) 42%,transparent 72%); filter:blur(28px); pointer-events:none; animation:ambient-drift 18s ease-in-out infinite alternate; }
 .expansion-header { min-height: 76px; padding: 13px 22px; display: flex; align-items: center; gap: 18px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--paper) 92%, transparent); }
-.expansion-header > div:first-of-type > span { color: var(--ink-soft); font: 8px var(--font-geist-mono); letter-spacing: .08em; text-transform: uppercase; }
+/* The eyebrow is `live / <hostname>` (ApiExplorerApp), and a hostname breaks at a
+   hyphen but never at a dot, so a host without hyphens is one atomic word that this
+   flex item cannot shrink below. Measured at 375px with a 65 character hyphen-free
+   host: the theme toggle was pushed to x=619 and could not be clicked, and the page
+   does not scroll horizontally. Same defect and same one line as
+   `.studio-header .machine-label`; the sibling shell was missed when that one and
+   `.studio-project strong` were fixed. */
+.expansion-header > div:first-of-type > span { color: var(--ink-soft); font: 8px var(--font-geist-mono); letter-spacing: .08em; text-transform: uppercase; overflow-wrap: anywhere; }
 .expansion-header h1 { margin: 5px 0 0; font-size: 19px; font-weight: 590; letter-spacing: -.03em; }
 .expansion-header > div:last-child { margin-left: auto; display: flex; align-items: center; gap: 8px; }
 .expansion-header > div:last-child > a, .expansion-menu { min-height: 38px; padding: 0 12px; display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 3px; background: var(--paper); color: var(--ink); font-size: 11px; }

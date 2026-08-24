@@ -29,6 +29,15 @@
 .studio-ambient { position:absolute; z-index:-1; top:-150px; right:-120px; width:520px; height:360px; border-radius:50%; background:radial-gradient(circle,rgba(255,89,39,.08),rgba(103,71,255,.04) 42%,transparent 72%); filter:blur(28px); pointer-events:none; animation:ambient-drift 18s ease-in-out infinite alternate; }
 .studio-header { min-height: 76px; padding: 14px 22px; display: flex; align-items: center; gap: 20px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--paper) 92%, transparent); }
 .studio-header h1 { margin: 4px 0 0; font-size: 20px; font-weight: 590; letter-spacing: -.03em; }
+/* The same treatment `.studio-project strong` got, on the surface that did not get
+   it. This label reads `live / <hostname>`, and a hostname breaks at a hyphen but
+   never at a dot, so a host without hyphens is one atomic word. A flex item cannot
+   shrink below its longest word, and this row has no wrap and no horizontal scroll,
+   so the actions were pushed off the viewport and Disconnect could not be clicked:
+   at 375px a 65 character hyphen-free host put the button at x=609. Hyphenated hosts
+   hid it, which is why it survived several rounds of measurement. Measured both ways
+   here: short and hyphenated labels are unchanged to the pixel. */
+.studio-header .machine-label { overflow-wrap: anywhere; }
 .studio-header-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
 .mock-badge { padding: 6px 8px; border: 1px solid rgba(145,104,0,.34); border-radius: 2px; color: #916800; background: rgba(145,104,0,.06); font-family: var(--font-geist-mono); font-size: 9px; text-transform: uppercase; }
 :root[data-theme="dark"] .mock-badge { color: #e5be4e; border-color: rgba(229,190,78,.36); }
