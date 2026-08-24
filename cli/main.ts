@@ -30,6 +30,7 @@ import {
   SECRET_USAGE,
   type SecretOutcome,
 } from './secret.js';
+import { runStorage, STORAGE_FIXED_TEXT } from './storage.js';
 import { runStudio, STUDIO_FIXED_TEXT, type StudioHost } from './studio.js';
 import { runUser, USER_FIXED_TEXT } from './user.js';
 
@@ -68,6 +69,7 @@ const USAGE = [
   '  login              Log in to Cloudflare, and say which account you landed on',
   '  create             Create the resources and deploy the engine to your account',
   '  policy <verb>      Expose a table, list what is exposed, or stop exposing one',
+  '  storage <verb>     Register a bucket rule set, list them, or stop serving one',
   '  user set-app       Store server-set claims for one user, readable as $auth.app.*',
   '  studio             Start the local result bridge for the Studio simulator',
   '  doctor <url>       Ask a deployment what is wrong with it, and what to do about it',
@@ -153,6 +155,16 @@ export async function main(
     return OUTCOME_EXIT[await runPolicy(rest, write, style, policyHost)];
   }
 
+  // The same host as `policy`, and for the same reason: a file, a credential, and
+  // the deployment's database over the REST API. Nothing about storage needs more.
+  if (command === 'storage') {
+    if (policyHost === undefined) {
+      write('baseclf storage needs a runtime that can reach the network and read files.');
+      return EXIT.usage;
+    }
+    return OUTCOME_EXIT[await runStorage(rest, write, style, policyHost)];
+  }
+
   if (command === 'studio') {
     if (studioHost === undefined) {
       write('baseclf studio needs a runtime that can reach the network and bind a port.');
@@ -236,6 +248,7 @@ export const FIXED_TEXT: readonly string[] = Object.freeze([
   ...CREATE_FIXED_TEXT,
   ...LOGIN_FIXED_TEXT,
   ...POLICY_FIXED_TEXT,
+  ...STORAGE_FIXED_TEXT,
   ...USER_FIXED_TEXT,
   ...STUDIO_FIXED_TEXT,
 ]);
