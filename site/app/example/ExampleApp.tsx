@@ -92,6 +92,11 @@ export default function ExampleApp() {
       sessionStorage.removeItem(RETURNING);
     } else if (sessionStorage.getItem(RETURNING) === "1") {
       sessionStorage.removeItem(RETURNING);
+      // Read from outside React, so there is nothing to compute during render: the
+      // fact being recorded is that a round trip came back with no session in the
+      // fragment, which only the fragment and sessionStorage can say. The rule is
+      // aimed at state derived from props, and this is not that.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setStranded(true);
     }
     void refresh();

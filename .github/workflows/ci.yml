@@ -73,6 +73,15 @@ jobs:
       - run: npm ci
         working-directory: site
 
+      # Lint ran nowhere until this step existed, so two errors sat in the tree for
+      # days: one the handover called deliberate without saying so anywhere the
+      # linter could read, and one that arrived with the row editor and was never
+      # declared at all. Both now carry their reason in the file, which is the thing
+      # a suppression is for.
+      - name: Lint
+        run: npm run lint
+        working-directory: site
+
       # `npm test` there is a production build plus the rendered-HTML contract
       # tests, so what CI checks is what deploys rather than only what compiles.
       - name: Build and contract tests

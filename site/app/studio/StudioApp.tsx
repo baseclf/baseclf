@@ -1483,6 +1483,13 @@ function LiveTablesScreen({ client, live, bridgeKey, onRefresh, onNotice }: { cl
                               if (open) {
                                 return <td key={name} className="cell-editing">
                                   <input
+                                    // The rule is about focus taken from somebody who did not
+                                    // ask for it. This input exists only because they clicked
+                                    // the cell, and it unmounts when the edit ends, so not
+                                    // focusing it would leave the caret on the cell behind a
+                                    // box that is open and waiting. For a keyboard or screen
+                                    // reader user that is the worse of the two.
+                                    // eslint-disable-next-line jsx-a11y/no-autofocus
                                     autoFocus
                                     value={editing.draft}
                                     aria-label={`New value for ${name}`}
