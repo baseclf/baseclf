@@ -803,3 +803,84 @@ describe('choosing the account, which used to ignore the variable it recommended
     expect(h.lines.join('\n')).toMatch(/more than one account/i);
   });
 });
+
+/**
+ * Which credential the run uses, and what it insists on before deciding.
+ *
+ * 🔴 The refresh dance ran before the token was ever looked at, so a command could
+ * refuse over a stale wrangler login while a working API token sat one branch away.
+ * Found by pointing the studio bridge at a second account: `wrangler whoami` exits 1
+ * under a token scoped to one account, because listing accounts is a permission such
+ * a token has no reason to hold, and that turned into "run npx wrangler login" —
+ * advice that would not have helped, since the token wins afterwards regardless.
+ */
+describe('reaching for the login only when the login is what will be used', () => {
+  const NOW_AT = new Date('2026-08-12T00:30:00.000Z');
+
+  function sourceWith(options: {
+    readonly env?: Record<string, string | undefined>;
+    readonly envFile?: string;
+    readonly authFileText?: string | undefined;
+  }) {
+    const lines: string[] = [];
+    let refreshes = 0;
+
+    return {
+      lines,
+      refreshes: () => refreshes,
+      write: (text: string) => lines.push(text),
+      source: {
+        fetcher: (async () =>
+          new Response(JSON.stringify({ success: true, result: [{ id: 'a', name: 'Only' }] }), {
+            status: 200,
+          })) as unknown as CreateHost['fetcher'],
+        // Exactly what a narrow token produces: wrangler cannot answer, so the host
+        // reports null. Counting the calls is how "did not even ask" is asserted.
+        refreshLogin: async () => {
+          refreshes += 1;
+          return null;
+        },
+        readAuthFile: () => options.authFileText,
+        paths: {
+          platform: 'linux' as const,
+          home: '/home/reader',
+          env: options.env ?? {},
+          isDirectory: () => true,
+        },
+        envFile: options.envFile,
+        now: () => NOW_AT,
+      },
+    };
+  }
+
+  it('uses the token from the environment without asking wrangler anything', async () => {
+    // No wrangler login on this machine at all, which is the API-token workflow the
+    // .env.example documents at length.
+    const h = sourceWith({ env: { CLOUDFLARE_API_TOKEN: 'api-token-fixture-a' } });
+
+    const resolved = await resolveAccountCredential(h.source, h.write, PLAIN);
+
+    expect(resolved?.credentials.token).toBe('api-token-fixture-a');
+    expect(h.refreshes()).toBe(0);
+    expect(h.lines.join('\n')).not.toMatch(/wrangler login/);
+  });
+
+  it('uses the token from .env the same way', async () => {
+    const h = sourceWith({ envFile: 'CLOUDFLARE_API_TOKEN=api-token-fixture-b\n' });
+
+    expect((await resolveAccountCredential(h.source, h.write, PLAIN))?.credentials.token).toBe(
+      'api-token-fixture-b',
+    );
+    expect(h.refreshes()).toBe(0);
+  });
+
+  it('still sends somebody with no token at all to the login', async () => {
+    // The case the refresh was written for, and it has to keep working: no token
+    // anywhere, no usable login, and wrangler cannot be run to fix it.
+    const h = sourceWith({});
+
+    expect(await resolveAccountCredential(h.source, h.write, PLAIN)).toBeNull();
+    expect(h.refreshes()).toBe(1);
+    expect(h.lines.join('\n')).toMatch(/wrangler login/);
+  });
+});

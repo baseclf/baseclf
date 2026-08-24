@@ -158,10 +158,25 @@ async function resolveCredential(
   // it was written for, which is a token that has aged out of its hour.
   let oauth = readOAuthCredential(host.readAuthFile(derived), host.now(), derived);
 
+  // 🔴 And the refresh only runs when the login is the credential that would be
+  // used. `chooseCredential` gives an API token absolute precedence, so when one is
+  // set the login is decoration: it contributes a warning line and nothing else.
+  //
+  // Without this test the whole command depended on `wrangler whoami` succeeding
+  // even for somebody who never logs in. Measured: with a token scoped to one
+  // account, whoami exits 1 with "Failed to automatically retrieve account IDs",
+  // because listing accounts is a permission a narrow token has no reason to hold.
+  // That made `refreshLogin` answer null, and the refusal below told the reader to
+  // run `wrangler login` while a perfectly good token sat one branch away, unread.
+  // Logging in would not even have helped: the token wins afterwards regardless.
+  const hasApiToken =
+    (host.paths.env.CLOUDFLARE_API_TOKEN ?? '').trim() !== '' ||
+    readEnvFileToken(host.envFile) !== undefined;
+
   // Refreshed when it has expired, and also when it is close, because a run can take
   // minutes. The difference is what happens when the refresh does not help: an
   // expired token is a refusal, a close one carries on. See the note below.
-  if (!oauth.ok || oauth.expiringSoon) {
+  if (!hasApiToken && (!oauth.ok || oauth.expiringSoon)) {
     const whoami = await host.refreshLogin();
 
     if (whoami === null && oauth.ok) {

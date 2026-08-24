@@ -31,11 +31,35 @@
  *   node scripts/studio-audit-creds.mjs [port]
  */
 
+import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 
-const PORT = Number(process.argv[2] ?? 4555);
-const LIFETIME_MS = 120_000;
+const PORT = Number(process.argv.find((entry) => /^\d+$/.test(entry)) ?? 4555);
+/**
+ * Also start the bridge and hand its key over with the rest.
+ *
+ * The bridge prints a fresh key every run, so pasting it means the key travels
+ * through a tool call the same way the deployment token would have. Starting the
+ * bridge from in here keeps the whole session inside one process: the key is read
+ * from the child's output and served, and nothing has to be quoted anywhere.
+ */
+const withBridge = process.argv.includes('--with-bridge');
+
+/**
+ * How long this stays up, and why the two cases differ.
+ *
+ * Without a bridge there is nothing to hold open: the handover is the whole job and
+ * two minutes is a generous window for one fetch.
+ *
+ * 🔴 With a bridge, two minutes is wrong, and it looked exactly like a product bug
+ * while it was. An audit ran the simulator, got real rows back, and a minute later
+ * the same run answered with the "paste your key" placeholder. The key was still in
+ * the box and the deployment was still up; the bridge had been killed by the timer
+ * below. Time spent looking for a fault in the Studio, and the fault was in the tool
+ * measuring it.
+ */
+const LIFETIME_MS = withBridge ? 45 * 60_000 : 120_000;
 const ALLOWED_ORIGINS = ['http://localhost:3000', 'http://127.0.0.1:3000'];
 
 function fromEnvFile(name) {
@@ -65,6 +89,60 @@ if (missing.length > 0) {
 }
 
 let served = false;
+let bridgeKey = '';
+let bridge = null;
+
+/**
+ * Start `baseclf studio` against the probe deployment and wait for its key.
+ *
+ * The probe credential goes into this child's environment and nowhere else, which
+ * is `AGENTS.md` section 2e rule 3: the two accounts keep their own credentials,
+ * and the CLI announces the substitution rather than taking it silently.
+ */
+async function startBridge() {
+  const accountToken = fromEnvFile('STUDIO_PROBE_ACCOUNT_TOKEN');
+  const accountId = fromEnvFile('STUDIO_PROBE_ACCOUNT_ID');
+
+  if (accountToken === '' || accountId === '') {
+    console.error('studio-audit-creds: --with-bridge needs the probe account credential in .env.');
+    process.exit(2);
+  }
+
+  bridge = spawn(
+    process.execPath,
+    ['dist-cli/baseclf.mjs', 'studio', '--project', project, '--port', '4000'],
+    {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, CLOUDFLARE_API_TOKEN: accountToken, CLOUDFLARE_ACCOUNT_ID: accountId },
+    },
+  );
+
+  return new Promise((resolve) => {
+    let buffered = '';
+    const settle = (key) => {
+      bridgeKey = key;
+      resolve(key !== '');
+    };
+    bridge.stdout.on('data', (chunk) => {
+      buffered += String(chunk);
+      const match = buffered.match(/Paste this key[^\n]*\n\s*\n([^\n]+)\n/);
+      if (match !== null && bridgeKey === '') settle(match[1].trim());
+    });
+    bridge.stderr.on('data', (chunk) => {
+      buffered += String(chunk);
+    });
+    bridge.on('exit', () => {
+      if (bridgeKey === '') {
+        console.error('the bridge exited before printing a key:');
+        console.error(buffered.split('\n').slice(0, 8).join('\n'));
+        settle('');
+      }
+    });
+    setTimeout(() => {
+      if (bridgeKey === '') settle('');
+    }, 60_000);
+  });
+}
 
 const server = createServer((request, response) => {
   const origin = request.headers.origin ?? '';
@@ -94,11 +172,27 @@ const server = createServer((request, response) => {
   }
 
   served = true;
-  response.writeHead(200, headers).end(JSON.stringify({ url, token, project }));
-  console.log('handed the credentials to the page once; stopping.');
-  // Let the response finish before the process goes.
-  setTimeout(() => server.close(() => process.exit(0)), 250);
+  response.writeHead(200, headers).end(JSON.stringify({ url, token, project, bridgeKey }));
+  console.log('handed the credentials to the page once.');
+
+  if (bridge === null) {
+    // Nothing else to hold open. With a bridge running, the process stays up so the
+    // audit has something to talk to, and the lifetime below is what ends it.
+    setTimeout(() => server.close(() => process.exit(0)), 250);
+  } else {
+    // Said in minutes, because the number is the thing an audit has to plan around
+    // and the last version left it to be discovered by the bridge disappearing.
+    console.log(`the bridge stays up for ${LIFETIME_MS / 60_000} more minutes.`);
+    server.close();
+  }
 });
+
+if (withBridge) {
+  console.log(`starting the bridge against "${project}"...`);
+  const ready = await startBridge();
+  console.log(ready ? '  the bridge is up and its key will travel with the rest.' : '  no bridge.');
+  if (!ready) process.exit(1);
+}
 
 server.listen(PORT, '127.0.0.1', () => {
   // The address, and nothing else. Printing any part of the token here would put
@@ -111,5 +205,6 @@ server.listen(PORT, '127.0.0.1', () => {
 
 setTimeout(() => {
   if (!served) console.log('nobody asked; stopping.');
+  if (bridge !== null) bridge.kill();
   server.close(() => process.exit(served ? 0 : 1));
 }, LIFETIME_MS);
