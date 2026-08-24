@@ -1719,6 +1719,31 @@ function AuthScreen({ onNotice }: { onNotice: (message: string) => void }) {
  * quietly showed less than its title promised would be the same failure as an empty
  * warning list standing in for an unreadable one.
  */
+/**
+ * A stored list column, as something to read rather than as the JSON it is.
+ *
+ * ⚠️ Defensive on purpose. `roles` and `mime_types` are TEXT columns, and this
+ * reads them straight off the row rather than through the engine, so a value that
+ * is not a list of strings is reachable here even though the engine would refuse
+ * it at load. Showing the raw text then is the honest answer: it is what is stored,
+ * and hiding it would make a malformed row look like an empty one.
+ *
+ * Found by looking at the screen. The table rendered `["authenticated"]` and
+ * `["image/png","image/jpeg"]`, which are correct and are not what a person reads.
+ */
+function readList(stored: string | null): string {
+  if (stored === null || stored === "") return "";
+  try {
+    const parsed: unknown = JSON.parse(stored);
+    if (Array.isArray(parsed) && parsed.every((entry) => typeof entry === "string")) {
+      return parsed.join(", ");
+    }
+  } catch {
+    // Falls through to the raw text below.
+  }
+  return stored;
+}
+
 function LiveStorageScreen({
   bridgeKey,
   onNotice,
@@ -1822,12 +1847,12 @@ function LiveStorageScreen({
                       <td><code>{policy.bucket}</code></td>
                       <td>{policy.name}</td>
                       <td><span className="state-label active">{policy.operation}</span></td>
-                      <td>{policy.roles}</td>
+                      <td>{readList(policy.roles)}</td>
                       {/* The template, not a resolved path. It reads `$auth.uid`
                           because that is what makes one directory per caller, and
                           showing a resolved one would show somebody's. */}
                       <td><code>{policy.prefix}</code></td>
-                      <td>{policy.max_size_bytes === null && policy.mime_types === null ? "none" : [policy.max_size_bytes === null ? null : `${policy.max_size_bytes} bytes`, policy.mime_types].filter(Boolean).join(" · ")}</td>
+                      <td>{policy.max_size_bytes === null && policy.mime_types === null ? "none" : [policy.max_size_bytes === null ? null : `${policy.max_size_bytes} bytes`, readList(policy.mime_types)].filter((part) => part !== null && part !== "").join(" · ")}</td>
                     </tr>
                   ))}
                 </tbody>

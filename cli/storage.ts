@@ -185,9 +185,12 @@ async function apply(
   write(
     nextAction({
       goal: 'use it',
+      // ⚠️ One entry per STEP, not per line. `nextAction` numbers them, so a
+      // sentence split across two entries prints as "1." and "2." for one
+      // instruction. Written that way first, and only running the command showed
+      // it: nothing in the suite reads the numbering.
       steps: [
-        'Upload with a bearer token, and list what is there. One segment is the',
-        'bucket, a second is a file name, and there is never a third.',
+        'Upload with a bearer token, then list what is there. One segment is the bucket, a second is a file name, and there is never a third.',
       ],
       copy: [
         `PUT  https://<deployment>/storage/v1/${bucket}/<file-name>`,
