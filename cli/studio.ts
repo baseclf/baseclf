@@ -279,6 +279,9 @@ const ROUTES = [
   // The only route that leaves Cloudflare's data plane for its control plane: the
   // usage numbers are recorded against the account, not by the deployment.
   { method: 'GET', path: '/usage', route: 'usage' },
+  // Storage CONFIGURATION, not storage contents. See the handler for why those are
+  // different questions and why this one answers only the first.
+  { method: 'GET', path: '/storage', route: 'storage' },
 ] as const;
 
 export type BridgeRoute = (typeof ROUTES)[number]['route'];
@@ -411,6 +414,56 @@ export function createBridge(options: {
         return answer(200, origin, { document });
       } catch {
         options.log('a document read failed before it finished');
+        return answer(500, origin, { error: 'The deployment could not be read.' });
+      }
+    }
+
+    if (route === 'storage') {
+      // ⚠️ Configuration, never contents, and the distinction is the whole design of
+      // this route rather than a limit on it.
+      //
+      // A bucket's objects live behind a policy that resolves against the CALLER's
+      // claims: `avatars/$auth.uid/` is a different directory for every person. This
+      // bridge holds a Cloudflare credential and no identity at all, so there is no
+      // caller here whose directory could be listed. Answering with objects would
+      // mean either resolving somebody else's prefix, which is the one thing the
+      // storage design refuses to make expressible, or reading R2 around the policy
+      // engine, which is the administrative path the product exists to replace.
+      //
+      // What an operator needs from a screen is which buckets are registered and what
+      // the rules say, and that is in D1, which is what this bridge already reads. A
+      // listing of objects is `GET /storage/v1/<bucket>` on the deployment, signed in
+      // as somebody, and it belongs to that person rather than to this tool.
+      try {
+        const executor = options.openExecutor();
+
+        // Fixed statements over the engine's own tables. No parameters, nothing
+        // interpolated, and no caller input reaches either one.
+        const buckets = await executor
+          .prepare(
+            'SELECT "bucket", "enabled", "version" FROM "_storage_buckets" ORDER BY "bucket"',
+          )
+          .all<{ bucket: string; enabled: number; version: number }>();
+
+        const policies = await executor
+          .prepare(
+            'SELECT "bucket", "name", "operation", "roles", "prefix", "max_size_bytes",' +
+              ' "mime_types" FROM "_storage_policies" ORDER BY "bucket", "name"',
+          )
+          .all<Record<string, unknown>>();
+
+        const registered = buckets.results ?? [];
+        options.log(`read the storage configuration: ${registered.length} bucket(s)`);
+
+        return answer(200, origin, {
+          buckets: registered,
+          policies: policies.results ?? [],
+        });
+      } catch {
+        // The same shape as the document route: a failed read is not an empty
+        // configuration, and a screen told "no buckets" would say the deployment is
+        // unconfigured when the truth is that it could not be asked.
+        options.log('a storage configuration read failed before it finished');
         return answer(500, origin, { error: 'The deployment could not be read.' });
       }
     }

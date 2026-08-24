@@ -20,6 +20,7 @@ import {
   SEED_ROWS,
   seedDatabase,
 } from '../src/policy/__fixtures__/schema.js';
+import { STORAGE_SCHEMA } from '../src/storage/schema.js';
 import type { D1Endpoint } from './d1-api.js';
 import { findVoiceViolations, PLAIN } from './output.js';
 import {
@@ -925,5 +926,92 @@ describe('the usage numbers, which come from the account rather than the deploym
     expect(refused.status).toBe(401);
     // The credential is what this route spends, so the gate has to come first.
     expect(asked).toBe(0);
+  });
+});
+
+/**
+ * The storage route, which answers about configuration and never about contents.
+ *
+ * That is the design rather than a limit on it. A bucket's objects live behind a
+ * policy resolved against the CALLER's claims, and this bridge holds a Cloudflare
+ * credential and no identity, so there is no caller here whose directory could be
+ * listed. Answering with objects would mean resolving somebody else's prefix, which
+ * the storage design refuses to make expressible, or reading R2 around the engine,
+ * which is the administrative path the product exists to replace.
+ */
+describe('the storage configuration, read for a screen', () => {
+  interface StorageBody {
+    buckets?: { bucket: string; enabled: number; version: number }[];
+    policies?: Record<string, unknown>[];
+    error?: string;
+  }
+
+  beforeAll(async () => {
+    for (const statement of STORAGE_SCHEMA) await env.DB.prepare(statement).run();
+    await env.DB.prepare('DELETE FROM _storage_policies').run();
+    await env.DB.prepare('DELETE FROM _storage_buckets').run();
+    await env.DB.prepare('INSERT INTO _storage_buckets (bucket, enabled, version) VALUES (?, 1, 3)')
+      .bind('avatars')
+      .run();
+    await env.DB.prepare(
+      'INSERT INTO _storage_policies (bucket, name, operation, roles, prefix, max_size_bytes,' +
+        ' mime_types) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    )
+      .bind('avatars', 'list_own', 'list', '["authenticated"]', 'avatars/$auth.uid/', null, null)
+      .run();
+  });
+
+  it('hands back the buckets and their rules', async () => {
+    const response = await handler(get('/storage', ''));
+    const body = JSON.parse(response.body) as StorageBody;
+
+    expect(response.status).toBe(200);
+    expect(body.buckets?.map((one) => one.bucket)).toEqual(['avatars']);
+    expect(body.buckets?.[0]?.version).toBe(3);
+    expect(body.policies?.map((one) => one.name)).toEqual(['list_own']);
+  });
+
+  it('never answers with objects, whatever is in the bucket', async () => {
+    // The assertion that pins the design. A key is built from a caller's own claims,
+    // and this route has no caller, so a body carrying object names would mean one of
+    // the two things the design refuses.
+    const response = await handler(get('/storage', ''));
+
+    expect(Object.keys(JSON.parse(response.body) as object).sort()).toEqual([
+      'buckets',
+      'policies',
+    ]);
+  });
+
+  it('refuses a key that does not match, before reading anything', async () => {
+    const response = await handler(get('/storage', '', 'not-the-key'));
+
+    expect(response.status).toBe(401);
+  });
+
+  it('reports a failed read as a failure rather than as an empty configuration', async () => {
+    // "Could not be asked" and "nothing is configured" are different answers, and a
+    // screen that reads the first as the second tells an operator their deployment is
+    // unconfigured. The project has already shipped that mistake once, on a Health
+    // panel, and the note there is the reason this assertion exists.
+    const lines: string[] = [];
+    const broken = createBridge({
+      key: KEY,
+      openExecutor: () => {
+        throw new Error('the database is not reachable');
+      },
+      readDocument: () => Promise.resolve(null),
+      applyDocument: () => Promise.resolve({ outcome: 'ok' as const, lines: [] }),
+      readUsage: () => Promise.resolve(usageAnswer),
+      log: (line) => lines.push(line),
+    });
+
+    const response = await broken(get('/storage', ''));
+    const body = JSON.parse(response.body) as StorageBody;
+
+    expect(response.status).toBe(500);
+    expect(body.buckets).toBeUndefined();
+    expect(body.error).toBeTruthy();
+    expect(lines.join('\n')).toContain('failed');
   });
 });
