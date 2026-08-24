@@ -69,18 +69,32 @@ const MUTATIONS = [
       'statement without the clause and the test above should have caught it sooner.',
   },
   {
-    // A memo that is kept even when the work failed means one transient D1 error
-    // on a cold isolate leaves that isolate believing the schema is there.
-    name: 'the memo kept after a failure, so a transient error is remembered forever',
+    // The memo the entry point uses, mutated where it is now built rather than
+    // where it used to be hand-rolled.
+    //
+    // ⭐ This entry was a `knownSurvivor` until 2026-08-24, and the justification
+    // it carried was wrong rather than stale. It said "there is no seam for that
+    // today", in a repository that had grown the seam, the helper, its test and a
+    // passing mutation for it five days before that note was last edited:
+    // `src/utils/memo.ts`, `src/utils/memo.test.ts` and the
+    // `a failed load left in the memo` mutation in `mutate-registry-cache.mjs`,
+    // which is killed.
+    //
+    // So the fix was not a new test. It was deleting the second copy: the entry
+    // point now builds both memos with `isolateMemo`, and the behaviour is covered
+    // where every other call site's is. What is mutated here is the wiring that is
+    // left, which is the part this file can still be wrong about.
+    name: 'the schema memo built without a label, so a cold start reports nothing',
     file: INDEX,
-    expect: 'nothing, and that is recorded rather than hidden',
-    find: / {6}engineSchemaReady = null;\n {6}throw error;/,
-    replace: '      throw error;',
+    expect: 'the isolate_init report, and the memo tests behind it',
+    find: /const engineSchemaMemo = isolateMemo<void>\(\{ label: 'engine_schema' \}\);/,
+    replace: 'const engineSchemaMemo = isolateMemo<void>();',
     knownSurvivor:
-      'no test makes applyEngineSchema fail transiently and then succeed. Doing it ' +
-      'needs an executor that fails once, which means injecting one into the worker ' +
-      'entry point, and there is no seam for that today. The same gap exists on the ' +
-      'rate limit memo this was copied from, and it is the same size there.',
+      'the label only decides whether a duration is reported, and nothing asserts ' +
+      'that report from the worker entry point. `memo.test.ts` covers the reporting ' +
+      'itself, so what survives here is the wiring rather than the behaviour. Unlike ' +
+      'the justification this entry used to carry, that is checkable: grep the suite ' +
+      'for `isolate_init` and there is no assertion on `engine_schema`.',
   },
 ];
 

@@ -50,7 +50,7 @@ import { getStorageRegistry } from './storage/registry.js';
 import { deleteObject, downloadObject, uploadObject } from './storage/router.js';
 import { BaseclfError } from './utils/errors.js';
 import { logError } from './utils/log.js';
-import { reportInitDuration } from './utils/memo.js';
+import { isolateMemo } from './utils/memo.js';
 import {
   checkRateLimit,
   cleanupRateLimits,
@@ -393,23 +393,15 @@ function rateLimitFor(pathname: string): { bucket: string; rule: RateLimitRule }
  *
  * Provisioning should still create it up front. This is the floor, not the plan.
  */
-let rateLimitTableReady: Promise<void> | null = null;
+const rateLimitTableMemo = isolateMemo<void>({ label: 'rate_limit_table' });
 
 async function ensureRateLimitTableOnce(db: D1Database): Promise<void> {
-  if (rateLimitTableReady === null) {
-    const startedAt = Date.now();
-    rateLimitTableReady = ensureRateLimitTable(db).catch((error: unknown) => {
-      rateLimitTableReady = null;
-      throw error;
-    });
-    reportInitDuration('rate_limit_table', rateLimitTableReady, startedAt);
-  }
-  await rateLimitTableReady;
+  await rateLimitTableMemo.get(() => ensureRateLimitTable(db));
 }
 
 /** For tests, which start from a database that has just been rebuilt. */
 export function resetRateLimitTableMemo(): void {
-  rateLimitTableReady = null;
+  rateLimitTableMemo.reset();
 }
 
 /**
@@ -432,23 +424,15 @@ export function resetRateLimitTableMemo(): void {
  * auth schema fails partway and does not roll back, so it is not something to do
  * on a path nobody asked to run.
  */
-let engineSchemaReady: Promise<void> | null = null;
+const engineSchemaMemo = isolateMemo<void>({ label: 'engine_schema' });
 
 async function ensureEngineSchemaOnce(db: D1Database): Promise<void> {
-  if (engineSchemaReady === null) {
-    const startedAt = Date.now();
-    engineSchemaReady = applyEngineSchema(db).catch((error: unknown) => {
-      engineSchemaReady = null;
-      throw error;
-    });
-    reportInitDuration('engine_schema', engineSchemaReady, startedAt);
-  }
-  await engineSchemaReady;
+  await engineSchemaMemo.get(() => applyEngineSchema(db));
 }
 
 /** For tests, which start from a database that has just been rebuilt. */
 export function resetEngineSchemaMemo(): void {
-  engineSchemaReady = null;
+  engineSchemaMemo.reset();
 }
 
 /**
