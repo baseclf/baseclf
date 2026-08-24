@@ -395,20 +395,33 @@ themselves.
 A storage policy reads the same claims in its prefix template, which is how one
 bucket holds a directory per tenant:
 
-```sql
--- Both rows. A policy alone grants nothing: a bucket absent from
--- _storage_buckets, or present with enabled = 0, is not exposed at all.
-INSERT INTO _storage_buckets (bucket, enabled) VALUES ('files', 1);
-INSERT INTO _storage_policies (bucket, name, operation, roles, prefix)
-VALUES ('files', 'tenant_files', 'download', '["authenticated"]', 'files/$auth.app.tenant/');
+```json
+{
+  "bucket": "files",
+  "enabled": true,
+  "policies": [
+    { "name": "tenant_files", "for": "download", "to": ["authenticated"],
+      "prefix": "files/$auth.app.tenant/" },
+    { "name": "tenant_list", "for": "list", "to": ["authenticated"],
+      "prefix": "files/$auth.app.tenant/" }
+  ]
+}
 ```
 
-⚠️ **Written as SQL because there is no `baseclf storage` command yet.** Table
-policies have `baseclf policy apply`; storage policies do not, so today they are
-inserted directly, which means through the administrative path that bypasses the
-engine. The engine still validates every one of them when it loads the registry,
-so a prefix it will not accept fails there rather than at somebody's upload, but
-authoring is not a first-class path yet.
+```bash
+npx baseclf storage apply files.json --project your-project-name
+```
+
+A bucket with no rules grants nothing, and neither does a rule with no bucket: a
+bucket absent from the registry, or present with `enabled: false`, is not
+reachable at all. Applying replaces every rule on that bucket, and while it runs
+the bucket is not served, so an interrupted run leaves it closed rather than half
+open.
+
+The four operations are `upload`, `download`, `delete` and `list`. A listing
+returns file **names** rather than keys, which is the same shape as the rest of
+this API: a caller hands over one name and the key is built here from the policy
+prefix, so a caller never holds a path to send back.
 
 A claim used this way becomes part of an object key rather than a bound
 parameter, so it is held to more than a table policy asks. It has to be text,
@@ -527,7 +540,7 @@ a `429` with a `Retry-After` header, which a client is meant to obey.
 |---|---|---|
 | Sign-in, sign-up, password and email changes | 20 a minute | the caller's address |
 | Everything else under `/api/auth` | 100 a minute | the caller's address |
-| Storage upload and delete | 60 a minute | the account, or the address when signed out |
+| Storage upload, delete and list | 60 a minute | the account, or the address when signed out |
 | Storage download | 600 a minute | the account, or the address when signed out |
 | **`/rest/v1`** | **nothing** | |
 
@@ -540,7 +553,9 @@ yet, which is the whole point of them.
 data plane exists to be called often, and a number invented here would be one every
 application built on this has to live inside. Volumetric protection for a data API
 belongs in front of the Worker, where Cloudflare's own rate limiting can see it.
-Storage is limited because an upload keeps costing after it returns.
+Storage is limited because an upload keeps costing after it returns. A listing is a
+read and is still counted with the writes, because its cost grows with what is in the
+bucket rather than with what the caller sent.
 
 None of these numbers is measured. They are set where somebody doing the thing by
 hand will never meet them and a loop will, and they are not a defence against a
@@ -598,7 +613,7 @@ or refuse locally with the reason, before a request goes out.
 | `.auth.refreshSession()` | Supported | **Not here, and not needed.** `getToken()` mints a fresh fifteen-minute JWT from the session when the one it holds is close to expiring. |
 | Providers | Many | **Google and GitHub.** |
 | `.storage.from().upload(path, file)` | The caller chooses the path | **The caller sends a file name and the server builds the key**, from a prefix template resolved against claims it verified. So `upload` returns the key instead of accepting one, and a traversal is not expressible rather than checked for. |
-| `.storage.from().list()` | Supported | **Not here.** There is no list operation on the server either, and it is the place a slightly wide prefix leaks the most at once. |
+| `.storage.from().list()` | Takes a path prefix | **Supported, and it takes no prefix.** `GET /storage/v1/<bucket>` lists the one directory the caller's `list` policy resolves to, and there is no field in which to ask for another. What comes back is file **names**, not keys, so a listing hands out exactly what a download takes in. Paging resumes from a name with `?after=`, never from a cursor. Directories inside the one being listed are counted rather than returned, because a nested key has no name this API can address. |
 | `.createSignedUrl()`, `.getPublicUrl()` | Supported | **Not here, and this one is a decision rather than a gap.** A signed URL is a capability handed out in advance: once issued it cannot be reconsidered, and nothing about the request that redeems it reaches the policy engine. R2 egress through the Worker is free, so the proxy costs nothing the signature would save. |
 | `.storage.from().remove([paths])` | Takes a list | **One file per call.** |
 | The content type on an upload | | **A declaration, not an inspection.** Nothing reads the bytes to confirm it. |

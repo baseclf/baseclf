@@ -24,6 +24,7 @@ import accepted from '../examples/posts.policy.json?raw';
 import refused from '../examples/posts.refused.policy.json?raw';
 import readme from '../README.md?raw';
 import { readPolicyDocument } from './policy-document.js';
+import { readStorageDocument } from './storage-document.js';
 
 /**
  * The fenced blocks that are whole policy documents.
@@ -44,6 +45,49 @@ function policyDocumentsIn(markdown: string): string[] {
       .filter((body) => body.includes('"table"') && body.includes('"policies"'))
   );
 }
+
+/**
+ * The fenced blocks that are whole storage documents.
+ *
+ * Same rule as above, on the other pair of keys. Added when `baseclf storage`
+ * arrived and the README stopped showing raw SQL: the storage example became a
+ * document somebody copies on their first day, with nothing checking it, which is
+ * precisely the state this file was written to end for table policies.
+ */
+function storageDocumentsIn(markdown: string): string[] {
+  const blocks = markdown.matchAll(/```jsonc?\n([\s\S]*?)```/g);
+
+  return [...blocks]
+    .map(([, body]) => body ?? '')
+    .map((body) => body.replace(/\s*\/\/.*$/gm, ''))
+    .filter((body) => body.includes('"bucket"') && body.includes('"policies"'));
+}
+
+describe('the storage documents a reader copies', () => {
+  it('finds them rather than silently checking nothing', () => {
+    expect(storageDocumentsIn(readme).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('accepts every storage document in the README', () => {
+    // Through `readStorageDocument`, which is what `baseclf storage apply` calls, so
+    // this fails for the reasons a real apply fails. A prefix missing its trailing
+    // separator is the one a reader is most likely to copy wrong, and the engine
+    // refuses it rather than storing a rule that reaches into a neighbouring id.
+    for (const document of storageDocumentsIn(readme)) {
+      expect(() => readStorageDocument(document)).not.toThrow();
+    }
+  });
+
+  it('shows documents that would actually serve something', () => {
+    // The same trap as the table example had: a document that parses, stores, and
+    // reaches nobody. Absent means enabled for a storage document, so this catches an
+    // example written with `enabled: false` rather than one that omitted the field.
+    for (const document of storageDocumentsIn(readme)) {
+      expect(readStorageDocument(document).definition.enabled).toBe(true);
+      expect(readStorageDocument(document).definition.policies.length).toBeGreaterThan(0);
+    }
+  });
+});
 
 describe('the documents a reader copies', () => {
   it('finds the README documents rather than silently checking nothing', () => {
