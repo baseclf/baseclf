@@ -145,8 +145,13 @@ function routesNpmServes(packageSpec) {
   let version;
   let bundle;
   try {
-    // `--silent` so the only thing on stdout is the name of the file npm wrote.
-    const tarball = execSync(`npm pack ${packageSpec} --silent`, { cwd: work, encoding: 'utf8' })
+    // `--silent` so the only thing on stdout is the name of the file npm wrote, and
+    // quoted because a spec is not always a package name: pointing this at
+    // `dist-publish/baseclf` before a release answers "does the thing I am about to
+    // publish satisfy the site", and that path contains a space on the machine this
+    // was written on. Unquoted it split into three arguments and npm failed, which
+    // was at least the safe direction: the run refused rather than reporting clean.
+    const tarball = execSync(`npm pack "${packageSpec}" --silent`, { cwd: work, encoding: 'utf8' })
       .trim()
       .split('\n')
       .pop();
