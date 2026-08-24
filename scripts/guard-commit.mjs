@@ -31,6 +31,11 @@ const PRIVATE_PATHS = [
   /^FOUNDATION\.md$/,
   /^BUILD-PROGRESS\.md$/,
   /^HANDOFF-STATUS\.md$/,
+  // Added 2026-08-24 with the split. ⚠️ A new private file has to go in BOTH this
+  // list and `.gitignore`, and the handover has a note about forgetting one of the
+  // two being the exact failure `rules/05` section E describes. `.gitignore` does
+  // not stop `git add -f`; this does.
+  /^HANDOFF-ARCHIVE\.md$/,
   /^AGENTS\.md$/,
   /^Baas With CLF\.md$/,
   /^baas-cloudflare-mvp-plan\.md$/,
