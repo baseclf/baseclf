@@ -604,3 +604,70 @@ export async function usageOnBridge(key: string): Promise<ToolAnswer<UsageNumber
   if (body.numbers !== undefined) return { kind: "data", data: body.numbers };
   return { kind: "error", message: body.error ?? `The bridge answered ${response.status}.` };
 }
+
+/** One bucket as the deployment has it registered. */
+export interface StorageBucketRow {
+  readonly bucket: string;
+  readonly enabled: number;
+  readonly version: number;
+}
+
+/** One stored rule, in the shape the table holds rather than the shape a document has. */
+export interface StoragePolicyRow {
+  readonly bucket: string;
+  readonly name: string;
+  readonly operation: string;
+  readonly roles: string;
+  readonly prefix: string;
+  readonly max_size_bytes: number | null;
+  readonly mime_types: string | null;
+}
+
+export interface StorageConfiguration {
+  readonly buckets: readonly StorageBucketRow[];
+  readonly policies: readonly StoragePolicyRow[];
+}
+
+/**
+ * What this deployment is configured to allow in storage.
+ *
+ * ⚠️ Configuration, never contents. A bucket's objects sit behind a policy that
+ * resolves against the caller's own claims, and the bridge holds a Cloudflare
+ * credential and no identity, so there is nobody here whose directory could be
+ * listed. Listing objects is `GET /storage/v1/<bucket>` on the deployment, signed
+ * in as a person, and it belongs to that person rather than to this screen.
+ */
+export async function storageOnBridge(key: string): Promise<ToolAnswer<StorageConfiguration>> {
+  let response: Response;
+  try {
+    response = await fetch(`${BRIDGE_URL}/storage`, {
+      headers: { "x-bridge-key": key },
+      signal: AbortSignal.timeout(BRIDGE_DEADLINE_MS),
+    });
+  } catch (error) {
+    const timedOut = error instanceof DOMException && error.name === "TimeoutError";
+    return {
+      kind: "error",
+      message: timedOut
+        ? `The bridge did not answer within ${BRIDGE_DEADLINE_MS / 1000} seconds. It may be starting, or something may be holding the connection open.`
+        : "The bridge could not be reached. Is npx baseclf studio running?",
+    };
+  }
+  if (response.status === 401) return { kind: "error", message: "The bridge refused the key." };
+
+  let body: { buckets?: StorageBucketRow[]; policies?: StoragePolicyRow[]; error?: string };
+  try {
+    body = (await response.json()) as typeof body;
+  } catch {
+    return { kind: "error", message: `The bridge answered ${response.status} without a body.` };
+  }
+
+  // ⚠️ Both fields, not one. A body with buckets and no policies would otherwise
+  // read as "registered but ungoverned", which is the opposite of what the engine
+  // does with that state: a bucket with no rules refuses everything.
+  if (body.buckets === undefined || body.policies === undefined) {
+    return { kind: "error", message: body.error ?? `The bridge answered ${response.status}.` };
+  }
+
+  return { kind: "data", data: { buckets: body.buckets, policies: body.policies } };
+}

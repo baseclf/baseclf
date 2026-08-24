@@ -18,6 +18,8 @@ import {
   StudioClient,
   type TableDetail,
   type UsageNumbers,
+  type StorageConfiguration,
+  storageOnBridge,
   usageOnBridge,
 } from "../lib/api/studio";
 import { type DiagnoseReport, readDiagnose } from "../lib/api/deployment";
@@ -120,7 +122,7 @@ const guidance: Record<StudioScreen, { label: string; demo: string; live: string
   Policies: { label: "Start safe", demo: "Review the highlighted policy before creating a new rule.", live: "An applied change reaches every isolate within about half a minute." },
   Tables: { label: "Data check", demo: "Open posts first—the missing index warning needs attention.", live: "New tables appear after a refresh, within about a minute. Rows load only when you ask." },
   Auth: { label: "Setup check", demo: "Copy the redirect URI, then run the provider diagnostic.", live: "This is your deployment's own diagnostic, the one npx baseclf doctor reads. User records stay out of reach by design." },
-  Storage: { label: "Access first", demo: "Choose a bucket and confirm its policy before uploading an object.", live: "This screen is still a fixture preview — storage rules live in your policy documents." },
+  Storage: { label: "Access first", demo: "Choose a bucket and confirm its policy before uploading an object.", live: "The rules come from your deployment. Objects are not listed here: a directory belongs to a caller, and this page has no identity." },
   Health: { label: "What matters", demo: "Start with failures, then inspect the request trend.", live: "Everything this deployment can tell you about itself. Usage numbers live in your Cloudflare account and are not read here." },
 };
 
@@ -1112,7 +1114,11 @@ function DataScreen({ screen, client, live, bridgeKey, onRefresh, onNotice, onOp
   if (screen === "Auth") {
     return client !== null ? <LiveAuthScreen origin={client.origin} onNotice={onNotice} /> : <AuthScreen onNotice={onNotice} />;
   }
-  if (screen === "Storage") return <StorageScreen onNotice={onNotice} />;
+  // Storage goes live on the BRIDGE rather than on the client: the rules are rows
+  // in the deployment database, and the page has no way to read those on its own.
+  if (screen === "Storage") {
+    return client !== null ? <LiveStorageScreen bridgeKey={bridgeKey} onNotice={onNotice} /> : <StorageScreen onNotice={onNotice} />;
+  }
   // Health goes live on the client alone, like Auth: the diagnostic is public.
   // `live` may still be null when the /mcp reads failed, and the screen has to
   // tell that apart from a deployment with nothing wrong.
@@ -1695,6 +1701,148 @@ function LiveAuthScreen({ origin, onNotice }: { origin: string; onNotice: (messa
 function AuthScreen({ onNotice }: { onNotice: (message: string) => void }) {
   const redirect = `${mockProject.endpoint}/api/auth/callback/google`;
   return <div><ScreenTitle kicker="Identity" title="Authentication" description="Inspect users, provider status, and the redirect configuration used by your Worker." action={<button className="studio-primary" type="button" onClick={() => onNotice("Auth diagnostic completed. No blocking issue found.")}>Run diagnostic</button>} /><div className="metric-grid auth-providers"><article><span>Google</span><strong>Connected</strong><small>Client ID configured</small></article><article><span>GitHub</span><strong>Connected</strong><small>Client ID configured</small></article><article><span>Email</span><strong>Disabled</strong><small>No sender configured</small></article></div><section className="redirect-panel"><div><span className="machine-label">Google redirect URI</span><code>{redirect}</code></div><button type="button" onClick={() => navigator.clipboard?.writeText(redirect)}>Copy URI</button></section><section className="full-panel"><header><span>Users</span><span>{mockUsers.length} records</span></header><div className="table-scroll"><table className="compact-table"><thead><tr><th>User</th><th>ID</th><th>Provider</th><th>Status</th></tr></thead><tbody>{mockUsers.map((user) => <tr key={user.id}><td><strong>{user.name}</strong><small>{user.email}</small></td><td><code>{user.id}</code></td><td>{user.provider}</td><td><span className={`state-label ${user.state === "active" ? "active" : "blocked"}`}>{user.state}</span></td></tr>)}</tbody></table></div></section></div>;
+}
+
+/**
+ * Storage as the deployment is configured to serve it.
+ *
+ * ⚠️ Rules, never objects, and that is the design rather than a gap in it. Every
+ * object sits behind a policy that resolves against the CALLER's claims, so
+ * `avatars/$auth.uid/` is a different directory for every person. The bridge holds
+ * a Cloudflare credential and no identity, so there is nobody here whose directory
+ * could be listed, and showing objects would mean resolving somebody else's prefix
+ * or reading R2 around the engine. Both are the things this product exists to make
+ * unnecessary.
+ *
+ * So the screen answers the question an operator actually has, which is what the
+ * rules say, and it says out loud which question it is not answering. A screen that
+ * quietly showed less than its title promised would be the same failure as an empty
+ * warning list standing in for an unreadable one.
+ */
+function LiveStorageScreen({
+  bridgeKey,
+  onNotice,
+}: {
+  bridgeKey: string;
+  onNotice: (message: string) => void;
+}) {
+  const [state, setState] = useState<
+    { kind: "data"; data: StorageConfiguration } | { kind: "said"; message: string } | null
+  >(null);
+  const [reading, setReading] = useState(false);
+
+  // Derived rather than stored. Whether there is a key is knowable during render, so
+  // writing it into state would mean an effect that sets state on mount for a fact
+  // that was never asynchronous, and the message would then have to be kept in two
+  // places to stay identical.
+  const needsBridge = bridgeKey.trim() === "";
+
+  const read = async (announce: boolean) => {
+    if (needsBridge) return;
+    setReading(true);
+    const answer = await storageOnBridge(bridgeKey.trim());
+    setReading(false);
+
+    if (answer.kind === "data") {
+      setState({ kind: "data", data: answer.data });
+      if (announce) {
+        const count = answer.data.buckets.length;
+        onNotice(`Read the storage configuration. ${count} bucket${count === 1 ? "" : "s"}.`);
+      }
+      return;
+    }
+    setState({ kind: "said", message: answer.message });
+    onNotice(answer.message);
+  };
+
+  useEffect(() => {
+    if (bridgeKey.trim() === "") return;
+    let stale = false;
+    void storageOnBridge(bridgeKey.trim()).then((answer) => {
+      if (stale) return;
+      setState(
+        answer.kind === "data"
+          ? { kind: "data", data: answer.data }
+          : { kind: "said", message: answer.message },
+      );
+    });
+    return () => {
+      stale = true;
+    };
+  }, [bridgeKey]);
+
+  const configuration = state?.kind === "data" ? state.data : undefined;
+
+  return (
+    <div>
+      <ScreenTitle
+        kicker="R2 storage"
+        title="Storage"
+        description="Which buckets this deployment serves, and the rules that decide who reaches what."
+        action={
+          <button className="studio-primary" type="button" disabled={reading || needsBridge} onClick={() => void read(true)}>
+            {reading ? "Reading…" : state === null ? "Read the rules" : "Read again"}
+          </button>
+        }
+      />
+      {needsBridge ? (
+        <section className="full-panel"><div className="editor-form"><p>The rules are rows in your deployment&apos;s database, which this page cannot reach on its own. Run <code>npx baseclf studio</code> and paste its key in the Simulator.</p></div></section>
+      ) : state === null ? (
+        <section className="full-panel"><div className="editor-form"><p>Reading the storage configuration…</p></div></section>
+      ) : state.kind === "said" ? (
+        <section className="full-panel"><div className="editor-form"><p>{state.message}</p><button className="studio-secondary" type="button" disabled={reading} onClick={() => void read(true)}>Try again</button></div></section>
+      ) : configuration !== undefined && configuration.buckets.length === 0 ? (
+        <section className="full-panel"><div className="editor-form"><p>No bucket is registered, so nothing can be uploaded or read through <code>/storage/v1</code>. A bucket is registered by applying a document: <code>npx baseclf storage apply &lt;file&gt;</code>.</p></div></section>
+      ) : (
+        <div className="storage-layout">
+          <section className="bucket-list">
+            <header>Buckets</header>
+            {configuration?.buckets.map((bucket) => {
+              const rules = configuration.policies.filter((policy) => policy.bucket === bucket.bucket);
+              return (
+                <button key={bucket.bucket} type="button" className={bucket.enabled === 1 && rules.length > 0 ? "is-selected" : undefined}>
+                  <strong>{bucket.bucket}</strong>
+                  {/* A bucket with no rules is not a working bucket: invariant I1
+                      makes the engine refuse every request for it, so calling it
+                      registered and stopping there would say the opposite of what a
+                      request gets. */}
+                  <small>{bucket.enabled !== 1 ? "disabled" : rules.length === 0 ? "no rules, refuses everything" : `${rules.length} rule${rules.length === 1 ? "" : "s"}, version ${bucket.version}`}</small>
+                </button>
+              );
+            })}
+          </section>
+          <section className="full-panel">
+            <header><span>Rules</span><span>{configuration?.policies.length ?? 0} stored</span></header>
+            <div className="table-scroll">
+              <table className="compact-table">
+                <thead><tr><th>Bucket</th><th>Rule</th><th>Operation</th><th>Roles</th><th>Directory</th><th>Limits</th></tr></thead>
+                <tbody>
+                  {configuration?.policies.map((policy) => (
+                    <tr key={`${policy.bucket}/${policy.name}`}>
+                      <td><code>{policy.bucket}</code></td>
+                      <td>{policy.name}</td>
+                      <td><span className="state-label active">{policy.operation}</span></td>
+                      <td>{policy.roles}</td>
+                      {/* The template, not a resolved path. It reads `$auth.uid`
+                          because that is what makes one directory per caller, and
+                          showing a resolved one would show somebody's. */}
+                      <td><code>{policy.prefix}</code></td>
+                      <td>{policy.max_size_bytes === null && policy.mime_types === null ? "none" : [policy.max_size_bytes === null ? null : `${policy.max_size_bytes} bytes`, policy.mime_types].filter(Boolean).join(" · ")}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      )}
+      <section className="full-panel">
+        <div className="editor-form">
+          <p><strong>Objects are not listed here, and that is deliberate.</strong> Every object sits behind a rule that resolves against the caller&apos;s own claims, so a directory belongs to a person rather than to this deployment. This page holds a Cloudflare credential and no identity, so there is nobody here whose directory it could show. A signed-in caller lists their own with <code>GET /storage/v1/&lt;bucket&gt;</code>, which answers with file names rather than paths.</p>
+        </div>
+      </section>
+    </div>
+  );
 }
 
 function StorageScreen({ onNotice }: { onNotice: (message: string) => void }) {

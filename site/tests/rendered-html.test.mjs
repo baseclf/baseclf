@@ -234,7 +234,13 @@ test("ships the guided motion system and real product captures", async () => {
   // setup counter stays with the fixture, a reload shows a reconnecting state
   // rather than a flash of mock screens, and a token refused right after
   // secret set explains the propagation window instead of inviting a re-set.
-  assert.match(studioApp, /fixture preview/);
+  // ⚠️ This used to look for the string "fixture preview", which was a MARKER for
+  // the property rather than the property: the guide bar reading live copy on a
+  // live connection. Storage was the last screen carrying that phrase, and when it
+  // went live the marker vanished while the behaviour stayed. Pinned to the choice
+  // itself now, which is the thing that would actually be wrong if somebody
+  // rendered the fixture line to a connected deployment.
+  assert.match(studioApp, /mode === "live" \? guidance\[screen\]\.live : guidance\[screen\]\.demo/);
   assert.match(studioApp, /mode !== "live" && <div className="studio-project-progress">/);
   assert.match(studioApp, /Reconnecting to your saved deployment/);
   assert.match(studioApp, /take a minute or two to reach the version that answers/);
@@ -336,11 +342,17 @@ test("keeps every written claim about Studio in step with what Studio does", asy
   // The screens the guidance table still calls a fixture preview, and the ones
   // it does not. Read from the component so the source of truth is the code.
   const previews = [...studio.matchAll(/^ {2}(\w+): \{ label:.*?fixture preview/gm)].map(([, name]) => name);
-  assert.deepEqual(previews, ["Storage"]);
+  // Empty since 2026-08-24. Storage was the last one, and it went live on the RULES
+  // rather than on the objects, which is a distinction every surface below has to
+  // carry: a screen described as live that then lists no files would read as broken,
+  // and one described as listing files would be a promise nothing can keep, because a
+  // directory belongs to a caller and Studio holds a credential rather than an
+  // identity.
+  assert.deepEqual(previews, []);
 
   for (const [surface, text] of [["docs page", page], ["markdown twin", markdown], ["llms.txt", llms]]) {
     assert.match(text, /fixture/i, surface);
-    assert.match(text, /Simulator, Policies, Tables, Auth, and Health/, surface);
+    assert.match(text, /Simulator, Policies, Tables, Auth, Storage, and Health/, surface);
     // The sentence that went stale: fixtures with no mention of a live screen.
     assert.doesNotMatch(text, /screens in (the|this) preview (still )?run on fixture data/i, surface);
     // Health is live and half-refusing, so every surface has to carry the half it
