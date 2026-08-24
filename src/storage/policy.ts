@@ -30,9 +30,15 @@
 import type { AuthCtx } from '../policy/types.js';
 import { PolicyError } from '../utils/errors.js';
 
-export type StorageOperation = 'upload' | 'download' | 'delete';
+/**
+ * ⚠️ `list` is the one that asks about a set rather than an object, and the whole
+ * design rests on a caller never naming a directory. It works the same way all
+ * the same: the directory is the policy's resolved prefix and there is no field
+ * in which a caller can ask for another. See `authorizeStorageListing`.
+ */
+export type StorageOperation = 'upload' | 'download' | 'delete' | 'list';
 
-const STORAGE_OPERATIONS: readonly StorageOperation[] = ['upload', 'download', 'delete'];
+const STORAGE_OPERATIONS: readonly StorageOperation[] = ['upload', 'download', 'delete', 'list'];
 
 /**
  * The claim tokens a prefix template may contain, as a closed set.
@@ -462,7 +468,20 @@ export interface StorageGrant {
  * names in its own comment. Refusing the one ambiguous request keeps the rest of
  * the deployment answering, and the refusal names both policies.
  */
-export function authorizeStorage(request: StorageRequest): StorageGrant {
+/**
+ * The one policy that covers this request, and the directory it points at.
+ *
+ * Shared by `authorizeStorage` and `authorizeStorageListing` so that the four
+ * fail-closed points and the debt 62 refusal are one piece of code rather than
+ * two that have to agree. A listing asks the same question about the same
+ * registry; the only thing it does not have is a file name.
+ */
+function resolveOnePolicy(request: {
+  readonly buckets: ReadonlyMap<string, StorageBucketDefinition>;
+  readonly bucket: string;
+  readonly operation: StorageOperation;
+  readonly auth: AuthCtx;
+}): { readonly policy: StoragePolicy; readonly prefix: string } {
   const definition = request.buckets.get(request.bucket);
   if (definition === undefined) {
     throw notFound(`Bucket "${request.bucket}" is not in the storage registry.`);
@@ -480,8 +499,6 @@ export function authorizeStorage(request: StorageRequest): StorageGrant {
         `"${request.auth.role}".`,
     );
   }
-
-  assertUsableFileName(request.fileName);
 
   // Every candidate is resolved, not just candidates up to the first success.
   // Stopping early is what made the row order decide the grant, so the count
@@ -527,11 +544,84 @@ export function authorizeStorage(request: StorageRequest): StorageGrant {
     throw notFound(`No ${request.operation} policy on "${request.bucket}" resolved.`);
   }
 
+  return only;
+}
+
+export function authorizeStorage(request: StorageRequest): StorageGrant {
+  // The name is checked before the policies are resolved, so a request that could
+  // never name an object is refused on its own terms rather than on whether some
+  // policy happened to cover it.
+  assertUsableFileName(request.fileName);
+
+  const only = resolveOnePolicy(request);
+
   return Object.freeze({
     key: `${only.prefix}${request.fileName}`,
     policyName: only.policy.name,
     maxSizeBytes: only.policy.maxSizeBytes,
     allowedMimeTypes: only.policy.allowedMimeTypes,
+  });
+}
+
+export interface StorageListingRequest {
+  readonly buckets: ReadonlyMap<string, StorageBucketDefinition>;
+  readonly bucket: string;
+  readonly auth: AuthCtx;
+  /**
+   * Resume after this name, or nothing for the first page.
+   *
+   * A name, never a key and never a cursor. See `StorageListing.after`.
+   */
+  readonly after: string | undefined;
+}
+
+export interface StorageListing {
+  /**
+   * The one directory this caller may list, ending in a separator.
+   *
+   * Built here from the policy template and the caller's own claims, exactly as a
+   * key is. There is no field anywhere in which a caller can ask for a different
+   * one, which is the same reason there is no traversal to defend against on the
+   * object paths: it cannot be written down.
+   */
+  readonly prefix: string;
+  /**
+   * Where to resume, as a full key, or undefined for the first page.
+   *
+   * ⭐ The caller hands back a file **name** and this is the prefix in front of it.
+   * The alternative was R2's own cursor, and it was rejected on purpose: a cursor
+   * is an opaque token, and if it ever carried an absolute position rather than a
+   * position within the prefix, a caller holding one from their own directory
+   * could page into somebody else's. That was probed and it does not
+   * (`r2-list-behaviour.test.ts`), but the probe runs against miniflare, where a
+   * pass is weak evidence and only a failure would have been decisive. A name
+   * re-scoped here cannot carry a position at all, so the question stops
+   * deciding anything.
+   */
+  readonly startAfter: string | undefined;
+  /** Which policy allowed it. For the log, and for a refusal to be explainable. */
+  readonly policyName: string;
+}
+
+/**
+ * Decide whether this caller may list this bucket, and say which directory.
+ *
+ * Fail-closed at the same four points as `authorizeStorage`, because it is the
+ * same function underneath. What differs is only that a listing names a
+ * directory rather than an object.
+ */
+export function authorizeStorageListing(request: StorageListingRequest): StorageListing {
+  const only = resolveOnePolicy({ ...request, operation: 'list' });
+
+  // Checked with the same rule every other name is, and after the policy rather
+  // than before it, so a caller who may not list here learns nothing about which
+  // names are acceptable.
+  if (request.after !== undefined) assertUsableFileName(request.after);
+
+  return Object.freeze({
+    prefix: only.prefix,
+    startAfter: request.after === undefined ? undefined : `${only.prefix}${request.after}`,
+    policyName: only.policy.name,
   });
 }
 

@@ -137,10 +137,25 @@ describe('configuration the loader must not trust', () => {
     // `operation` is a TEXT column, so the database will hold anything. The
     // narrowing in the loader is a cast, and this is the check that makes the cast
     // safe rather than a claim.
+    //
+    // ⚠️ This used to use `list` as the example, and debt 59 turned `list` into a
+    // real operation, so the test went red for the right reason. Changed to a word
+    // that is not an operation rather than to one that might become one: a stand-in
+    // for "anything at all" should not be a plausible feature name.
+    await addBucket('avatars', 1);
+    await addPolicy('avatars', { operation: 'incinerate' });
+
+    await expect(loadStorageRegistry(env.DB)).rejects.toBeInstanceOf(BaseclfError);
+  });
+
+  it('accepts list, which is an operation the engine now has', async () => {
+    // The other half, so this file says which side of the line `list` is on rather
+    // than leaving the question to whoever reads the change above.
     await addBucket('avatars', 1);
     await addPolicy('avatars', { operation: 'list' });
 
-    await expect(loadStorageRegistry(env.DB)).rejects.toBeInstanceOf(BaseclfError);
+    const registry = await loadStorageRegistry(env.DB);
+    expect(registry.buckets.get('avatars')?.policies[0]?.for).toBe('list');
   });
 
   it('refuses roles that are not a list at all', async () => {

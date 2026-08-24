@@ -80,6 +80,25 @@ export interface StorageWriteEvent {
 }
 
 /**
+ * A listing, which reads a directory rather than an object.
+ *
+ * Separate from `storage_write` rather than folded into it with a third operation,
+ * because the two carry different numbers and an operator filtering for writes
+ * should not have to exclude a read. The count is how many names went back, which
+ * is the only figure that says anything about cost here.
+ *
+ * No prefix, for the reason given above: a prefix contains a uid, so it names a
+ * person. The policy name says which grant allowed it, which is what an operator
+ * is looking for.
+ */
+export interface StorageReadEvent {
+  readonly event: 'storage_read';
+  readonly operation: 'list';
+  readonly policy: string;
+  readonly objects: number;
+}
+
+/**
  * Which per-isolate initialisation this is. A closed set, like every other field in
  * this file, so the event cannot become somewhere a table name or a bucket lands.
  */
@@ -138,6 +157,7 @@ export type LogEvent =
   | AuthEvent
   | AppMetadataEvent
   | StorageWriteEvent
+  | StorageReadEvent
   | IsolateInitEvent;
 
 export function logEvent(event: LogEvent): void {

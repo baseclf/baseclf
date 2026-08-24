@@ -46,6 +46,7 @@ import { forgetObject, recordObject } from './objects.js';
 import {
   assertUploadAllowed,
   authorizeStorage,
+  authorizeStorageListing,
   type StorageBucketDefinition,
   type StorageGrant,
 } from './policy.js';
@@ -333,6 +334,125 @@ export async function deleteObject(context: StorageContext): Promise<void> {
     policy: grant.policyName,
     bytes: 0,
   });
+}
+
+/**
+ * How many objects a listing returns when the caller does not say.
+ *
+ * Modest on purpose. A listing is the one storage call whose cost grows with what
+ * is in the bucket rather than with what the caller sent, so the default is a
+ * screenful and asking for more is a deliberate act.
+ */
+const DEFAULT_LIST_LIMIT = 100;
+
+/**
+ * The most a listing will ask R2 for in one call.
+ *
+ * Measured rather than quoted: `r2-list-behaviour.test.ts` asks R2 what its own
+ * ceiling is, and 1000 is what came back. A caller asking for more is clamped
+ * rather than refused, because the number is a preference and there is nothing
+ * for them to fix.
+ */
+const MAX_LIST_LIMIT = 1000;
+
+export interface StorageListingContext {
+  readonly bucket: R2Bucket;
+  readonly buckets: ReadonlyMap<string, StorageBucketDefinition>;
+  readonly auth: AuthCtx;
+  /** The logical bucket from the path, not the R2 binding. */
+  readonly bucketName: string;
+  /** A file name to resume after, never a key and never a cursor. */
+  readonly after: string | undefined;
+  readonly limit: number | undefined;
+}
+
+export interface ListedObject {
+  /**
+   * The file name, with the directory taken off.
+   *
+   * ⭐ A name rather than a key, and that is the whole shape of this endpoint. A
+   * caller that holds a path is a caller that can send one back, and every other
+   * operation here is built on them never having one. What comes out of a listing
+   * is exactly what goes into a download.
+   */
+  readonly name: string;
+  readonly size: number;
+  readonly uploaded: string;
+  readonly etag: string;
+}
+
+export interface ObjectListing {
+  readonly objects: readonly ListedObject[];
+  /** Hand back as `after` to continue, or absent when there is nothing to continue from. */
+  readonly next: string | undefined;
+  /** Whether R2 had more to give. See the note on `next` being absent while this is true. */
+  readonly truncated: boolean;
+  /**
+   * Directories inside this one, counted rather than listed.
+   *
+   * They exist: `wrangler r2 object put` can write `avatars/u_ann/old/x.png`, even
+   * though this API cannot, since a file name may not contain a separator. Such an
+   * object has no name this endpoint can hand out and no name a download could
+   * take back, so it is not an object here. Counting them keeps a screen from
+   * saying a directory is empty when it is not.
+   */
+  readonly folders: number;
+}
+
+/**
+ * List the one directory this caller may list.
+ *
+ * ⚠️ `delimiter` is doing real work, not tidying the output. Without it a nested
+ * key comes back as an object with no addressable name, which has to be skipped,
+ * and skipping breaks paging: a page whose objects were all nested would resume
+ * from where it started. With it there is nothing to skip, because every object in
+ * the answer is directly under the prefix. Measured in `r2-list-behaviour.test.ts`
+ * before this was written.
+ */
+export async function listObjects(context: StorageListingContext): Promise<ObjectListing> {
+  const listing = authorizeStorageListing({
+    buckets: context.buckets,
+    bucket: context.bucketName,
+    auth: context.auth,
+    after: context.after,
+  });
+
+  const limit = Math.min(Math.max(context.limit ?? DEFAULT_LIST_LIMIT, 1), MAX_LIST_LIMIT);
+
+  const page = await context.bucket.list({
+    prefix: listing.prefix,
+    delimiter: '/',
+    limit,
+    ...(listing.startAfter === undefined ? {} : { startAfter: listing.startAfter }),
+  });
+
+  const objects = page.objects.map((object) => ({
+    name: object.key.slice(listing.prefix.length),
+    size: object.size,
+    uploaded: object.uploaded.toISOString(),
+    etag: object.etag,
+  }));
+
+  // ⚠️ `next` is absent when there is nothing on this page to resume from, and
+  // `truncated` still says there is more. The two are reported separately rather
+  // than collapsed, because "no more" and "more that this cannot reach" are
+  // different answers and a caller that reads the first for the second stops early
+  // believing it saw everything.
+  const last = objects.at(-1);
+
+  logEvent({
+    event: 'storage_read',
+    operation: 'list',
+    policy: listing.policyName,
+    objects: objects.length,
+  });
+
+  return {
+    objects,
+    next: page.truncated && last !== undefined ? last.name : undefined,
+    truncated: page.truncated,
+    folders: page.delimitedPrefixes.length,
+  };
 }
 
 /**

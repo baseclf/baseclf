@@ -47,7 +47,13 @@ import { operationForMethod, readTable, tableFromPath, writeTable } from './rest
 import type { StorageOperation } from './storage/policy.js';
 import { describeSweep, reconcileStorage, sweepFoundDrift } from './storage/reconcile.js';
 import { getStorageRegistry } from './storage/registry.js';
-import { deleteObject, downloadObject, uploadObject } from './storage/router.js';
+import {
+  deleteObject,
+  downloadObject,
+  listObjects,
+  storageErrorResponse,
+  uploadObject,
+} from './storage/router.js';
 import { BaseclfError } from './utils/errors.js';
 import { logError } from './utils/log.js';
 import { isolateMemo } from './utils/memo.js';
@@ -283,6 +289,18 @@ interface StorageTarget {
 }
 
 /**
+ * A bucket with no file after it, which is a listing.
+ *
+ * Its own type rather than a `StorageTarget` with an optional `fileName`. An
+ * optional field on a security path is the shape debt 80 had, and it was paid by
+ * making the field required: the states worth having are the ones that can be
+ * written down, and "an object request with no object" is not one of them.
+ */
+interface StorageListingTarget {
+  readonly bucket: string;
+}
+
+/**
  * The bucket and file a path names, or null if it names neither.
  *
  * Decoded once, and after the segment count is taken. The order is a preference
@@ -292,6 +310,28 @@ interface StorageTarget {
  * separator in it is the policy layer, whose character set has no slash in it.
  * Two independent layers, and this is the cheaper one.
  */
+/**
+ * The bucket a path names with nothing after it, or null.
+ *
+ * Additive. The two-segment rule above is untouched, and the segment count still
+ * decides which of the two this is, so a third segment routes to neither. Debt 59.
+ */
+function storageListingFromPath(pathname: string): StorageListingTarget | null {
+  if (!pathname.startsWith(STORAGE_PREFIX)) return null;
+
+  const segments = pathname.slice(STORAGE_PREFIX.length).split('/');
+  if (segments.length !== 1) return null;
+
+  const [bucket] = segments;
+  if (bucket === undefined || bucket.length === 0) return null;
+
+  try {
+    return { bucket: decodeURIComponent(bucket) };
+  } catch {
+    return null;
+  }
+}
+
 function storageTargetFromPath(pathname: string): StorageTarget | null {
   if (!pathname.startsWith(STORAGE_PREFIX)) return null;
 
@@ -555,6 +595,12 @@ async function enforceStorageRateLimit(
 ): Promise<Response | null> {
   await ensureRateLimitTableOnce(env.DB);
 
+  // ⚠️ `list` counts against the write budget, and it is a read. Stated because
+  // the expression below would put it there by accident and the reason is not an
+  // accident: a listing is the one call whose cost grows with what is in the
+  // bucket rather than with what the caller sent, so it belongs with the sixty a
+  // minute rather than with the six hundred. Same acknowledged-guess numbers as
+  // the rest of this file.
   const write = operation !== 'download';
   const result = await checkRateLimit(env.DB, {
     key: deriveRateLimitKey(request, write ? 'storage_write' : 'storage_read', auth.uid),
@@ -724,6 +770,57 @@ async function handleRead(request: Request, env: Env, table: string): Promise<Re
  * a second limiter call site means choosing numbers, and the ones already in this
  * file are acknowledged guesses. Left out on purpose rather than guessed at twice.
  */
+/**
+ * A listing of one bucket, or a response saying why not.
+ *
+ * `GET /storage/v1/<bucket>` and nothing else. There is no field here in which a
+ * caller can name a directory: the one it may list comes from its own policy, and
+ * `after` is a file name that the policy layer puts a prefix in front of. Debt 59.
+ */
+async function handleStorageListing(
+  request: Request,
+  env: Env,
+  target: StorageListingTarget,
+  url: URL,
+): Promise<Response> {
+  if (request.method !== 'GET' && request.method !== 'HEAD') {
+    return Response.json(
+      { error: 'Method not allowed.', code: 'UNSUPPORTED_QUERY' },
+      { status: 405, headers: { allow: 'GET, HEAD' } },
+    );
+  }
+
+  const [auth, registry] = await Promise.all([identify(request, env), getStorageRegistry(env.DB)]);
+
+  const limited = await enforceStorageRateLimit(request, env, 'list', auth);
+  if (limited !== null) return limited;
+
+  const requested = url.searchParams.get('limit');
+  const after = url.searchParams.get('after');
+
+  try {
+    const listing = await listObjects({
+      bucket: env.BUCKET,
+      buckets: registry.buckets,
+      auth,
+      bucketName: target.bucket,
+      after: after === null ? undefined : after,
+      // A limit that is not a number is left undefined rather than refused. The
+      // number is a preference with a default and a ceiling, so there is nothing
+      // for a caller to fix, and refusing would make a listing fail over a query
+      // parameter that changes nothing about who may see what.
+      limit:
+        requested === null || !Number.isSafeInteger(Number(requested))
+          ? undefined
+          : Number(requested),
+    });
+
+    return Response.json(listing, { status: 200 });
+  } catch (error) {
+    return storageErrorResponse(error);
+  }
+}
+
 async function handleStorage(request: Request, env: Env, target: StorageTarget): Promise<Response> {
   const operation = storageOperationForMethod(request.method);
   if (operation === null) {
@@ -926,6 +1023,12 @@ async function respond(request: Request, env: Env): Promise<Response> {
       // `ensureEngineSchemaOnce`: this is the floor, not the plan.
       await ensureEngineSchemaOnce(env.DB);
       return await handleStorage(request, env, object);
+    }
+
+    const directory = storageListingFromPath(url.pathname);
+    if (directory !== null) {
+      await ensureEngineSchemaOnce(env.DB);
+      return await handleStorageListing(request, env, directory, url);
     }
 
     const table = tableFromPath(url.pathname);

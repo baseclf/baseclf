@@ -147,6 +147,37 @@ describe('R2 list() in this environment', () => {
     }
   });
 
+  it('⭐ separates the objects directly under a prefix from the directories below it', async () => {
+    // Debt 59 needs this or it needs a rule about nested keys, and the rule has a
+    // hole. A listing returns file NAMES, because a caller that holds a path is a
+    // caller that can send one back. A key like `dir/sub/file.bin` has no name
+    // this API can address, so it would have to be skipped, and skipping breaks
+    // paging: resuming from the last addressable name on a page that had none
+    // resumes from where it started.
+    //
+    // `delimiter` removes the question. Nested keys are not objects in the answer
+    // at all, they are folded into `delimitedPrefixes`, so there is nothing to
+    // skip and every object on a page has a name.
+    const nested = [`${PREFIX}sub/one.bin`, `${PREFIX}sub/two.bin`, `${PREFIX}deeper/a/b.bin`];
+    for (const key of nested) await bucket.put(key, 'x');
+
+    try {
+      const page = await bucket.list({ prefix: PREFIX, delimiter: '/' });
+
+      // Every object is directly under the prefix, so every one has a name.
+      for (const object of page.objects) {
+        expect(object.key.slice(PREFIX.length)).not.toContain('/');
+      }
+      expect(page.objects.map((object) => object.key)).toEqual(KEYS);
+
+      // And what was left out is reported rather than dropped, which is what lets
+      // a screen say a directory has more in it than it can show.
+      expect([...page.delimitedPrefixes].sort()).toEqual([`${PREFIX}deeper/`, `${PREFIX}sub/`]);
+    } finally {
+      for (const key of nested) await bucket.delete(key);
+    }
+  });
+
   it('treats startAfter as exclusive, so a pass can resume from a key alone', async () => {
     // A second way to resume, and the one that survives a cursor being unusable
     // across invocations. A cursor is an opaque token with no documented lifetime;

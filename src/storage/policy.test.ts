@@ -17,6 +17,7 @@ import { BaseclfError } from '../utils/errors.js';
 import {
   assertUploadAllowed,
   authorizeStorage,
+  authorizeStorageListing,
   type StorageBucketDefinition,
   type StorageGrant,
   type StorageOperation,
@@ -305,6 +306,95 @@ describe('a prefix built from an app claim', () => {
     expectNotFound(() => authorizeTenant({ tenant: 'acme/globex' }));
     expectNotFound(() => authorizeTenant({ tenant: '' }));
     expectNotFound(() => authorizeTenant({ tenant: 'a'.repeat(65) }));
+  });
+});
+
+/**
+ * Debt 59. The operation that asks about a set rather than an object.
+ *
+ * The whole storage design rests on one sentence: a caller never names a
+ * directory, it names one file and the key is built here. A listing is the only
+ * operation whose subject *is* a directory, so these tests are about that sentence
+ * surviving rather than about listing working.
+ */
+describe('listing a directory the caller never gets to name', () => {
+  const LISTABLE: StorageBucketDefinition = {
+    ...AVATARS,
+    policies: [
+      ...AVATARS.policies,
+      { name: 'list_own', for: 'list', to: ['authenticated'], prefix: 'avatars/$auth.uid/' },
+    ],
+  };
+
+  const listing = (overrides: { auth?: AuthCtx; after?: string; bucket?: string } = {}) =>
+    authorizeStorageListing({
+      buckets: registry(LISTABLE),
+      bucket: overrides.bucket ?? 'avatars',
+      auth: overrides.auth ?? ANN,
+      after: overrides.after,
+    });
+
+  it('is the directory the policy describes, with the claim substituted', () => {
+    expect(listing().prefix).toBe('avatars/u_ann/');
+    expect(listing().policyName).toBe('list_own');
+  });
+
+  it('differs by identity for the same request', () => {
+    expect(listing({ auth: ANN }).prefix).toBe('avatars/u_ann/');
+    expect(listing({ auth: BOB }).prefix).toBe('avatars/u_bob/');
+  });
+
+  it('refuses a bucket with no list policy for this role', () => {
+    // Fail-closed on the new operation too, which is the point of routing it
+    // through the same resolution rather than writing a second one.
+    const refused = expectNotFound(() =>
+      authorizeStorageListing({
+        buckets: registry(AVATARS),
+        bucket: 'avatars',
+        auth: ANN,
+        after: undefined,
+      }),
+    );
+    expect(refused.detail).toContain('no list policy');
+  });
+
+  it('resumes from a name by putting the directory in front of it, not from a cursor', () => {
+    // The resume point is a full key built here. A caller hands back a name it
+    // already holds and has no way to express a position at all, so R2's cursor
+    // never crosses the boundary. See `StorageListing.startAfter`.
+    expect(listing({ after: 'me.png' }).startAfter).toBe('avatars/u_ann/me.png');
+    expect(listing().startAfter).toBeUndefined();
+  });
+
+  it('cannot resume from a name that reaches out of the directory', () => {
+    expectNotFound(() => listing({ after: '../u_bob/theirs.png' }));
+    expectNotFound(() => listing({ after: 'u_bob/theirs.png' }));
+    expectNotFound(() => listing({ after: '' }));
+  });
+
+  it('refuses two list policies the same way every other operation does', () => {
+    const ambiguous = registry({
+      ...AVATARS,
+      policies: [
+        { name: 'list_own', for: 'list', to: ['authenticated'], prefix: 'avatars/$auth.uid/' },
+        { name: 'list_shared', for: 'list', to: ['authenticated'], prefix: 'avatars/shared/' },
+      ],
+    });
+
+    const refused = expectNotFound(() =>
+      authorizeStorageListing({
+        buckets: ambiguous,
+        bucket: 'avatars',
+        auth: ANN,
+        after: undefined,
+      }),
+    );
+    expect(refused.detail).toContain('list_own');
+    expect(refused.detail).toContain('list_shared');
+  });
+
+  it('accepts list as an operation a policy may be saved for', () => {
+    expect(() => validateStorageBucket(LISTABLE)).not.toThrow();
   });
 });
 

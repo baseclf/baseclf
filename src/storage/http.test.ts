@@ -134,6 +134,15 @@ beforeAll(async () => {
       null,
       null,
     ),
+    insert.bind(
+      'avatars',
+      'list_own',
+      'list',
+      '["authenticated"]',
+      'avatars/$auth.uid/',
+      null,
+      null,
+    ),
   ]);
   resetStorageRegistry();
 
@@ -211,6 +220,79 @@ describe('an object over HTTP', () => {
   });
 });
 
+/**
+ * Debt 59, end to end.
+ *
+ * The unit tests prove the decisions; this proves that a real request reaches
+ * them, and above all that what comes back is a set of NAMES. A listing that
+ * handed out keys would hand every caller a path, and every other operation here
+ * is built on them never having one.
+ */
+describe('a listing over HTTP', () => {
+  it('returns the names in the caller own directory, and nothing else', async () => {
+    await call('/storage/v1/avatars/one.png', png(8));
+    await call('/storage/v1/avatars/two.png', png(8));
+    // Somebody else's object, written straight to R2 so no policy is involved.
+    await env.BUCKET.put('avatars/u_somebody/theirs.png', 'x');
+
+    const response = await call('/storage/v1/avatars');
+    expect(response.status).toBe(200);
+
+    const body = (await response.json()) as {
+      objects: { name: string; size: number }[];
+      folders: number;
+      truncated: boolean;
+    };
+
+    expect(body.objects.map((object) => object.name).sort()).toEqual(['one.png', 'two.png']);
+    // Names, not keys. The assertion that says the boundary held.
+    for (const object of body.objects) expect(object.name).not.toContain('/');
+    expect(body.truncated).toBe(false);
+
+    await env.BUCKET.delete('avatars/u_somebody/theirs.png');
+    await call('/storage/v1/avatars/one.png', { method: 'DELETE' });
+    await call('/storage/v1/avatars/two.png', { method: 'DELETE' });
+  });
+
+  it('is refused for a caller with no token, because anon has no list policy', async () => {
+    const response = await call('/storage/v1/avatars', { signedIn: false });
+    expect(response.status).toBe(404);
+  });
+
+  it('counts a directory it cannot address rather than pretending it is not there', async () => {
+    // `wrangler r2 object put` can write a nested key even though this API cannot,
+    // and such an object has no name a download could take back. Reporting the
+    // count keeps a screen from calling the directory empty when it is not.
+    await env.BUCKET.put(`avatars/${uid}/old/archived.png`, 'x');
+
+    const body = (await (await call('/storage/v1/avatars')).json()) as {
+      objects: unknown[];
+      folders: number;
+    };
+
+    expect(body.objects).toHaveLength(0);
+    expect(body.folders).toBe(1);
+
+    await env.BUCKET.delete(`avatars/${uid}/old/archived.png`);
+  });
+
+  it('resumes from a name, and refuses one that reaches out of the directory', async () => {
+    await call('/storage/v1/avatars/a.png', png(8));
+    await call('/storage/v1/avatars/b.png', png(8));
+
+    const after = (await (await call('/storage/v1/avatars?after=a.png')).json()) as {
+      objects: { name: string }[];
+    };
+    expect(after.objects.map((object) => object.name)).toEqual(['b.png']);
+
+    // A name is all a caller may hand back, so this is the only escape to try.
+    expect((await call('/storage/v1/avatars?after=../u_somebody/x.png')).status).toBe(404);
+
+    await call('/storage/v1/avatars/a.png', { method: 'DELETE' });
+    await call('/storage/v1/avatars/b.png', { method: 'DELETE' });
+  });
+});
+
 describe('the shape of the URL, which is the defence rather than a check', () => {
   it('does not route a path with a third segment', async () => {
     // A file name cannot contain a separator because this does not parse as a
@@ -221,8 +303,13 @@ describe('the shape of the URL, which is the defence rather than a check', () =>
     expect(await env.BUCKET.head('avatars/nested/me.png')).toBeNull();
   });
 
-  it('does not route a path with one segment', async () => {
-    expect((await call('/storage/v1/avatars', png(8))).status).toBe(404);
+  it('routes a path with one segment to a listing, and to nothing else', async () => {
+    // Changed on 2026-08-24 with debt 59. One segment used to route nowhere; it
+    // is now a listing, and the two-segment rule above is untouched, so the
+    // segment count still decides which of the two a path is and a third segment
+    // is still neither.
+    expect((await call('/storage/v1/avatars')).status).toBe(200);
+    expect((await call('/storage/v1/avatars', png(8))).status).toBe(405);
   });
 
   it('refuses an encoded separator, at the layer after the route', async () => {
