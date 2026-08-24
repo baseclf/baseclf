@@ -186,6 +186,36 @@ describe('the order that makes an interrupted run safe', () => {
   });
 });
 
+describe('what enabled means when the document does not say', () => {
+  it('applies as disabled, and says so instead of printing addresses to use', async () => {
+    // The same reading `parse.ts` gives a table document: anything other than an
+    // explicit true is off. The two apply paths share the field name, so they
+    // have to share the default; this one spent its first weeks defaulting the
+    // other way, which left one product reading one word in two directions.
+    const test = harness({ file: storageDocument({ enabled: undefined }) });
+
+    expect(await runStorage(['apply', 'bucket.json'], test.write, PLAIN, test.host)).toBe('ok');
+
+    const written = test.sent.find((one) => one.sql.startsWith('INSERT INTO "_storage_buckets"'));
+    expect(written?.params).toEqual(['avatars', 0, 1]);
+
+    // The closed default must not pass silently, and a bucket that refuses
+    // everything has no request worth composing.
+    expect(test.text()).toContain('does not set enabled to true');
+    expect(test.text()).not.toContain('PUT ');
+  });
+
+  it('is refused outright when enabled is present but not a boolean', async () => {
+    // `"true"` the string would otherwise land in the closed branch and read as
+    // a typo'd way of switching off, which is not what its author meant.
+    const test = harness({ file: storageDocument({ enabled: 'true' }) });
+
+    expect(await runStorage(['apply', 'bucket.json'], test.write, PLAIN, test.host)).toBe('usage');
+    expect(test.requests()).toBe(0);
+    expect(test.text()).toContain('not true or false');
+  });
+});
+
 describe('a document the engine would refuse', () => {
   it('is refused here too, and before the network is touched', async () => {
     // The prefix rule, which exists because without the separator `avatars/u_ann`

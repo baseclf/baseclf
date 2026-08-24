@@ -178,27 +178,38 @@ async function apply(
     ),
   );
 
-  // The addresses rather than a description of them. A reader who has just written
-  // their first storage policy has no other way to know what the URL looks like, and
-  // the shape is the part that is not guessable: one segment is the bucket, a second
-  // is a file name, and there is never a third.
-  write(
-    nextAction({
-      goal: 'use it',
-      // ⚠️ One entry per STEP, not per line. `nextAction` numbers them, so a
-      // sentence split across two entries prints as "1." and "2." for one
-      // instruction. Written that way first, and only running the command showed
-      // it: nothing in the suite reads the numbering.
-      steps: [
-        'Upload with a bearer token, then list what is there. One segment is the bucket, a second is a file name, and there is never a third.',
-      ],
-      copy: [
-        `PUT  https://<deployment>/storage/v1/${bucket}/<file-name>`,
-        `GET  https://<deployment>/storage/v1/${bucket}`,
-      ],
-      verify: 'baseclf storage list',
-    }),
-  );
+  if (document.definition.enabled) {
+    // The addresses rather than a description of them. A reader who has just written
+    // their first storage policy has no other way to know what the URL looks like, and
+    // the shape is the part that is not guessable: one segment is the bucket, a second
+    // is a file name, and there is never a third.
+    write(
+      nextAction({
+        goal: 'use it',
+        // ⚠️ One entry per STEP, not per line. `nextAction` numbers them, so a
+        // sentence split across two entries prints as "1." and "2." for one
+        // instruction. Written that way first, and only running the command showed
+        // it: nothing in the suite reads the numbering.
+        steps: [
+          'Upload with a bearer token, then list what is there. One segment is the bucket, a second is a file name, and there is never a third.',
+        ],
+        copy: [
+          `PUT  https://<deployment>/storage/v1/${bucket}/<file-name>`,
+          `GET  https://<deployment>/storage/v1/${bucket}`,
+        ],
+        verify: 'baseclf storage list',
+      }),
+    );
+  } else {
+    // Not the "use it" block: a disabled bucket has no request worth composing,
+    // and printing its URLs under a line that says it is off would be the two
+    // halves of the output disagreeing.
+    write(
+      note(
+        'The document does not set enabled to true, so every request for this bucket is refused until an apply that does.',
+      ),
+    );
+  }
 
   // ⚠️ Not a number, on purpose. Measured twice on a real deployment and the answers
   // were 57 seconds and over 393 seconds apart, for the same code and the same

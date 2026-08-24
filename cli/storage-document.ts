@@ -136,10 +136,15 @@ export function readStorageDocument(text: string): StorageDocument {
 
   const definition: StorageBucketDefinition = {
     bucket,
-    // Absent means enabled. A document somebody wrote in order to grant something
-    // should not need a line saying they meant it, and the way to switch a bucket
-    // off is `enabled: false`, which is a thing they can see themselves writing.
-    enabled: raw.enabled === undefined ? true : raw.enabled,
+    // Anything other than an explicit `true` leaves the bucket off, the same
+    // reading `parse.ts` gives the same field on a table document. This used to
+    // default the other way, on the argument that a document written to grant
+    // something should not need a line saying so; that argument was fine and
+    // still lost, because it left the two apply paths of one product reading
+    // one field name with opposite defaults, and because absent-means-open is
+    // not a default this engine has anywhere else. `apply` says which state the
+    // bucket landed in, so the closed default cannot pass silently.
+    enabled: raw.enabled === true,
     policies: raw.policies.map(readPolicy),
   };
 

@@ -80,8 +80,10 @@ describe('the storage documents a reader copies', () => {
 
   it('shows documents that would actually serve something', () => {
     // The same trap as the table example had: a document that parses, stores, and
-    // reaches nobody. Absent means enabled for a storage document, so this catches an
-    // example written with `enabled: false` rather than one that omitted the field.
+    // reaches nobody. Absent means closed for a storage document too, since
+    // 2026-08-24 (the field reads the same way on both apply paths), so this
+    // catches an example that omitted the field as well as one written with
+    // `enabled: false`.
     for (const document of storageDocumentsIn(readme)) {
       expect(readStorageDocument(document).definition.enabled).toBe(true);
       expect(readStorageDocument(document).definition.policies.length).toBeGreaterThan(0);

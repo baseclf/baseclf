@@ -413,10 +413,11 @@ npx baseclf storage apply files.json --project your-project-name
 ```
 
 A bucket with no rules grants nothing, and neither does a rule with no bucket: a
-bucket absent from the registry, or present with `enabled: false`, is not
-reachable at all. Applying replaces every rule on that bucket, and while it runs
-the bucket is not served, so an interrupted run leaves it closed rather than half
-open.
+bucket absent from the registry, or one whose document does not say
+`enabled: true`, is not reachable at all: a grant has to say it is on, the same
+reading a table document gets. Applying replaces every rule on that bucket, and
+while it runs the bucket is not served, so an interrupted run leaves it closed
+rather than half open.
 
 The four operations are `upload`, `download`, `delete` and `list`. A listing
 returns file **names** rather than keys, which is the same shape as the rest of
