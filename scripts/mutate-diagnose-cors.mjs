@@ -46,13 +46,11 @@ const MUTATIONS = [
         replace: "{ name: 'BUCKET', present: true },",
       },
     ],
-    knownSurvivor:
-      'no test drives the worker with a binding actually absent. Removing one from ' +
-      'the test env means removing it from `wrangler.jsonc`, which every storage ' +
-      'suite in the project depends on. The check itself is covered directly in ' +
-      '`diagnose.test.ts`; what this would prove is that `index.ts` reads the real ' +
-      'value, and the honest way to prove that is a second deployment rather than a ' +
-      'test. If this ever gets killed, somebody found a way and this note is stale.',
+    // Was a knownSurvivor until 2026-08-24, on the claim that driving the worker
+    // with a binding absent meant removing it from `wrangler.jsonc`. It never
+    // did: `worker.fetch` takes any env, so a test builds one without BUCKET by
+    // destructuring, the same `bare` idiom routes.test.ts already used for the
+    // optional variables, plus the cast the required field forces.
   },
   {
     name: 'the drift restored: diagnose forms its own opinion, by raw string',
@@ -133,6 +131,8 @@ const MUTATIONS = [
 
 await runMutations({
   files: [DIAGNOSE, INDEX],
-  suites: ['src/auth/diagnose.test.ts', 'src/cors.test.ts'],
+  // routes.test.ts is here for the forgot-a-binding test that drives the whole
+  // worker with `env.BUCKET` absent, which no unit suite can express.
+  suites: ['src/auth/diagnose.test.ts', 'src/cors.test.ts', 'src/auth/routes.test.ts'],
   mutations: MUTATIONS,
 });

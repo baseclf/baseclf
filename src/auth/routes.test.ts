@@ -74,6 +74,26 @@ describe('the diagnostic endpoint', () => {
 
     expect(JSON.stringify(await response.json())).not.toContain(canary);
   });
+
+  it('reports a binding missing from the live deployment, read off env rather than the type', async () => {
+    // `Env` declares BUCKET as required, so the deployment state under test is
+    // the one the type forbids, and exactly the state the real deployment was
+    // in on 2026-08-11: a config without `r2_buckets` deploys, reports success,
+    // and leaves `env.BUCKET` undefined at runtime. The cast constructs what
+    // the type cannot express, which is the whole point of the check.
+    const missingBucket = (({ BUCKET, ...rest }) => rest)(configured) as Env;
+
+    const response = await call('/api/auth/_diagnose', '203.0.113.13', missingBucket);
+    expect(response.status).toBe(200);
+
+    const body = (await response.json()) as {
+      bindings: { name: string; present: boolean }[];
+      warnings: string[];
+    };
+    expect(body.bindings).toContainEqual({ name: 'DB', present: true });
+    expect(body.bindings).toContainEqual({ name: 'BUCKET', present: false });
+    expect(body.warnings.some((warning) => warning.includes('env.BUCKET'))).toBe(true);
+  });
 });
 
 describe('the rate limiter in front of the auth endpoints', () => {
@@ -164,6 +184,78 @@ describe('the scheduled sweep', () => {
 
     expect(keys).not.toContain('sweep_test|stale');
     expect(keys).toContain('sweep_test|live');
+  });
+
+  it('still runs the second job when the first fails, and still reports the failure', async () => {
+    // The two jobs are isolated on purpose: an hour where the rate limit table
+    // is broken must not become an hour where storage drift goes unswept. The
+    // isolation is proven positively (the storage sweep is observed going to
+    // the database) rather than inferred from the absence of its failure.
+    let sessionStatements = 0;
+
+    const rateLimitsUnreachable = new Proxy(env.DB, {
+      get(target, property, receiver) {
+        if (property === 'prepare') {
+          return () => {
+            throw new Error('the rate limit table is unreachable in this test');
+          };
+        }
+        if (property === 'withSession') {
+          return (constraint?: string) =>
+            new Proxy(target.withSession(constraint), {
+              get(session, name, sessionReceiver) {
+                if (name === 'prepare') {
+                  return (sql: string) => {
+                    sessionStatements += 1;
+                    return session.prepare(sql);
+                  };
+                }
+                return Reflect.get(session, name, sessionReceiver);
+              },
+            });
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+
+    // The platform's view of a cron is whether the handler resolved, so a run
+    // with a failed job still has to throw, and to throw the aggregate that
+    // names the job, not the raw error, which would mean the first failure
+    // escaped before the second job had its turn.
+    await expect(
+      worker.scheduled(
+        { scheduledTime: 0, cron: '17 * * * *', noRetry: () => {} },
+        { ...configured, DB: rateLimitsUnreachable },
+      ),
+    ).rejects.toThrow('Scheduled jobs failed: rate limit sweep.');
+
+    expect(sessionStatements).toBeGreaterThan(0);
+  });
+
+  it('reports a failed storage sweep even when the rate limit sweep was fine', async () => {
+    // The other direction of the same property. A handler that logs the failure
+    // and resolves is a sweep that can die silently, which for this job means
+    // drift nobody sees.
+    resetRateLimitTableMemo();
+    await call('/api/auth/sign-in/email', '203.0.113.52');
+
+    const storageUnreachable = new Proxy(env.DB, {
+      get(target, property, receiver) {
+        if (property === 'withSession') {
+          return () => {
+            throw new Error('the storage session is unreachable in this test');
+          };
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+
+    await expect(
+      worker.scheduled(
+        { scheduledTime: 0, cron: '17 * * * *', noRetry: () => {} },
+        { ...configured, DB: storageUnreachable },
+      ),
+    ).rejects.toThrow('Scheduled jobs failed: storage sweep.');
   });
 });
 

@@ -143,12 +143,11 @@ const MUTATIONS = [
     expect: 'the scheduled-sweep tests',
     find: / {6}try \{\n {8}await work\(\);\n {6}\} catch \(error\) \{/,
     replace: '      try {\n        await work();\n      } catch (error) {\n        throw error;',
-    knownSurvivor:
-      'no test yet makes one cron job fail while asserting the other still ran. The ' +
-      'condition needs a deployment whose rate limit table is missing but whose storage ' +
-      'table is not, and building that costs more than the isolation is worth guarding ' +
-      'at this size. Recorded rather than hidden: if this ever gets killed, a test ' +
-      'started covering it and this note is stale.',
+    // Was a knownSurvivor until 2026-08-24, on the claim that the condition
+    // needed a deployment whose rate limit table is missing but whose storage
+    // table is not. It never did: a Proxy over `env.DB` that throws on `prepare`
+    // while `withSession` still answers is that deployment, per isolate, and the
+    // test counts the second job's statements rather than trusting its silence.
   },
   {
     name: 'a failed cron job logged and then swallowed, so the platform sees success',
@@ -156,9 +155,6 @@ const MUTATIONS = [
     expect: 'the scheduled-sweep tests',
     find: / {4}if \(failed\.length > 0\) \{\n {6}throw new Error\(`Scheduled jobs failed: \$\{failed\.join\(', '\)\}\.`\);\n {4}\}/,
     replace: '    void failed;',
-    knownSurvivor:
-      'same gap as above, and the same reason. Both are about what happens when a job ' +
-      'throws, and nothing in the suite makes one throw yet.',
   },
 ];
 
