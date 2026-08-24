@@ -35,7 +35,7 @@
  * statement fails (`rules/01` §A, and measured again in
  * `auth/migration-idempotency.test.ts`). A half-applied schema is the state that
  * is hardest to reason about afterwards, so the choice is all of it or none of
- * it. It is also one round trip rather than nine.
+ * it. It is also one round trip rather than one per statement.
  *
  * ## What this deliberately does NOT do
  *

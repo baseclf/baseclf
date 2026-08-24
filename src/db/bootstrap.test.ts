@@ -101,8 +101,10 @@ describe('the schema this applies', () => {
 
   it('goes as one batch, so a failure partway leaves no half-applied schema', async () => {
     // `batch()` is the only transaction primitive D1 has. Asserted by counting
-    // round trips: nine statements sent one at a time is nine chances to stop in
-    // the middle, and the middle is the state hardest to recover from.
+    // round trips: a schema sent one statement at a time is as many chances to
+    // stop in the middle, and the middle is the state hardest to recover from.
+    // (Deliberately not a number: the count was written down as "nine" once,
+    // the schema grew to thirteen, and the prose was stale for weeks.)
     let batches = 0;
     const counting: D1Executor = {
       prepare: (sql: string) => db.prepare(sql),

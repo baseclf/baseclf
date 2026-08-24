@@ -36,9 +36,9 @@ const MUTATIONS = [
     replace: '      return await handleStorage',
   },
   {
-    // Nine round trips instead of one, and nine places to stop halfway. D1's only
-    // transaction primitive is batch(), so this is the difference between all of
-    // the schema and an arbitrary prefix of it.
+    // One round trip per statement instead of one in total, and as many places to
+    // stop halfway. D1's only transaction primitive is batch(), so this is the
+    // difference between all of the schema and an arbitrary prefix of it.
     name: 'the schema sent one statement at a time rather than as one batch',
     file: BOOTSTRAP,
     expect: 'the one-batch test',
