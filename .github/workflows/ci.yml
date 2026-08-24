@@ -87,3 +87,30 @@ jobs:
       - name: Build and contract tests
         run: npm test
         working-directory: site
+
+  # Asks about production rather than about this commit: is the site that is
+  # deployed right now calling a bridge route that npm does not serve?
+  #
+  # `deploy:site` already refuses that combination, but a gate only guards the path
+  # it sits on, and deploying with `wrangler` by hand skips it. AGENTS.md section 8
+  # has been broken four times and the fourth was live for a day before anybody
+  # looked, so the durable check is on the state, not on the procedure.
+  #
+  # main only, and not on pull requests. A branch that adds a call to a route which
+  # is not published yet is correct work in the right order: publish comes between
+  # merge and deploy, so failing the PR would push people to bypass this rather
+  # than to follow it. Production is the only place the combination is wrong.
+  ship-order:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      # No `npm ci`. This reads a deployed site and a published tarball, and needs
+      # neither this repository's dependencies nor its build.
+      - name: Deployed site against the published CLI
+        run: node scripts/check-ship-order.mjs --live
