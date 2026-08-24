@@ -76,8 +76,15 @@ export const STORAGE_SCHEMA: readonly string[] = Object.freeze([
   // would be a record of something that is no longer true.
   //
   // Times come from `unixepoch()`, which D1 has and which returns INTEGER.
-  // `strftime('%s','now')` returns TEXT and would be the wrong type for these
-  // columns in a STRICT table. Measured, rules/01 §G7.
+  //
+  // ⚠️ Not because `strftime('%s','now')` would be refused here. That was the
+  // reason this comment used to give, citing rules/01 §G7, and §G8 corrected it
+  // after measuring: a STRICT column takes a TEXT value it can convert without
+  // loss and stores it as an integer, so `strftime` lands in these columns
+  // perfectly well. `src/storage/strict-affinity.test.ts` holds the probe.
+  //
+  // The reason is that `unixepoch()` returns the right type to begin with, so
+  // nothing here rests on an implicit conversion a reader cannot see.
   `CREATE TABLE IF NOT EXISTS _storage_objects (
      key          TEXT PRIMARY KEY NOT NULL,
      bucket       TEXT NOT NULL,

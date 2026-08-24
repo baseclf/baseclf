@@ -435,9 +435,32 @@ export interface StorageGrant {
  * answer: there is no shape in the return type that means "allowed, but check
  * something else first".
  *
- * Fail-closed at three separate points, listed because each one is a place a
+ * Fail-closed at four separate points, listed because each one is a place a
  * later change could quietly turn into a default: an unknown bucket, a bucket
- * that is not enabled, and no policy matching the operation and role.
+ * that is not enabled, no policy matching the operation and role, and more than
+ * one policy resolving for the same request.
+ *
+ * ## Debt 62: why more than one match is a refusal rather than a choice
+ *
+ * This used to take the first policy whose prefix resolved. That made the order
+ * of rows in `_storage_policies` decide which grant applied, and the policy
+ * language has no way to say so: nothing in a document expresses precedence, and
+ * nothing in the table guarantees an order.
+ *
+ * ⚠️ Worth being exact about what that cost, because it is not what it looks
+ * like. Two download policies with different prefixes never meant "this role can
+ * read both directories". It meant the first one was used and **the second was
+ * dead**, with its objects unreachable and nothing saying so. So refusing here
+ * takes away no working capability. It makes visible a configuration that never
+ * did what its author meant.
+ *
+ * The refusal is here rather than in `validateStorageBucket`, and that is a
+ * deliberate trade rather than an oversight. Validation runs at load as well as
+ * at save, and an invalid policy throws for the whole bucket, so a new rule there
+ * would turn an existing deployment's misconfiguration into an outage across
+ * every bucket it has. `loadStorageRegistry` makes the same argument about bucket
+ * names in its own comment. Refusing the one ambiguous request keeps the rest of
+ * the deployment answering, and the refusal names both policies.
  */
 export function authorizeStorage(request: StorageRequest): StorageGrant {
   const definition = request.buckets.get(request.bucket);
@@ -460,34 +483,56 @@ export function authorizeStorage(request: StorageRequest): StorageGrant {
 
   assertUsableFileName(request.fileName);
 
-  // First policy whose prefix resolves wins, and its limits are the ones that
-  // apply. Taking the first rather than combining is the conservative reading:
-  // one policy has to allow the whole request, the same rule the write path uses
-  // for `using` and `check`, so a caller can never assemble a grant out of the
-  // permissive halves of two different policies.
+  // Every candidate is resolved, not just candidates up to the first success.
+  // Stopping early is what made the row order decide the grant, so the count
+  // matters as much as the value and the count is not known until the end.
   //
-  // The refusal from the last candidate is kept and rethrown, so a deployment
-  // with one policy still gets that policy's reason rather than a generic one.
+  // The refusal from the last candidate that failed is kept and rethrown, so a
+  // deployment with one policy still gets that policy's reason rather than a
+  // generic one. A policy that cannot resolve is not a candidate: a caller with
+  // no `$auth.uid` is simply not covered by a policy that needs one, which is how
+  // a single bucket serves anon and signed-in callers from separate rules.
+  const resolved: { readonly policy: StoragePolicy; readonly prefix: string }[] = [];
   let refusal: unknown;
 
   for (const policy of matching) {
-    let prefix: string;
     try {
-      prefix = resolvePrefix(policy, request.auth);
+      resolved.push({ policy, prefix: resolvePrefix(policy, request.auth) });
     } catch (error) {
       refusal = error;
-      continue;
     }
-
-    return Object.freeze({
-      key: `${prefix}${request.fileName}`,
-      policyName: policy.name,
-      maxSizeBytes: policy.maxSizeBytes,
-      allowedMimeTypes: policy.allowedMimeTypes,
-    });
   }
 
-  throw refusal ?? notFound(`No ${request.operation} policy on "${request.bucket}" resolved.`);
+  if (resolved.length === 0) {
+    throw refusal ?? notFound(`No ${request.operation} policy on "${request.bucket}" resolved.`);
+  }
+
+  if (resolved.length > 1) {
+    // Debt 62. Named in full, because the operator has to find both of them and
+    // only one of them was ever doing anything.
+    throw notFound(
+      `Bucket "${request.bucket}" has ${resolved.length} ${request.operation} policies that ` +
+        `resolve for role "${request.auth.role}": ` +
+        `${resolved.map((candidate) => `"${candidate.policy.name}"`).join(', ')}. ` +
+        'Which one applied would be decided by the order of the rows, and a policy document ' +
+        'has no way to express precedence, so this is refused rather than one of them being ' +
+        'picked. Narrow the roles or the operations until one policy covers this request.',
+    );
+  }
+
+  const only = resolved[0];
+  if (only === undefined) {
+    // Unreachable: the length was just checked. Kept because the alternative to a
+    // throw is a non-null assertion on the line that builds a key.
+    throw notFound(`No ${request.operation} policy on "${request.bucket}" resolved.`);
+  }
+
+  return Object.freeze({
+    key: `${only.prefix}${request.fileName}`,
+    policyName: only.policy.name,
+    maxSizeBytes: only.policy.maxSizeBytes,
+    allowedMimeTypes: only.policy.allowedMimeTypes,
+  });
 }
 
 /**

@@ -308,6 +308,70 @@ describe('a prefix built from an app claim', () => {
   });
 });
 
+describe('two policies covering one request, which the language cannot express', () => {
+  /** Two upload policies for the same role, differing only where they point. */
+  const AMBIGUOUS: StorageBucketDefinition = {
+    bucket: 'avatars',
+    enabled: true,
+    policies: [
+      { name: 'upload_own', for: 'upload', to: ['authenticated'], prefix: 'avatars/$auth.uid/' },
+      { name: 'upload_shared', for: 'upload', to: ['authenticated'], prefix: 'avatars/shared/' },
+    ],
+  };
+
+  it('refuses rather than letting the order of the rows decide the grant', () => {
+    // Debt 62. Nothing in a policy document expresses precedence and nothing about
+    // the table guarantees an order, so picking one is picking whichever happened
+    // to be read first.
+    const refused = expectNotFound(() => authorize({ buckets: registry(AMBIGUOUS) }));
+
+    expect(refused.detail).toContain('upload_own');
+    expect(refused.detail).toContain('upload_shared');
+  });
+
+  it('refuses the same way whichever order they are stored in', () => {
+    // The assertion that says the fix worked. Before it, these two calls returned
+    // two different keys and neither was wrong by any rule that was written down.
+    const forwards = expectNotFound(() => authorize({ buckets: registry(AMBIGUOUS) }));
+    const backwards = expectNotFound(() =>
+      authorize({
+        buckets: registry({ ...AMBIGUOUS, policies: [...AMBIGUOUS.policies].reverse() }),
+      }),
+    );
+
+    expect(backwards.status).toBe(forwards.status);
+    expect(backwards.toResponseBody()).toEqual(forwards.toResponseBody());
+  });
+
+  it('still grants when only one of the two can resolve for this caller', () => {
+    // The case that must NOT be refused, and the reason the count is taken after
+    // resolution rather than before it. A policy needing a claim the caller does
+    // not carry is not a policy covering this caller, so one bucket can serve anon
+    // and signed-in callers from separate rules the way it always could.
+    const mixed = registry({
+      ...AMBIGUOUS,
+      policies: [
+        { name: 'upload_own', for: 'upload', to: ['anon'], prefix: 'avatars/$auth.uid/' },
+        { name: 'upload_shared', for: 'upload', to: ['anon'], prefix: 'avatars/shared/' },
+      ],
+    });
+
+    expect(authorize({ auth: ANON, buckets: mixed }).key).toBe('avatars/shared/me.png');
+  });
+
+  it('reports the reason of the one that failed when no policy resolves at all', () => {
+    // Collecting candidates must not lose the last refusal. Without it a caller
+    // whose claim is missing gets a generic sentence naming no cause.
+    const neither = registry({
+      ...AMBIGUOUS,
+      policies: [{ name: 'upload_own', for: 'upload', to: ['anon'], prefix: 'avatars/$auth.uid/' }],
+    });
+
+    const refused = expectNotFound(() => authorize({ auth: ANON, buckets: neither }));
+    expect(refused.detail).toContain('$auth.uid');
+  });
+});
+
 describe('fail-closed, at each of the three places it could become a default', () => {
   it('refuses a bucket that is not in the registry', () => {
     expectNotFound(() => authorize({ bucket: 'not-registered' }));
