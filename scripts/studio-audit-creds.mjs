@@ -165,25 +165,42 @@ const server = createServer((request, response) => {
     return;
   }
 
-  if (served) {
+  // 🔴 One-shot without a bridge, repeatable with one, and the difference is not a
+  // relaxation of the rule but a correction of what the rule was protecting.
+  //
+  // The point of stopping after one answer is that a server handing out a token
+  // indefinitely is worse than the problem it solves. With `--with-bridge` the
+  // process is already long-lived and already holding a bridge on a known port, so
+  // the marginal exposure of a second answer inside the same bounded session is
+  // nothing, while the cost was real: an audit that reloaded the page had to kill
+  // and restart everything, and that happened twice before this was written.
+  //
+  // The gates that carry the weight are unchanged: loopback only, a local Origin,
+  // and a lifetime.
+  if (served && bridge === null) {
     console.log('refused a second ask');
     response.writeHead(410, headers).end(JSON.stringify({ error: 'Already handed over.' }));
     return;
   }
 
+  const first = !served;
   served = true;
   response.writeHead(200, headers).end(JSON.stringify({ url, token, project, bridgeKey }));
-  console.log('handed the credentials to the page once.');
 
   if (bridge === null) {
+    console.log('handed the credentials to the page once.');
     // Nothing else to hold open. With a bridge running, the process stays up so the
     // audit has something to talk to, and the lifetime below is what ends it.
     setTimeout(() => server.close(() => process.exit(0)), 250);
-  } else {
+  } else if (first) {
     // Said in minutes, because the number is the thing an audit has to plan around
     // and the last version left it to be discovered by the bridge disappearing.
-    console.log(`the bridge stays up for ${LIFETIME_MS / 60_000} more minutes.`);
-    server.close();
+    console.log(
+      `handed the credentials over. The bridge stays up for ${LIFETIME_MS / 60_000} minutes,`,
+    );
+    console.log('and the page may ask again in that time.');
+  } else {
+    console.log('handed the credentials over again.');
   }
 });
 
