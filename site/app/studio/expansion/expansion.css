@@ -134,12 +134,18 @@
 .api-console { max-width: 1320px; min-height: 630px; margin: 0 auto; display: grid; grid-template-columns: .88fr 1.12fr; border: 1px solid var(--line); border-radius: 5px; overflow: hidden; background: var(--paper); }
 .api-builder { display: flex; flex-direction: column; border-right: 1px solid var(--line); }
 .api-builder > header, .api-output > header { min-height: 45px; padding: 0 13px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); color: var(--ink-soft); font: 8px var(--font-geist-mono); text-transform: uppercase; }
-/* Holds the deployment host (ApiExplorerApp), so the same one line as the two
-   headers above. This one fails differently and more quietly: `.api-console` is
-   `overflow: hidden`, so instead of escaping the viewport the row is CLIPPED, and
-   at 375px with a 58 character hyphen-free host both Send request and Copy were
-   cut off with nothing to scroll. Found by swapping every hostname on the page for
-   a hyphen-free one and asking which controls left the viewport. */
+/* Holds the deployment host (ApiExplorerApp), so the same one line as the two headers
+   above. This one fails differently and more quietly: `.api-console` is
+   `overflow: hidden`, so instead of escaping the viewport the row is CLIPPED, and the
+   controls are simply gone with nothing to scroll.
+   Measured on the deployed site at 375px, with the rule turned off: an 89 character
+   hyphen-free host clips it by 146px and takes Send request with it. A 58 character
+   one fits, because this element renders at 8px mono there and 58 characters come to
+   278px inside 341px of room.
+   ⚠️ The first version of this comment said 58 characters, which was measured on the
+   dev server, where the same element renders at 13px sans-serif and the token is
+   422px wide. Same defect, different threshold, and the number that belongs in a
+   comment about production is the one measured there. */
 .api-builder > header b { font-weight: 400; overflow-wrap: anywhere; }
 .request-line { padding: 15px; display: grid; grid-template-columns: 76px minmax(0, 1fr) auto; gap: 7px; border-bottom: 1px solid var(--line); }
 .request-line select, .request-line input, .api-fields select { min-height: 40px; padding: 0 9px; border: 1px solid var(--line); border-radius: 2px; background: var(--canvas); color: var(--ink); font: inherit; }

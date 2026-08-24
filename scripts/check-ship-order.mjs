@@ -12,10 +12,16 @@
  *                on npm had never served that route
  *
  * The fourth was found on 2026-08-24 by downloading the published tarball and
- * grepping it. It had been live the whole time. What a user got was not an error
- * naming the cause: the bridge answers an unknown route with 404 `{"error":"Not
- * found."}`, and the client falls through to rendering that string, so the screen
- * said "Not found." A sentence about a missing row, for a version mismatch.
+ * grepping it. It had been live the whole time, and what a user got said nothing
+ * about the cause. Watched rather than reasoned about, by answering the call with
+ * that release's own 404 `{"error":"Not found."}` and reading the screen:
+ *
+ *     The numbers were not readable
+ *     Not found.
+ *
+ * The heading is honest. The line under it is the bridge's word for a missing row,
+ * standing in for a version mismatch, which is the part that sends a reader looking
+ * in the wrong place.
  *
  * A rule broken four times is not a discipline problem, it is a missing check.
  *
@@ -52,13 +58,17 @@
  * non zero and says which. Rule 00 invariant I1 is about the policy engine, but the
  * reasoning is the same: absence of a readable answer is not permission.
  *
- * Both readers carry their own calibration. Every mention of the bridge origin must
- * come back out of the parser as a route, in the source and in each deployed chunk
- * alike. If the counts disagree, some call is written in a shape this does not
- * understand, and a parser that quietly skips it would report a coverage it does not
- * have. Measured on the built bundle: the minifier renames the constant but keeps
- * the template, so `${w}/usage` survives, and `${w}` appears exactly as many times
- * as there are calls in the source.
+ * Both readers carry a calibration: every mention of the bridge must come back out of
+ * the parser as a route, or the run refuses. A parser that quietly skips a call it
+ * does not recognise would report a coverage it does not have. Measured on the built
+ * bundle: the minifier renames the constant but keeps the template, so `${w}/usage`
+ * survives and `${w}` appears exactly as many times as there are calls in the source.
+ *
+ * ⚠️ Counting the template head alone was not enough, and the hole had the same shape
+ * as the bug: `fetch(BRIDGE_URL + '/usage')` uses the constant without that head, so
+ * it moved neither counter and the run reported clean. The source reader therefore
+ * also counts the identifier itself, which the bundle reader cannot do because there
+ * the constant is one letter. So the strong guard sits where the code is written.
  *
  * ## Where the scope stops, stated rather than implied
  *
@@ -83,6 +93,19 @@ import { execSync } from 'node:child_process';
 import { mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+// The reading and the comparing live next door, with nothing from `node:` in them, so
+// the suite in workerd can exercise the parts that have a way of looking clean while
+// being wrong. What is left here is the file system, the network and the registry.
+import {
+  bridgeIdentifierIn,
+  bridgeOriginIn,
+  callsIn,
+  identifierReferenceProblems,
+  key,
+  missingRoutes,
+  publishedRoutesIn,
+  scriptsReferencedBy,
+} from './lib/ship-order.mjs';
 
 /* -------------------------------------------------------------- arguments --- */
 
@@ -113,19 +136,9 @@ const pagePath = givenPath.startsWith('/') ? givenPath : `/${givenPath}`;
 /** Every refusal collects here so one run reports all of them, not the first. */
 const problems = [];
 
-/* ------------------------------------------------------- shared patterns ---- */
+/* --------------------------------------------------- where the bridge is ---- */
 
-const METHOD = /method:\s*['"`]([A-Z]+)['"`]/;
-const key = (route) => `${route.method} ${route.path}`;
-
-/**
- * The address the bridge listens on, taken from the site rather than repeated here.
- *
- * Repeating it would create two constants that have to agree, and the lesson written
- * into `AGENTS.md` section 8 after the preflight table drifted is that two things
- * which must match should be one thing rather than two things with a test between
- * them. If the site moves the bridge, both readers below follow it.
- */
+/** The site's api client, and the bridge address declared in it. */
 function bridgeOriginFromSource(path) {
   let source;
   try {
@@ -135,89 +148,36 @@ function bridgeOriginFromSource(path) {
     return null;
   }
 
-  const declared = /BRIDGE_URL\s*=\s*['"`]([^'"`]+)['"`]/.exec(source);
-  if (declared === null) {
-    problems.push(`no BRIDGE_URL declaration in ${path}, so there is nothing to look for`);
-    return null;
-  }
+  const declared = bridgeOriginIn(source, path);
+  problems.push(...declared.problems);
+  if (declared.origin === null) return null;
 
-  return { origin: declared[1], source };
-}
-
-/**
- * Pull `(method, path)` out of every bridge call in one body of JavaScript.
- *
- * `mention` is the exact text a call begins with: the template head in source, or the
- * minified identifier in a built chunk. Every occurrence of it must come back out as
- * a route, which is the calibration: a call written in an unrecognised shape shows up
- * as a count that does not add up, rather than as silence.
- */
-function callsIn(body, mention, label) {
-  const escaped = mention.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const call = new RegExp(`${escaped}(/[A-Za-z0-9._-]*)`, 'g');
-  const mentions = [...body.matchAll(new RegExp(escaped, 'g'))].length;
-  const matches = [...body.matchAll(call)];
-
-  const found = matches.map((match, index) => {
-    // The window ends where the next call begins, so a `method` belonging to the next
-    // fetch cannot be read as this one's. A call with no `method` is a GET, which is
-    // what fetch itself does with the option absent.
-    const from = match.index + match[0].length;
-    const to = index + 1 < matches.length ? matches[index + 1].index : body.length;
-    const method = METHOD.exec(body.slice(from, to));
-    return { method: method === null ? 'GET' : method[1], path: match[1] };
-  });
-
-  if (mentions !== found.length) {
-    problems.push(
-      `${label} mentions the bridge ${mentions} times but only ${found.length} parsed as a ` +
-        'route, so at least one call is written in a shape this check does not read',
-    );
-  }
-
-  return found;
+  return { origin: declared.origin, source };
 }
 
 /* ------------------------------------------------- what the source calls ---- */
 
-function routesInSource() {
-  const read = bridgeOriginFromSource(clientPath);
+function routesInSource(read) {
   if (read === null) return [];
 
   // Escaped rather than quoted, so this is the literal text `${BRIDGE_URL}` that the
   // source contains, and not a placeholder anybody has to read twice.
   const found = callsIn(read.source, `\${BRIDGE_URL}`, clientPath);
-  if (found.length === 0) {
+  problems.push(...found.problems);
+  // And the stronger half: a call written `BRIDGE_URL + '/usage'` uses the constant
+  // without the template head, so it moves neither of the counts above.
+  problems.push(
+    ...identifierReferenceProblems(read.source, 'BRIDGE_URL', found.calls.length, clientPath),
+  );
+  if (found.calls.length === 0) {
     problems.push(
       `no bridge call found in ${clientPath}, which cannot be right while Studio works`,
     );
   }
-  return found;
+  return found.calls;
 }
 
 /* ---------------------------------------- what the deployed site calls ------ */
-
-/** Every script the page asks for. Modulepreload counts: the browser fetches those. */
-function scriptsReferencedBy(html) {
-  const sources = [...html.matchAll(/<script[^>]+src="([^"]+)"/g)].map(([, src]) => src);
-  const preloads = [...html.matchAll(/<link[^>]+rel="modulepreload"[^>]+href="([^"]+)"/g)].map(
-    ([, href]) => href,
-  );
-  return [...new Set([...sources, ...preloads])];
-}
-
-/**
- * The name the minifier gave the bridge constant in one chunk.
- *
- * Measured on a real build: `w=\`http://127.0.0.1:4000\``, and `${w}` then appears
- * once per call. The identifier is per chunk and per build, so it is read rather
- * than remembered.
- */
-function bridgeIdentifierIn(body, bridgeOrigin) {
-  const escaped = bridgeOrigin.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const bound = new RegExp(`([A-Za-z_$][\\w$]*)\\s*=\\s*['"\`]${escaped}['"\`]`).exec(body);
-  return bound === null ? null : bound[1];
-}
 
 async function routesInDeployedSite(bridgeOrigin) {
   const pageUrl = `${origin}${pagePath}`;
@@ -267,7 +227,9 @@ async function routesInDeployedSite(bridgeOrigin) {
     if (identifier === null) continue;
 
     carrying += 1;
-    found.push(...callsIn(body, `\${${identifier}}`, reference));
+    const parsed = callsIn(body, `\${${identifier}}`, reference);
+    problems.push(...parsed.problems);
+    found.push(...parsed.calls);
   }
 
   if (unreadable > 0) {
@@ -290,15 +252,6 @@ async function routesInDeployedSite(bridgeOrigin) {
 }
 
 /* ------------------------------------------------ what npm serves today ----- */
-
-/**
- * The bridge's route table, read out of the bytes the registry hands out.
- *
- * The table survives bundling as object literals, measured on `baseclf@0.4.15`: five
- * entries in `dist-cli/baseclf.mjs` and no other pair of these two keys anywhere in
- * that file, so this pattern has no false positive to filter.
- */
-const PUBLISHED_ROUTE = /\{\s*method:\s*['"`]([A-Z]+)['"`],\s*path:\s*['"`](\/[^'"`]*)['"`]/g;
 
 function routesNpmServes(packageSpec) {
   const work = join(tmpdir(), `baseclf-ship-order-${process.pid}`);
@@ -332,19 +285,10 @@ function routesNpmServes(packageSpec) {
     rmSync(work, { recursive: true, force: true });
   }
 
-  const routes = [...bundle.matchAll(PUBLISHED_ROUTE)].map((match) => ({
-    method: match[1],
-    path: match[2],
-  }));
+  const published = publishedRoutesIn(bundle, packageSpec);
+  problems.push(...published.problems);
 
-  if (routes.length === 0) {
-    problems.push(
-      `no route table found in ${packageSpec}, so either the bridge stopped declaring one ` +
-        'or its shape changed and this check can no longer read it',
-    );
-  }
-
-  return { version, routes };
+  return { version, routes: published.routes };
 }
 
 /* ------------------------------------------------------------- the answer --- */
@@ -363,14 +307,11 @@ async function main() {
     ? read === null
       ? []
       : await routesInDeployedSite(read.origin)
-    : routesInSource();
+    : routesInSource(read);
   const served = routesNpmServes(spec);
   const where = live ? `${origin}${pagePath}` : clientPath;
 
-  const servedKeys = new Set(served.routes.map(key));
-  // Deduplicated because two reads of `/rows` are one route, and naming it twice in a
-  // refusal would read as two problems.
-  const missing = [...new Set(calls.filter((call) => !servedKeys.has(key(call))).map(key))];
+  const missing = missingRoutes(calls, served.routes);
 
   if (problems.length > 0) {
     console.error('ship-order: refused, because something here could not be read.\n');

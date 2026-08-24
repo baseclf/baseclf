@@ -25,7 +25,11 @@ import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 
-const TEST_FILE_FLOOR = 70;
+// Raised from 70 on 2026-08-24, with the two suites under `scripts/lib/` added. They
+// are collected by vitest's default `include` rather than by anything naming them, so
+// nothing but this number would notice them silently ceasing to be collected, and a
+// floor eight below the real count has that much room to hide it.
+const TEST_FILE_FLOOR = 78;
 const REPORT = join('.vitest', 'floor-report.json');
 
 const require = createRequire(import.meta.url);

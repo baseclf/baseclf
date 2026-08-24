@@ -42,6 +42,9 @@ import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+// The two comparisons that decide this live next door, with nothing from `node:` in
+// them, so the suite in workerd can exercise them. What is left here is the reading.
+import { mirrorProblems, versionProblems } from './lib/staged.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -82,12 +85,7 @@ for (const target of STAGED) {
     continue;
   }
 
-  if (manifest.version !== root.version) {
-    problems.push(
-      `${target.name} is staged at ${manifest.version} while this repository is at ` +
-        `${root.version}, so a publish now would ship an older release under a newer label`,
-    );
-  }
+  problems.push(...versionProblems(target.name, manifest.version, root.version));
 
   if (target.mirrors === null) continue;
 
@@ -104,25 +102,7 @@ for (const target of STAGED) {
     continue;
   }
 
-  // Both directions. A file the build has and the staged copy does not is a package
-  // missing something it claims; the reverse is a leftover from an older release.
-  for (const [file, digest] of built) {
-    if (!staged.has(file)) {
-      problems.push(`${target.name} is missing ${target.mirrors}/${file}, which the build has`);
-    } else if (staged.get(file) !== digest) {
-      problems.push(
-        `${target.name} carries a different ${target.mirrors}/${file} than the build, so it was ` +
-          'staged from an earlier one',
-      );
-    }
-  }
-  for (const file of staged.keys()) {
-    if (!built.has(file)) {
-      problems.push(
-        `${target.name} carries ${target.mirrors}/${file}, which this build does not produce`,
-      );
-    }
-  }
+  problems.push(...mirrorProblems(target.name, target.mirrors, built, staged));
 }
 
 if (problems.length === 0) {

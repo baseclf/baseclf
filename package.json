@@ -39,7 +39,7 @@
     "mutate:auth-bootstrap": "node scripts/mutate-auth-bootstrap.mjs",
     "mutate:create": "node scripts/mutate-create.mjs",
     "mutate:deploy": "node scripts/mutate-deploy.mjs",
-    "mutate": "npm run mutate:jwks-source && npm run mutate:diagnose-cors && npm run mutate:storage-policy && npm run mutate:storage-router && npm run mutate:storage-wiring && npm run mutate:storage-objects && npm run mutate:storage-reconcile && npm run mutate:cli && npm run mutate:provision && npm run mutate:secret && npm run mutate:bootstrap && npm run mutate:auth-bootstrap && npm run mutate:create && npm run mutate:deploy && npm run mutate:wrangler-credential && npm run mutate:run-create && npm run mutate:login && npm run mutate:policy-cli && npm run mutate:registry-cache && npm run mutate:storage-ratelimit && npm run mutate:policy-lint && npm run mutate:policy-lock && npm run mutate:mcp-auth && npm run mutate:reserved-tables && npm run mutate:mcp-tools && npm run mutate:registry-isolation && npm run mutate:introspect-batch && npm run mutate:handover && npm run mutate:app-metadata && npm run mutate:edit && npm run mutate:audit && npm run mutate:sdk",
+    "mutate": "npm run mutate:jwks-source && npm run mutate:diagnose-cors && npm run mutate:storage-policy && npm run mutate:storage-router && npm run mutate:storage-wiring && npm run mutate:storage-objects && npm run mutate:storage-reconcile && npm run mutate:cli && npm run mutate:provision && npm run mutate:secret && npm run mutate:bootstrap && npm run mutate:auth-bootstrap && npm run mutate:create && npm run mutate:deploy && npm run mutate:wrangler-credential && npm run mutate:run-create && npm run mutate:login && npm run mutate:policy-cli && npm run mutate:registry-cache && npm run mutate:storage-ratelimit && npm run mutate:policy-lint && npm run mutate:policy-lock && npm run mutate:mcp-auth && npm run mutate:reserved-tables && npm run mutate:mcp-tools && npm run mutate:registry-isolation && npm run mutate:introspect-batch && npm run mutate:handover && npm run mutate:app-metadata && npm run mutate:edit && npm run mutate:audit && npm run mutate:sdk && npm run mutate:ship-order",
     "demo:v1": "node scripts/demo-v1.mjs",
     "demo:v2": "node scripts/demo-v2.mjs",
     "build:cli": "npm run build && node scripts/build-cli.mjs",
@@ -68,7 +68,8 @@
     "mutate:handover": "node scripts/mutate-handover.mjs",
     "mutate:app-metadata": "node scripts/mutate-app-metadata.mjs",
     "mutate:edit": "node scripts/mutate-edit.mjs",
-    "mutate:audit": "node scripts/mutate-audit.mjs"
+    "mutate:audit": "node scripts/mutate-audit.mjs",
+    "mutate:ship-order": "node scripts/mutate-ship-order.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "2.0.0",
