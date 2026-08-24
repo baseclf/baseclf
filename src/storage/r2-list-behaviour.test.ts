@@ -105,6 +105,48 @@ describe('R2 list() in this environment', () => {
     expect(third.truncated).toBe(false);
   });
 
+  it('⭐ keeps a cursor inside the prefix it is given, which decides whether paging can be exposed', async () => {
+    // Not a reconciliation question. A sweep makes both calls itself and has no
+    // reason to mix prefixes; this was asked because debt 59 wanted to expose paging
+    // to a caller, and a cursor is an opaque token the caller would hand back.
+    //
+    // 🔴 If a cursor carried an absolute position and overrode the prefix, a caller
+    // holding one from their own directory could page into somebody else's, and the
+    // whole storage model rests on a caller never being able to name a directory.
+    //
+    // ⭐ It holds here, and the listing API still does not expose a cursor. This runs
+    // against miniflare, and for a question of this shape a local pass is weak
+    // evidence while a local failure would have been decisive: an emulator is free
+    // to be stricter than the service. So paging resumes from `startAfter` with a
+    // file name the caller already holds, re-scoped by prefixing it here, and the
+    // answer below stops deciding anything. Kept because it is the assertion that
+    // would notice somebody exposing the cursor later.
+    const other = 'probe-list-other/';
+    const otherKeys = [`${other}aaa.bin`, `${other}bbb.bin`];
+    for (const key of otherKeys) await bucket.put(key, 'x');
+
+    try {
+      const first = await bucket.list({ prefix: PREFIX, limit: 5 });
+      expect(first.truncated).toBe(true);
+
+      // The cursor belongs to PREFIX. Hand it back with a different prefix.
+      const crossed = await bucket.list({
+        prefix: other,
+        ...(first.truncated ? { cursor: first.cursor } : {}),
+      });
+
+      // Every key it returns must still be inside the prefix asked for. Asserted as
+      // a property rather than an exact list, because what a mismatched cursor does
+      // to the *starting point* is R2's business; what it may not do is leave the
+      // prefix.
+      for (const object of crossed.objects) {
+        expect(object.key.startsWith(other)).toBe(true);
+      }
+    } finally {
+      for (const key of otherKeys) await bucket.delete(key);
+    }
+  });
+
   it('treats startAfter as exclusive, so a pass can resume from a key alone', async () => {
     // A second way to resume, and the one that survives a cursor being unusable
     // across invocations. A cursor is an opaque token with no documented lifetime;
