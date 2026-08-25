@@ -547,8 +547,11 @@ export async function applyDocument(
   // still looking, which is the only moment a warning about a bill gets read.
   writeFindings(lintTable(catalogue, document.definition), write, style);
 
+  // The same sentence the storage command prints for the same state, and the
+  // wording matters: this fires for an ABSENT enabled as well as an explicit
+  // false, and a document that omitted the field never "said" anything.
   if (!document.definition.enabled) {
-    write(note('The document says enabled is false, so nothing can reach it yet.'));
+    write(note('The document does not set enabled to true, so nothing can reach the table yet.'));
   }
 
   // 🔴 Said on every apply, not only when a policy is narrowed, because the command

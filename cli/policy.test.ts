@@ -252,6 +252,23 @@ describe('refusing before anything is written', () => {
     for (const sql of created) expect(sql).toContain('IF NOT EXISTS');
   });
 
+  it('applies a document that does not say enabled true as disabled, and says so', async () => {
+    // `parse.ts` has read this field as explicit-true-or-off since it existed, and
+    // since 2026-08-24 the storage document reads it the same way. What was never
+    // pinned is the sentence: the old note said the document "says enabled is
+    // false", which for an ABSENT field describes a line nobody wrote. The wording
+    // now matches the storage command's for the same state.
+    const h = harness({ file: policyDocument({ enabled: undefined }) });
+
+    expect(await runPolicy(['apply', 'p.json'], h.write, PLAIN, h.host)).toBe('ok');
+
+    const written = h.sent.find((one) => one.sql.startsWith('INSERT INTO "_exposed_tables"'));
+    expect(written?.params?.[1]).toBe(0);
+
+    expect(h.text()).toContain('does not set enabled to true');
+    expect(h.text()).not.toContain('says enabled is false');
+  });
+
   it('says a missing file is a missing file', async () => {
     const h = harness({ file: undefined });
 
