@@ -355,9 +355,13 @@ test("keeps every written claim about Studio in step with what Studio does", asy
     assert.match(text, /Simulator, Policies, Tables, Auth, Storage, and Health/, surface);
     // The sentence that went stale: fixtures with no mention of a live screen.
     assert.doesNotMatch(text, /screens in (the|this) preview (still )?run on fixture data/i, surface);
-    // Health is live and half-refusing, so every surface has to carry the half it
-    // refuses. Naming it live without that reads as a promise of numbers.
-    assert.match(text, /usage numbers are.{0,40}not read|not read there|recorded against your Cloudflare account/i, surface);
+    // 🔴 The regex this replaces let a false claim ride for two days. It accepted
+    // any one of three alternatives, so "are not read there" kept passing after
+    // the Health screen grew a button that reads exactly those numbers through
+    // the bridge (2026-08-23). The property now is two-sided: the true half must
+    // be present, and the disproven claim must be absent.
+    assert.match(text, /recorded against your Cloudflare account/i, surface);
+    assert.doesNotMatch(text, /not read (?:there|here)/i, surface);
   }
 });
 
@@ -436,6 +440,34 @@ test("Health reports what the deployment can check and declines the rest", async
   // The fixture screen keeps its chart: disconnected Studio is still a demo.
   const fixture = studio.slice(studio.indexOf("function HealthScreen"), studio.indexOf("function StateGallery"));
   assert.match(fixture, /mock-chart/);
+});
+
+// Found by the 2026-08-25 audit, not by a failing test, which is why these pins
+// exist now. Two surfaces were quietly out of step with decisions already made:
+// the landing's primary calls to action sent a visitor to a screen whose first
+// line says "not in this build" while the real path has been on npm for weeks,
+// and the Settings screen still carried the one fake save toast that outlived
+// decision Q4 — with fail-closed drawn as a checked TOGGLE, which reads as
+// optional and is the opposite of what makes it an invariant.
+test("the landing promises land on real paths, and Settings stops pretending", async () => {
+  const landing = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+
+  // The two conversion actions go to the quickstart, which is real, rather than
+  // to a disabled preview. The preview links still exist and say what they are.
+  assert.match(landing, /href="\/docs\/quickstart">Start building/);
+  assert.match(landing, /href="\/docs\/quickstart">Create a project/);
+  assert.doesNotMatch(landing, /Open Request Logs|Open Deployments|Open Backups|Try the guided setup/);
+  assert.match(landing, /Preview Request Logs/);
+
+  const settings = await readFile(new URL("../app/studio/settings/SettingsApp.tsx", import.meta.url), "utf8");
+
+  // No control that saves nothing, and no toggle on an invariant. The engine's
+  // guarantees appear as statements; the only buttons that act are the ones that
+  // copy a real CLI command.
+  assert.doesNotMatch(settings, /Mock project details saved/);
+  assert.doesNotMatch(settings, /checkbox/);
+  assert.match(settings, /Fail-closed is how the engine is built/);
+  assert.match(settings, /<button type="button" disabled>Disconnect<\/button>/);
 });
 
 // llms.txt points a reader that cannot run JavaScript at the markdown twins,

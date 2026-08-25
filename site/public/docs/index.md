@@ -2,7 +2,7 @@
 
 BaseCLF assembles authentication, D1, R2 storage, instant APIs, and row-level policies into one Cloudflare-native workflow, deployed into your own Cloudflare account.
 
-> The commands, policy documents, and API behavior described here match the shipped engine: `create-baseclf`, `baseclf policy`, and the `baseclf-js` client are on npm. Studio opens on fixture data; connecting a deployment makes every screen read that deployment for real: Simulator, Policies, Tables, Auth, Storage, and Health. Storage shows the rules rather than the objects, because a directory belongs to a caller and Studio has no identity. Health reports the checks the deployment can run on itself; usage numbers are recorded against your Cloudflare account and are not read there.
+> The commands, policy documents, and API behavior described here match the shipped engine: `create-baseclf`, `baseclf policy`, and the `baseclf-js` client are on npm. Studio opens on fixture data; connecting a deployment makes every screen read that deployment for real: Simulator, Policies, Tables, Auth, Storage, and Health. Storage shows the rules rather than the objects, because a directory belongs to a caller and Studio has no identity. Health reports the checks the deployment can run on itself; usage numbers are recorded against your Cloudflare account and are read through the local bridge, which holds your credential so the page never does.
 
 ## Start here
 

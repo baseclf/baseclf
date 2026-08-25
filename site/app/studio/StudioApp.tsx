@@ -123,7 +123,7 @@ const guidance: Record<StudioScreen, { label: string; demo: string; live: string
   Tables: { label: "Data check", demo: "Open posts first—the missing index warning needs attention.", live: "New tables appear after a refresh, within about a minute. Rows load only when you ask." },
   Auth: { label: "Setup check", demo: "Copy the redirect URI, then run the provider diagnostic.", live: "This is your deployment's own diagnostic, the one npx baseclf doctor reads. User records stay out of reach by design." },
   Storage: { label: "Access first", demo: "Choose a bucket and confirm its policy before uploading an object.", live: "The rules come from your deployment. Objects are not listed here: a directory belongs to a caller, and this page has no identity." },
-  Health: { label: "What matters", demo: "Start with failures, then inspect the request trend.", live: "Everything this deployment can tell you about itself. Usage numbers live in your Cloudflare account and are not read here." },
+  Health: { label: "What matters", demo: "Start with failures, then inspect the request trend.", live: "Everything this deployment can tell you about itself. Usage numbers come from your Cloudflare account through the local bridge; the page never holds the credential." },
 };
 
 export default function StudioApp() {

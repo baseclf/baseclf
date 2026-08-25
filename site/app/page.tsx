@@ -75,7 +75,7 @@ export default function Home() {
             with real row-level security for D1.
           </p>
           <div className="hero-actions">
-            <a className="button button-primary" href="/studio/new-project">Start building <span>↗</span></a>
+            <a className="button button-primary" href="/docs/quickstart">Start building <span>↗</span></a>
             <a className="button button-secondary" href="#product">See how it works <span>↓</span></a>
           </div>
           <div className="hero-proof" aria-label="Product advantages">
@@ -105,9 +105,9 @@ export default function Home() {
           <p>Logs, releases, and recovery stay approachable when the product grows beyond its first database and API.</p>
         </div>
         <div className="product-tour-grid" data-stagger>
-          <a className="tour-card tour-card-wide" href="/studio/logs"><div className="tour-copy"><span>01 · Understand requests</span><h3>Find what happened—and what policy decided.</h3><p>Every request with its policy trace: what was asked, which rule answered, and what it cost, without reading infrastructure logs.</p><b>Open Request Logs ↗</b></div><figure><ProductShot name="request-logs" sizes="(max-width: 1100px) calc(100vw - 36px), 70vw" alt="Rendered BaseCLF Request Logs screen using mock data" /></figure></a>
-          <a className="tour-card" href="/studio/deployments"><div className="tour-copy"><span>02 · Release safely</span><h3>Know exactly what is serving.</h3><p>Versions, active traffic, and rollback boundaries stay together on one understandable release timeline.</p><b>Open Deployments ↗</b></div><figure><ProductShot name="deployments" sizes="(max-width: 620px) calc(100vw - 36px), 50vw" alt="Rendered BaseCLF Deployments screen using mock data" /></figure></a>
-          <a className="tour-card" href="/studio/backups"><div className="tour-copy"><span>03 · Recover deliberately</span><h3>Go back to a known moment.</h3><p>Restore points, imports, and exports make recovery explicit before any destructive action begins.</p><b>Open Backups ↗</b></div><figure><ProductShot name="backups" sizes="(max-width: 620px) calc(100vw - 36px), 50vw" alt="Rendered BaseCLF Backups and data transfer screen using mock data" /></figure></a>
+          <a className="tour-card tour-card-wide" href="/studio/logs"><div className="tour-copy"><span>01 · Understand requests</span><h3>Find what happened—and what policy decided.</h3><p>Every request with its policy trace: what was asked, which rule answered, and what it cost, without reading infrastructure logs.</p><b>Preview Request Logs ↗</b></div><figure><ProductShot name="request-logs" sizes="(max-width: 1100px) calc(100vw - 36px), 70vw" alt="Rendered BaseCLF Request Logs screen using mock data" /></figure></a>
+          <a className="tour-card" href="/studio/deployments"><div className="tour-copy"><span>02 · Release safely</span><h3>Know exactly what is serving.</h3><p>Versions, active traffic, and rollback boundaries stay together on one understandable release timeline.</p><b>Preview Deployments ↗</b></div><figure><ProductShot name="deployments" sizes="(max-width: 620px) calc(100vw - 36px), 50vw" alt="Rendered BaseCLF Deployments screen using mock data" /></figure></a>
+          <a className="tour-card" href="/studio/backups"><div className="tour-copy"><span>03 · Recover deliberately</span><h3>Go back to a known moment.</h3><p>Restore points, imports, and exports make recovery explicit before any destructive action begins.</p><b>Preview Backups ↗</b></div><figure><ProductShot name="backups" sizes="(max-width: 620px) calc(100vw - 36px), 50vw" alt="Rendered BaseCLF Backups and data transfer screen using mock data" /></figure></a>
         </div>
       </section>
 
@@ -131,7 +131,7 @@ export default function Home() {
             <article className="setup-step">
               <span>03</span><div><h3>Make your first request</h3><p>Copy the familiar client snippet, test the API, and continue building your app.</p></div><b>Ready</b>
             </article>
-            <a className="setup-link" href="/studio/new-project">Try the guided setup <span>↗</span></a>
+            <a className="setup-link" href="/studio/new-project">Preview the guided setup <span>↗</span></a>
           </div>
 
           <figure className="setup-stage" data-spotlight>
@@ -157,7 +157,7 @@ export default function Home() {
             <figure><ProductShot name="api-explorer" sizes="(max-width: 900px) 100vw, 68vw" alt="Rendered BaseCLF API Explorer with request builder and protected response" /></figure>
           </a>
           <a className="capability-screen capability-screen-logs" href="/studio/logs" data-spotlight>
-            <div className="capability-screen-copy"><span>02 · Understand production</span><h3>Find what happened without reading infrastructure logs.</h3><p>Request, policy decision, timing, and trace stay together in one readable view.</p><b>Open Request Logs ↗</b></div>
+            <div className="capability-screen-copy"><span>02 · Understand production</span><h3>Find what happened without reading infrastructure logs.</h3><p>Request, policy decision, timing, and trace stay together in one readable view.</p><b>Preview Request Logs ↗</b></div>
             <figure><ProductShot name="request-logs" sizes="(max-width: 900px) 100vw, 68vw" alt="Rendered BaseCLF request logs with policy trace and mock metrics" /></figure>
           </a>
         </div>
@@ -236,7 +236,7 @@ export default function Home() {
         <h2>Build on Cloudflare without<br />building the backend first.</h2>
         <p>Start with one command. Keep control of every layer.</p>
         <div className="hero-actions final-actions">
-          <a className="button cta-white" href="/studio/new-project">Create a project <span>↗</span></a>
+          <a className="button cta-white" href="/docs/quickstart">Create a project <span>↗</span></a>
           <a className="button cta-dark" href="/docs">Read the docs <span>→</span></a>
         </div>
       </section>
