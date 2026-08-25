@@ -29,11 +29,27 @@ const MUTATIONS = [
     replace: '    if (table !== null) {',
   },
   {
-    name: 'the bootstrap dropped from the storage path',
+    // ⚠️ Anchored on the argument list, not on the function name. `handleStorage`
+    // is a prefix of `handleStorageListing`, so the name alone matched both call
+    // sites once the listing route arrived, and the runner refused the whole sweep
+    // rather than reporting a mutant: a pattern that does not apply exactly once
+    // reads as a survivor. It sat that way from the day the listing route landed
+    // until the next full sweep ran, which is the only thing that could find it.
+    name: 'the bootstrap dropped from the storage object path',
     file: INDEX,
     expect: 'the unprovisioned-deployment storage test',
-    find: / {6}await ensureEngineSchemaOnce\(env\.DB\);\n {6}return await handleStorage/,
-    replace: '      return await handleStorage',
+    find: / {6}await ensureEngineSchemaOnce\(env\.DB\);\n {6}return await handleStorage\(request/,
+    replace: '      return await handleStorage(request',
+  },
+  {
+    // The second route into the same tables. Narrowing the pattern above would
+    // have left this one covered by nothing, so it is added in the same change
+    // rather than left for whoever reads the sweep output next.
+    name: 'the bootstrap dropped from the storage listing path',
+    file: INDEX,
+    expect: 'the unprovisioned-deployment listing test',
+    find: / {6}await ensureEngineSchemaOnce\(env\.DB\);\n {6}return await handleStorageListing\(/,
+    replace: '      return await handleStorageListing(',
   },
   {
     // One round trip per statement instead of one in total, and as many places to

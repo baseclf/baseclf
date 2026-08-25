@@ -8,8 +8,8 @@
  * `/storage/v1` answered with a D1 error naming a table their owner had never
  * heard of, while `/health`, `/_schema` and `/api/auth/*` all looked fine.
  *
- * The test that matters here is the last one. The others check the properties it
- * depends on; that one checks the thing a user would notice.
+ * The tests that matter here are the storage ones at the end. The others check the
+ * properties they depend on; those check the thing a user would notice.
  */
 
 import { env } from 'cloudflare:workers';
@@ -154,5 +154,32 @@ describe('⭐ a deployment whose database nobody provisioned', () => {
 
     expect(response.status).toBe(404);
     expect(JSON.stringify(await response.json())).not.toContain('_storage_');
+  });
+
+  it('creates the tables while answering a bucket listing, which its answer cannot show', async () => {
+    // The listing route arrived after this file did, carrying its own call to the
+    // bootstrap, and nothing here followed it. It was invisible twice over: the
+    // mutation covering the object path matched this line as well, because
+    // `handleStorage` is a prefix of `handleStorageListing`, so the sweep refused
+    // to run rather than reporting the gap.
+    //
+    // 🔴 And the obvious assertion does not cover it. Written first as a copy of
+    // the object test above, this passed with the bootstrap removed: the registry
+    // reads an unreadable bucket list as no buckets, which is fail-closed and
+    // correct, so 404 is the answer either way. The two routes therefore need
+    // different assertions. The object path changes its answer without the
+    // bootstrap; this one changes nothing a caller can see, and goes on quietly
+    // never serving a bucket somebody configured.
+    //
+    // What separates them is whether the tables are there afterwards, which is
+    // the reason the call is on that line at all.
+    const response = await worker.fetch(
+      new Request('https://baseclf.test/storage/v1/avatars'),
+      configured,
+    );
+
+    expect(response.status).toBe(404);
+    expect(JSON.stringify(await response.json())).not.toContain('_storage_');
+    expect(await tableNames()).toEqual(expect.arrayContaining(ENGINE_TABLES));
   });
 });
